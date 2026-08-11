@@ -1,0 +1,8 @@
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+ignore = [
+    "B008",   # FastAPI's Depends() in defaults is the standard, intended pattern
+    "BLE001", # broad except at the API boundary is intentional here, converted to HTTP 502
+]
