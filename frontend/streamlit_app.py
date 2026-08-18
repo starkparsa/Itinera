@@ -14,12 +14,12 @@ if "trips" not in st.session_state:
 prompt = st.chat_input("e.g. 4 days in Lisbon, love food and walking, mid-range budget")
 
 if prompt:
-    with st.spinner("Planning your trip..."):
+    with st.spinner("Planning your trip — longer trips are generated a few days at a time and may take a few minutes..."):
         try:
             res = requests.post(
                 f"{BACKEND_URL}/trips/generate",
                 json={"prompt": prompt},
-                timeout=180,
+                timeout=900,
             )
             res.raise_for_status()
             st.session_state.trips.append(res.json())
@@ -28,6 +28,8 @@ if prompt:
 
 for trip in reversed(st.session_state.trips):
     st.subheader(f"📍 {trip['destination']}")
+    if trip.get("note"):
+        st.info(trip["note"])
     days = {}
     for item in trip["itinerary"]:
         days.setdefault(item["day_number"], []).append(item)

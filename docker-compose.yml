@@ -8,7 +8,7 @@ services:
       MYSQL_USER: travel_user
       MYSQL_PASSWORD: travel_pass
     ports:
-      - "3306:3306"
+      - "3307:3306"
     volumes:
       - mysql_data:/var/lib/mysql
     healthcheck:
@@ -29,7 +29,7 @@ services:
       # host machine. On Linux you may need to add extra_hosts (see below)
       # or run Ollama in its own container instead.
       OLLAMA_URL: http://host.docker.internal:11434
-      OLLAMA_MODEL: llama3.1
+      OLLAMA_MODEL: mistral
     ports:
       - "8000:8000"
     extra_hosts:

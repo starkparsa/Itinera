@@ -4,6 +4,7 @@ from pydantic import BaseModel
 class TripRequest(BaseModel):
     prompt: str
     user_id: int = 1  # placeholder until auth is added
+    days: int | None = None  # explicit trip length; if omitted, the LLM infers it from the prompt
 
 
 class ItineraryItemOut(BaseModel):
@@ -20,3 +21,4 @@ class TripResponse(BaseModel):
     trip_id: int
     destination: str
     itinerary: list[ItineraryItemOut]
+    note: str | None = None
