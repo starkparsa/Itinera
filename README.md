@@ -85,6 +85,27 @@ frontend/   Streamlit chat UI
 docker-compose.yml   Runs the full stack together
 ```
 
+## Agentic tool-calling
+Before writing the itinerary, the backend runs a small agent loop
+(`agent_service.py`) where the model itself decides whether to call one of
+two free, no-API-key tools:
+- **Weather** (`tools.py`, via Open-Meteo) — a 7-day forecast for the destination
+- **Currency conversion** (`tools.py`, via Frankfurter/ECB rates) — if the
+  prompt mentions a budget in a specific currency
+
+The model chooses whether either tool is actually useful for a given trip —
+this isn't hardcoded. Whatever it finds gets folded into the itinerary
+prompts as context and shown in the UI under "Agent findings." This step is
+best-effort: if the model doesn't use tools well, or a tool API is
+unreachable, generation proceeds normally without it — it never blocks
+itinerary generation.
+
+**Note:** tool-calling reliability varies a lot by model. `mistral` (this
+project's default) is on Ollama's supported list but is noted as less
+consistent at tool selection than newer, larger models. If the agent step
+seems to rarely trigger or behaves oddly, trying `llama3.1` or `mistral-nemo`
+instead (both stronger at tool calling) is worth testing.
+
 ## How long trips are generated
 Trips longer than a few days are generated in chunks (5 days per LLM call by
 default) rather than one giant response — local models like mistral become

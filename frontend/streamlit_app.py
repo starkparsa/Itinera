@@ -26,8 +26,10 @@ if prompt:
         except requests.exceptions.RequestException as exc:
             st.error(f"Couldn't reach the planner backend: {exc}")
 
-for trip in reversed(st.session_state.trips):
+for trip in st.session_state.trips:
     st.subheader(f"📍 {trip['destination']}")
+    if trip.get("agent_context"):
+        st.success(f"🔎 **Agent findings:** {trip['agent_context']}")
     if trip.get("note"):
         st.info(trip["note"])
     days = {}

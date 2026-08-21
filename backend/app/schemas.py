@@ -22,3 +22,4 @@ class TripResponse(BaseModel):
     destination: str
     itinerary: list[ItineraryItemOut]
     note: str | None = None
+    agent_context: str | None = None

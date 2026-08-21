@@ -3,6 +3,8 @@ import os
 
 import requests
 
+from . import agent_service
+
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
 
@@ -29,7 +31,7 @@ writing part of a longer itinerary. The trip is: {prompt}
 Destination: {destination}
 This trip runs for {total_days} days total. Write ONLY days {start_day} \
 through {end_day} of it -- do not write any other days.
-{covered_note}
+{context_note}{covered_note}
 Respond with ONLY valid JSON, no markdown fences, no commentary, matching \
 this exact shape:
 
@@ -99,11 +101,13 @@ def _infer_trip_meta(prompt: str, requested_days: int | None) -> tuple[str, int]
     return destination, total_days
 
 
-def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: int, end_day: int, covered_activities: list[str]) -> list[dict]:
+def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: int, end_day: int, covered_activities: list[str], trip_context: str) -> list[dict]:
     covered_note = ""
     if covered_activities:
         recent = ", ".join(covered_activities[-15:])
         covered_note = f"Already covered on earlier days (avoid repeating these): {recent}\n"
+
+    context_note = f"Relevant context gathered ahead of time: {trip_context}\n" if trip_context else ""
 
     chunk_prompt = CHUNK_INSTRUCTIONS_TEMPLATE.format(
         prompt=prompt,
@@ -111,6 +115,7 @@ def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: i
         total_days=total_days,
         start_day=start_day,
         end_day=end_day,
+        context_note=context_note,
         covered_note=covered_note,
     )
     # Budget output tokens roughly per day so bigger chunks still get enough room.
@@ -125,9 +130,16 @@ def generate_itinerary(prompt: str, requested_days: int | None = None) -> dict:
     generating it in day-range chunks so trip length doesn't degrade output
     quality or risk truncation.
 
+    Before generating, runs an agentic tool-calling step (see
+    agent_service.py) that lets the model decide whether to check weather or
+    currency conversion for this trip. Whatever it finds gets folded into
+    every chunk's prompt as context. This step is best-effort -- if it fails
+    or the model doesn't use it well, generation proceeds exactly as before.
+
     Swapping to a cloud model later only means changing this function's
     internals -- routers/trips.py never needs to know which provider is used.
     """
+    trip_context = agent_service.gather_trip_context(prompt)
     destination, total_days = _infer_trip_meta(prompt, requested_days)
 
     all_days: list[dict] = []
@@ -135,7 +147,7 @@ def generate_itinerary(prompt: str, requested_days: int | None = None) -> dict:
 
     for start_day in range(1, total_days + 1, CHUNK_SIZE_DAYS):
         end_day = min(start_day + CHUNK_SIZE_DAYS - 1, total_days)
-        chunk_days = _generate_chunk(prompt, destination, total_days, start_day, end_day, covered_activities)
+        chunk_days = _generate_chunk(prompt, destination, total_days, start_day, end_day, covered_activities, trip_context)
         all_days.extend(chunk_days)
         for day in chunk_days:
             for item in day.get("items", []):
@@ -143,6 +155,8 @@ def generate_itinerary(prompt: str, requested_days: int | None = None) -> dict:
                     covered_activities.append(item["activity"])
 
     result = {"destination": destination, "days": all_days}
+    if trip_context:
+        result["agent_context"] = trip_context
     if requested_days and requested_days > MAX_TOTAL_DAYS:
         result["note"] = f"Requested {requested_days} days exceeds the {MAX_TOTAL_DAYS}-day limit; showing the first {MAX_TOTAL_DAYS} days."
     return result

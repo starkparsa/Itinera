@@ -58,6 +58,7 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
         destination=trip.destination,
         itinerary=[schemas.ItineraryItemOut.model_validate(i) for i in items_out],
         note=result.get("note"),
+        agent_context=result.get("agent_context"),
     )
 
 

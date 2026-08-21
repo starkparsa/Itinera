@@ -1,7 +1,18 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 from app import llm_service
+
+
+@pytest.fixture(autouse=True)
+def mock_agent_context():
+    # Every test in this file exercises the itinerary pipeline in isolation.
+    # Without this, generate_itinerary's call to agent_service.gather_trip_context
+    # would make a real network call to Ollama's /api/chat during tests.
+    with patch("app.llm_service.agent_service.gather_trip_context", return_value=""):
+        yield
 
 
 def _mock_ollama_sequence(responses):
@@ -92,3 +103,24 @@ def test_truncated_chunk_response_raises_clear_error():
             assert False, "expected ValueError"
         except ValueError as exc:
             assert "cut off" in str(exc)
+
+
+def test_agent_context_is_surfaced_in_result_and_prompt():
+    meta = json.dumps({"destination": "Reykjavik", "total_days": 3})
+    chunk = json.dumps({"days": [{"day_number": i, "items": [{"activity": "sightsee"}]} for i in range(1, 4)]})
+
+    captured_prompts = []
+
+    def _fake_call(prompt, num_predict, num_ctx=8192):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with (
+        patch("app.llm_service.agent_service.gather_trip_context", return_value="Expect near-freezing temps; pack layers."),
+        patch("app.llm_service._call_ollama", side_effect=_fake_call),
+    ):
+        result = llm_service.generate_itinerary("3 days in Reykjavik")
+
+    assert result["agent_context"] == "Expect near-freezing temps; pack layers."
+    # the context should have been folded into the chunk prompt (2nd call)
+    assert "near-freezing" in captured_prompts[1]
