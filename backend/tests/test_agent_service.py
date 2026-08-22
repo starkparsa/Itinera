@@ -23,23 +23,18 @@ def test_single_tool_call_executes_and_returns_final_summary():
     tool_call_response = _mock_chat_response({
         "role": "assistant",
         "content": "",
-        "tool_calls": [{
-            "function": {
-                "name": "convert_currency",
-                "arguments": {"amount": 1000, "from_currency": "USD", "to_currency": "ISK"},
-            }
-        }],
+        "tool_calls": [{"function": {"name": "get_weather_forecast", "arguments": {"city": "Reykjavik"}}}],
     })
-    final_response = _mock_chat_response({"role": "assistant", "content": "1000 USD is about 137000 ISK."})
+    final_response = _mock_chat_response({"role": "assistant", "content": "It'll be cold -- pack warm layers."})
 
     with (
         patch("app.agent_service.requests.post", side_effect=[tool_call_response, final_response]),
-        patch("app.tools.convert_currency", return_value={"converted": 137000}) as mock_fx,
+        patch("app.tools.get_weather_forecast", return_value={"daily_low_c": [-2, -3, -1]}) as mock_weather,
     ):
-        result = agent_service.gather_trip_context("3 days in Reykjavik, $1000 budget")
+        result = agent_service.gather_trip_context("3 days in Reykjavik")
 
-    mock_fx.assert_called_once_with(amount=1000, from_currency="USD", to_currency="ISK")
-    assert result == "1000 USD is about 137000 ISK."
+    mock_weather.assert_called_once_with(city="Reykjavik")
+    assert result == "It'll be cold -- pack warm layers."
 
 
 def test_unknown_tool_name_does_not_crash_the_loop():
@@ -68,17 +63,12 @@ def test_exceeding_max_rounds_returns_empty_string():
     infinite_tool_call = _mock_chat_response({
         "role": "assistant",
         "content": "",
-        "tool_calls": [{
-            "function": {
-                "name": "convert_currency",
-                "arguments": {"amount": 1, "from_currency": "USD", "to_currency": "EUR"},
-            }
-        }],
+        "tool_calls": [{"function": {"name": "get_weather_forecast", "arguments": {"city": "Nowhere"}}}],
     })
 
     with (
         patch("app.agent_service.requests.post", return_value=infinite_tool_call),
-        patch("app.tools.convert_currency", return_value={"converted": 0.9}),
+        patch("app.tools.get_weather_forecast", return_value={"daily_low_c": [10]}),
     ):
         result = agent_service.gather_trip_context("endless trip")
 

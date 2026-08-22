@@ -145,21 +145,26 @@ generation:
 - Switching chats in the sidebar reloads that conversation's full message
   history, including past itineraries, from MySQL.
 
-## Weather and agentic tool-calling
-After destination and trip length are inferred, the backend geocodes that
-place and fetches a **daily** forecast from [Open-Meteo](https://open-meteo.com)
-(no API key). Forecast is by lat/lon, not a fuzzy city-name lookup, and
-includes dated highs/lows, precipitation chance, and conditions. Horizon is
-16 days; longer trips get an explicit "no forecast" note so the model does
-not invent weather for later days. Weather failures never block itinerary
-generation.
+## Agentic tool-calling
+Before writing the itinerary, the backend runs a small agent loop
+(`agent_service.py`) where the model itself decides whether to call one of
+two free, no-API-key tools:
+- **Weather** (`tools.py`, via [OpenWeather](https://openweathermap.org/api))
+  — a 5-day forecast for the destination, aggregated from 3-hour interval
+  data into daily highs/lows/precipitation chance. Requires
+  `OPENWEATHER_API_KEY` in `.env` (get a free key at openweathermap.org — the
+  standard free tier covers the `/data/2.5/forecast` endpoint this uses). If
+  the key isn't set, this tool returns an error and the agent proceeds
+  without weather context rather than failing the whole request.
+- **Currency conversion** (`tools.py`, via Frankfurter/ECB rates) — if the
+  prompt mentions a budget in a specific currency
 
-Separately, before writing the itinerary, a small agent loop
-(`agent_service.py`) can call **currency conversion** (`tools.py`, via
-Frankfurter/ECB rates) if the prompt mentions a budget in a specific
-currency. The model chooses whether that tool is useful -- this isn't
-hardcoded. Weather and any agent findings are folded into the itinerary
-prompts and shown in the UI under "Planning context."
+The model chooses whether either tool is actually useful for a given trip —
+this isn't hardcoded. Whatever it finds gets folded into the itinerary
+prompts as context and shown in the UI under "Agent findings." This step is
+best-effort: if the model doesn't use tools well, or a tool API is
+unreachable, generation proceeds normally without it — it never blocks
+itinerary generation.
 
 **Note:** tool-calling reliability varies a lot by model. `mistral` (this
 project's default) is on Ollama's supported list but is noted as less
