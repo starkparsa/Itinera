@@ -42,7 +42,7 @@ def start_new_chat():
 
 def render_trip(trip: dict):
     if trip.get("agent_context"):
-        st.success(f"🔎 **Planning context:** {trip['agent_context']}")
+        st.success(f"🔎 **Agent findings:** {trip['agent_context']}")
     if trip.get("note"):
         st.info(trip["note"])
 

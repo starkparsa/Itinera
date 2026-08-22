@@ -1,198 +1,50 @@
-"""Tool implementations.
+"""Tool implementations the agent can call.
 
-Weather is fetched deterministically from the resolved destination (geocode
-then lat/lon forecast via Open-Meteo) -- not left to the agent to guess a
-city name. Currency conversion is still an optional agent tool.
+Weather uses the OpenWeather API (requires OPENWEATHER_API_KEY). Currency
+conversion still uses the free, no-key Frankfurter API.
 """
+import os
+from collections import defaultdict
+
 import requests
 
-GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
-FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-MAX_FORECAST_DAYS = 16  # Open-Meteo's free daily-forecast horizon
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY", "")
 
 
-def _condition_label(code: int) -> str:
-    """Maps WMO weather interpretation codes to a short English label."""
-    if code == 0:
-        return "clear"
-    if code in (1, 2):
-        return "partly cloudy"
-    if code == 3:
-        return "overcast"
-    if code in (45, 48):
-        return "fog"
-    if 51 <= code <= 57:
-        return "drizzle"
-    if 61 <= code <= 67 or 80 <= code <= 82:
-        return "rain"
-    if 71 <= code <= 77 or 85 <= code <= 86:
-        return "snow"
-    if 95 <= code <= 99:
-        return "thunderstorm"
-    return "mixed conditions"
-
-
-def _geocode(place: str) -> dict | None:
-    """Resolves a destination string to the best Open-Meteo geocoding hit.
-
-    Tries the full string first, then the part before a comma (so
-    "Kyoto, Japan" still works if the API wants just the city). Prefers a
-    result whose country matches text in the query, then highest population
-    so "Paris" is France rather than Texas.
+def get_weather_forecast(city: str) -> dict:
+    """5-day/3-hour forecast via OpenWeather, aggregated into daily
+    highs/lows/precipitation chance. Uses the free-tier /forecast endpoint --
+    OpenWeather's daily-resolution forecast requires a separate paid-adjacent
+    One Call subscription, so this endpoint works with any standard API key.
     """
-    queries = [place.strip()]
-    if "," in place:
-        queries.append(place.split(",", 1)[0].strip())
+    if not OPENWEATHER_API_KEY:
+        return {"error": "OPENWEATHER_API_KEY is not configured"}
 
-    place_lower = place.lower()
-    seen: set[str] = set()
-    for query in queries:
-        if not query or query.lower() in seen:
-            continue
-        seen.add(query.lower())
+    resp = requests.get(
+        "https://api.openweathermap.org/data/2.5/forecast",
+        params={"q": city, "appid": OPENWEATHER_API_KEY, "units": "metric"},
+        timeout=15,
+    ).json()
 
-        resp = requests.get(
-            GEOCODING_URL,
-            params={"name": query, "count": 5, "language": "en", "format": "json"},
-            timeout=15,
-        )
-        resp.raise_for_status()
-        results = resp.json().get("results") or []
-        if not results:
-            continue
+    if str(resp.get("cod")) != "200":
+        return {"error": resp.get("message", f"Could not fetch forecast for '{city}'")}
 
-        country_matches = [
-            r for r in results
-            if (r.get("country") or "").lower() in place_lower
-            or (r.get("country_code") or "").lower() in place_lower
-        ]
-        pool = country_matches or results
-        return max(pool, key=lambda r: r.get("population") or 0)
-    return None
+    # The API returns 3-hour interval entries; group them by calendar date
+    # and reduce to a daily high/low/precipitation-chance summary.
+    by_date = defaultdict(lambda: {"temps": [], "pop": []})
+    for entry in resp.get("list", []):
+        date = entry["dt_txt"].split(" ")[0]
+        by_date[date]["temps"].append(entry["main"]["temp"])
+        by_date[date]["pop"].append(entry.get("pop", 0) * 100)  # OpenWeather gives 0-1, convert to %
 
-
-def get_weather_forecast(place: str, days: int = 7) -> dict:
-    """Daily forecast for a destination via Open-Meteo.
-
-    Geocodes first, then requests native daily high/low, precipitation
-    probability, and weather code at that lat/lon. Horizon is capped at
-    MAX_FORECAST_DAYS; longer trips get a note rather than invented weather.
-    Failures return {"error": ...} so callers can proceed without weather.
-    """
-    if not place or place.strip().lower() == "unknown":
-        return {"error": "No destination to geocode"}
-
-    try:
-        geo = _geocode(place)
-        if not geo:
-            return {"error": f"Could not geocode '{place}'"}
-
-        requested_days = max(1, int(days))
-        forecast_days = min(requested_days, MAX_FORECAST_DAYS)
-        resp = requests.get(
-            FORECAST_URL,
-            params={
-                "latitude": geo["latitude"],
-                "longitude": geo["longitude"],
-                "daily": (
-                    "weather_code,temperature_2m_max,"
-                    "temperature_2m_min,precipitation_probability_max"
-                ),
-                "timezone": "auto",
-                "forecast_days": forecast_days,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        daily = data.get("daily") or {}
-        times = daily.get("time") or []
-        highs = daily.get("temperature_2m_max") or []
-        lows = daily.get("temperature_2m_min") or []
-        pops = daily.get("precipitation_probability_max") or []
-        codes = daily.get("weather_code") or daily.get("weathercode") or []
-
-        days_out = []
-        for i, date in enumerate(times):
-            code = codes[i] if i < len(codes) and codes[i] is not None else None
-            high = highs[i] if i < len(highs) else None
-            low = lows[i] if i < len(lows) else None
-            pop = pops[i] if i < len(pops) else None
-            days_out.append({
-                "date": date,
-                "high_c": round(high, 1) if high is not None else None,
-                "low_c": round(low, 1) if low is not None else None,
-                "precip_chance_pct": round(pop) if pop is not None else None,
-                "condition": _condition_label(int(code)) if code is not None else "unknown",
-            })
-
-        result = {
-            "location": geo.get("name", place),
-            "country": geo.get("country"),
-            "admin1": geo.get("admin1"),
-            "latitude": geo.get("latitude"),
-            "longitude": geo.get("longitude"),
-            "timezone": data.get("timezone"),
-            "days": days_out,
-        }
-        if requested_days > MAX_FORECAST_DAYS:
-            result["note"] = (
-                f"Forecast only covers the first {MAX_FORECAST_DAYS} days; "
-                "later days have no reliable forecast."
-            )
-        return result
-    except Exception as exc:
-        return {"error": str(exc)}
-
-
-def format_weather_context(
-    forecast: dict,
-    start_day: int = 1,
-    end_day: int | None = None,
-) -> str:
-    """Turns a forecast into dated per-itinerary-day text for LLM prompts.
-
-    Itinerary day 1 maps to the first forecast date (today in the
-    destination timezone). Days past the forecast horizon are called out
-    explicitly so the model does not invent weather for them.
-    """
-    if not forecast or forecast.get("error") or not forecast.get("days"):
-        return ""
-
-    days = forecast["days"]
-    last_day = end_day if end_day is not None else max(start_day, len(days))
-    location = forecast.get("location") or ""
-    country = forecast.get("country")
-    loc = f"{location}, {country}" if country else location
-
-    lines = [
-        f"Weather forecast for {loc} (use this for packing and indoor vs "
-        f"outdoor choices; do not invent weather beyond these days):"
-    ]
-    for day_number in range(start_day, last_day + 1):
-        idx = day_number - 1
-        if idx >= len(days):
-            lines.append(
-                f"Day {day_number}: no forecast available — do not invent specific weather."
-            )
-            continue
-        if idx < 0:
-            continue
-        day = days[idx]
-        parts = []
-        if day.get("low_c") is not None and day.get("high_c") is not None:
-            parts.append(f"{day['low_c']}–{day['high_c']}°C")
-        if day.get("precip_chance_pct") is not None:
-            parts.append(f"{day['precip_chance_pct']}% chance of precipitation")
-        if day.get("condition"):
-            parts.append(day["condition"])
-        date = day.get("date") or ""
-        date_bit = f" ({date})" if date else ""
-        lines.append(f"Day {day_number}{date_bit}: {', '.join(parts)}")
-
-    if forecast.get("note"):
-        lines.append(forecast["note"])
-    return "\n".join(lines)
+    dates = sorted(by_date.keys())
+    return {
+        "location": resp.get("city", {}).get("name", city),
+        "country": resp.get("city", {}).get("country"),
+        "daily_high_c": [round(max(by_date[d]["temps"]), 1) for d in dates],
+        "daily_low_c": [round(min(by_date[d]["temps"]), 1) for d in dates],
+        "precipitation_chance_pct": [round(max(by_date[d]["pop"]), 1) for d in dates],
+    }
 
 
 def convert_currency(amount: float, from_currency: str, to_currency: str) -> dict:
@@ -216,9 +68,25 @@ def convert_currency(amount: float, from_currency: str, to_currency: str) -> dic
 
 
 # JSON schemas describing each tool to the model, in the format Ollama's
-# /api/chat tools field expects. Weather is intentionally not here -- it is
-# fetched from the resolved destination in llm_service, not guessed by the agent.
+# /api/chat tools field expects.
 TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather_forecast",
+            "description": (
+                "Get a 5-day weather forecast for a city. Useful for packing "
+                "advice or planning outdoor activities around."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string", "description": "City name, e.g. 'Kyoto' or 'Paris'"},
+                },
+                "required": ["city"],
+            },
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -238,5 +106,6 @@ TOOL_SCHEMAS = [
 ]
 
 TOOL_FUNCTIONS = {
+    "get_weather_forecast": get_weather_forecast,
     "convert_currency": convert_currency,
 }

@@ -30,6 +30,7 @@ services:
       # or run Ollama in its own container instead.
       OLLAMA_URL: http://host.docker.internal:11434
       OLLAMA_MODEL: mistral
+      OPENWEATHER_API_KEY: ${OPENWEATHER_API_KEY:-}
     ports:
       - "8000:8000"
     extra_hosts:

@@ -7,14 +7,11 @@ from app import llm_service
 
 
 @pytest.fixture(autouse=True)
-def mock_agent_and_weather():
+def mock_agent_context():
     # Every test in this file exercises the itinerary pipeline in isolation.
-    # Without this, generate_itinerary would call Ollama for the agent step
-    # and Open-Meteo for weather.
-    with (
-        patch("app.llm_service.agent_service.gather_trip_context", return_value=""),
-        patch("app.llm_service.tools.get_weather_forecast", return_value={"error": "skipped in tests"}),
-    ):
+    # Without this, generate_itinerary's call to agent_service.gather_trip_context
+    # would make a real network call to Ollama's /api/chat during tests.
+    with patch("app.llm_service.agent_service.gather_trip_context", return_value=""):
         yield
 
 
@@ -127,52 +124,6 @@ def test_agent_context_is_surfaced_in_result_and_prompt():
     assert result["agent_context"] == "Expect near-freezing temps; pack layers."
     # the context should have been folded into the chunk prompt (2nd call)
     assert "near-freezing" in captured_prompts[1]
-
-
-def test_weather_is_fetched_for_resolved_destination_and_folded_into_chunk():
-    meta = json.dumps({"destination": "Kyoto", "total_days": 3})
-    chunk = json.dumps({"days": [{"day_number": i, "items": [{"activity": "sightsee"}]} for i in range(1, 4)]})
-    forecast = {
-        "location": "Kyoto",
-        "country": "Japan",
-        "days": [
-            {"date": "2026-08-23", "high_c": 32.0, "low_c": 24.0, "precip_chance_pct": 20, "condition": "partly cloudy"},
-            {"date": "2026-08-24", "high_c": 31.0, "low_c": 23.0, "precip_chance_pct": 40, "condition": "rain"},
-            {"date": "2026-08-25", "high_c": 30.0, "low_c": 22.0, "precip_chance_pct": 10, "condition": "clear"},
-        ],
-    }
-
-    captured_prompts = []
-
-    def _fake_call(prompt, num_predict, num_ctx=8192):
-        captured_prompts.append(prompt)
-        return [meta, chunk][len(captured_prompts) - 1]
-
-    with (
-        patch("app.llm_service.tools.get_weather_forecast", return_value=forecast) as mock_weather,
-        patch("app.llm_service._call_ollama", side_effect=_fake_call),
-    ):
-        result = llm_service.generate_itinerary("3 days in Kyoto")
-
-    mock_weather.assert_called_once_with("Kyoto", days=3)
-    assert "partly cloudy" in captured_prompts[1]
-    assert "Day 1 (2026-08-23)" in captured_prompts[1]
-    assert "Kyoto, Japan" in result["agent_context"]
-
-
-def test_unknown_destination_does_not_block_generation():
-    chunk1 = json.dumps({"days": [{"day_number": i, "items": [{"activity": "explore"}]} for i in range(1, 6)]})
-    chunk2 = json.dumps({"days": [{"day_number": i, "items": [{"activity": "explore"}]} for i in range(6, 8)]})
-
-    with (
-        patch("app.llm_service.tools.get_weather_forecast", return_value={"error": "No destination to geocode"}) as mock_weather,
-        patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence(["not json", chunk1, chunk2])),
-    ):
-        result = llm_service.generate_itinerary("somewhere vague")
-
-    mock_weather.assert_called_once_with("Unknown", days=7)
-    assert result["destination"] == "Unknown"
-    assert "agent_context" not in result
 
 
 # ---------- intent classification ----------
