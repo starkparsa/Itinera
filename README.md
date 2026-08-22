@@ -85,11 +85,77 @@ frontend/   Streamlit chat UI
 docker-compose.yml   Runs the full stack together
 ```
 
+## Intent routing, scope restriction, and latency
+Every message used to be forced through full itinerary generation, even
+plain questions -- which produced nonsensical fake itineraries in response
+to things like "what's the weather like there?". This is now fixed with a
+classification step (`classify_intent` in `llm_service.py`) that runs
+**before** anything expensive, sorting each message into:
+- **`new_trip` / `edit_trip`** -- runs the full chunked itinerary pipeline,
+  same as before. Note: `edit_trip` currently still regenerates the whole
+  itinerary (with conversation context describing the requested change)
+  rather than surgically editing specific days -- true diff-based editing
+  is a bigger feature for later.
+- **`question`** -- answered conversationally via real chat-formatted
+  history (not the squashed summary string), without touching the
+  itinerary generator at all.
+- **`off_topic`** -- returns a fixed, non-LLM-generated decline message
+  immediately. This is also the scope guardrail: off-topic requests
+  (coding help, general trivia, prompt-injection attempts) never reach the
+  agent or itinerary machinery, and the decline text itself can't be
+  manipulated since it's not model-generated.
+
+This closes the latency gap for anything that isn't a genuine trip request
+(no agent loop, no chunked generation for a question or a decline), and the
+assistant's stored summaries after a trip is generated now include real
+day/activity detail (see `_summarize_itinerary` in `routers/trips.py`)
+instead of a one-line "planned a trip to X" -- so follow-up turns actually
+have something concrete to reference.
+
+**For itinerary generation itself**, two further latency changes:
+- `keep_alive` is set on every Ollama call, keeping the model loaded in
+  memory between requests instead of paying reload cost each time.
+- The agentic tool-calling step and the destination/day-count inference
+  call are independent, so they now run concurrently rather than
+  back-to-back, removing roughly one full model round-trip's worth of wait
+  time from every generation.
+
+**Further latency options outside this codebase**, worth testing directly:
+- A smaller/faster model (`qwen2.5:3b`, `phi3:mini`, `llama3.2:3b`) trades
+  quality for speed -- worth comparing against `mistral` if speed matters
+  more than itinerary detail.
+- Check whether Ollama is actually using a GPU (`ollama ps`) -- CPU-only
+  inference on a 7B model is the single biggest latency factor on most
+  laptops, far more than any of the above.
+
+## Chat history and conversation memory
+The app now works like a real chat interface rather than one-shot trip
+generation:
+- **Sidebar chat history** — every trip request starts or continues a
+  conversation, listed in the sidebar with a "New chat" button to start
+  fresh (mirrors the `conversations` + `messages` tables in `models.py`).
+- **Conversation memory** — when you continue a chat (e.g. "actually make it
+  a full week" or "make it vegetarian friendly"), the backend builds a short
+  summary of recent turns (`_build_conversation_context` in
+  `routers/trips.py`) and folds it into every LLM prompt, so follow-ups can
+  reference what was discussed earlier in that chat. This is a best-effort
+  summary, not full raw history — it's capped (`MAX_CONTEXT_MESSAGES`,
+  `MAX_CONTEXT_CHARS`) to keep prompts bounded regardless of how long a
+  conversation gets.
+- Switching chats in the sidebar reloads that conversation's full message
+  history, including past itineraries, from MySQL.
+
 ## Agentic tool-calling
 Before writing the itinerary, the backend runs a small agent loop
 (`agent_service.py`) where the model itself decides whether to call one of
 two free, no-API-key tools:
-- **Weather** (`tools.py`, via Open-Meteo) — a 7-day forecast for the destination
+- **Weather** (`tools.py`, via [OpenWeather](https://openweathermap.org/api))
+  — a 5-day forecast for the destination, aggregated from 3-hour interval
+  data into daily highs/lows/precipitation chance. Requires
+  `OPENWEATHER_API_KEY` in `.env` (get a free key at openweathermap.org — the
+  standard free tier covers the `/data/2.5/forecast` endpoint this uses). If
+  the key isn't set, this tool returns an error and the agent proceeds
+  without weather context rather than failing the whole request.
 - **Currency conversion** (`tools.py`, via Frankfurter/ECB rates) — if the
   prompt mentions a budget in a specific currency
 

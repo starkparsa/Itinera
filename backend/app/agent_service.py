@@ -18,6 +18,7 @@ from . import tools
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
+KEEP_ALIVE = "30m"  # keeps the model resident between calls -- avoids reload latency
 
 MAX_TOOL_ROUNDS = 4
 
@@ -55,6 +56,8 @@ def gather_trip_context(prompt: str) -> str:
                     "messages": messages,
                     "tools": tools.TOOL_SCHEMAS,
                     "stream": False,
+                    "keep_alive": KEEP_ALIVE,
+                    "options": {"num_ctx": 4096},
                 },
                 timeout=120,
             )

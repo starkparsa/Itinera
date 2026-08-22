@@ -15,6 +15,37 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     trips = relationship("Trip", back_populates="owner", cascade="all, delete-orphan")
+    conversations = relationship("Conversation", back_populates="owner", cascade="all, delete-orphan")
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    title = Column(String(255), nullable=False, default="New chat")
+    agent_context = Column(Text, nullable=True)  # cached weather/currency findings, set once per conversation
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    owner = relationship("User", back_populates="conversations")
+    messages = relationship(
+        "Message", back_populates="conversation",
+        cascade="all, delete-orphan", order_by="Message.created_at",
+    )
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    role = Column(String(20), nullable=False)  # "user" or "assistant"
+    content = Column(Text, nullable=False)
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    conversation = relationship("Conversation", back_populates="messages")
+    trip = relationship("Trip")
 
 
 class Trip(Base):
@@ -22,6 +53,7 @@ class Trip(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True)
     destination = Column(String(255), nullable=False)
     prompt = Column(Text)  # the original natural-language request
     created_at = Column(DateTime, default=datetime.utcnow)

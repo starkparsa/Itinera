@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -124,3 +124,52 @@ def test_agent_context_is_surfaced_in_result_and_prompt():
     assert result["agent_context"] == "Expect near-freezing temps; pack layers."
     # the context should have been folded into the chunk prompt (2nd call)
     assert "near-freezing" in captured_prompts[1]
+
+
+# ---------- intent classification ----------
+
+def test_classify_intent_new_trip():
+    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "new_trip"})):
+        assert llm_service.classify_intent("plan me a trip to Peru", "") == "new_trip"
+
+
+def test_classify_intent_off_topic():
+    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "off_topic"})):
+        assert llm_service.classify_intent("write me a sorting algorithm", "") == "off_topic"
+
+
+def test_classify_intent_question():
+    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "question"})):
+        assert llm_service.classify_intent("what's the weather like there?", "trip to Kyoto discussed") == "question"
+
+
+def test_classify_intent_invalid_category_falls_back_to_new_trip():
+    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "something_made_up"})):
+        assert llm_service.classify_intent("plan a trip", "") == "new_trip"
+
+
+def test_classify_intent_failure_fails_open_to_new_trip():
+    with patch("app.llm_service._call_ollama", side_effect=ConnectionError("unreachable")):
+        assert llm_service.classify_intent("plan a trip", "") == "new_trip"
+
+
+# ---------- conversational Q&A path ----------
+
+def test_answer_question_returns_model_content():
+    mock_response = Mock()
+    mock_response.json.return_value = {"message": {"content": "It should be sunny and warm in June."}}
+    mock_response.raise_for_status = Mock()
+
+    with patch("app.llm_service.requests.post", return_value=mock_response):
+        result = llm_service.answer_question("what's the weather like?", [{"role": "user", "content": "trip to Kyoto"}])
+
+    assert result == "It should be sunny and warm in June."
+
+
+def test_answer_question_raises_on_failure():
+    with patch("app.llm_service.requests.post", side_effect=ConnectionError("unreachable")):
+        try:
+            llm_service.answer_question("what's the weather like?", [])
+            assert False, "expected RuntimeError"
+        except RuntimeError as exc:
+            assert "Failed to answer" in str(exc)

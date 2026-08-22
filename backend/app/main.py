@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
-from .routers import trips
+from .routers import conversations, trips
 
 # For local dev this creates tables directly. Once the schema stabilizes,
 # switch to `alembic upgrade head` and drop this line -- migrations should
@@ -19,6 +19,7 @@ app.add_middleware(
 )
 
 app.include_router(trips.router)
+app.include_router(conversations.router)
 
 
 @app.get("/health")
