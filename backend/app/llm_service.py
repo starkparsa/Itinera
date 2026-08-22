@@ -4,7 +4,7 @@ import os
 
 import requests
 
-from . import agent_service
+from . import agent_service, tools
 
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
@@ -235,9 +235,9 @@ def generate_itinerary(prompt: str, requested_days: int | None = None, conversat
 
     The agentic tool-calling step (agent_service.py) and the destination/
     length inference call are independent of each other, so they run
-    concurrently rather than back-to-back -- a real latency win since it
-    removes one full model round-trip's worth of wall-clock time from every
-    generation.
+    concurrently rather than back-to-back. Weather is fetched after
+    destination is known, from that resolved place (geocode + daily
+    forecast), not from a city name the agent guessed.
 
     Swapping to a cloud model later only means changing this function's
     internals -- routers/trips.py never needs to know which provider is used.
@@ -245,14 +245,19 @@ def generate_itinerary(prompt: str, requested_days: int | None = None, conversat
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
         agent_future = executor.submit(agent_service.gather_trip_context, prompt)
         meta_future = executor.submit(_infer_trip_meta, prompt, requested_days, conversation_context)
-        trip_context = agent_future.result()
+        agent_summary = agent_future.result()
         destination, total_days = meta_future.result()
+
+    forecast = tools.get_weather_forecast(destination, days=total_days)
+    weather_summary = tools.format_weather_context(forecast)
 
     all_days: list[dict] = []
     covered_activities: list[str] = []
 
     for start_day in range(1, total_days + 1, CHUNK_SIZE_DAYS):
         end_day = min(start_day + CHUNK_SIZE_DAYS - 1, total_days)
+        weather_for_chunk = tools.format_weather_context(forecast, start_day, end_day)
+        trip_context = "\n\n".join(part for part in (weather_for_chunk, agent_summary) if part)
         chunk_days = _generate_chunk(prompt, destination, total_days, start_day, end_day, covered_activities, trip_context, conversation_context)
         all_days.extend(chunk_days)
         for day in chunk_days:
@@ -261,8 +266,9 @@ def generate_itinerary(prompt: str, requested_days: int | None = None, conversat
                     covered_activities.append(item["activity"])
 
     result = {"destination": destination, "days": all_days}
-    if trip_context:
-        result["agent_context"] = trip_context
+    combined_context = "\n\n".join(part for part in (weather_summary, agent_summary) if part)
+    if combined_context:
+        result["agent_context"] = combined_context
     if requested_days and requested_days > MAX_TOTAL_DAYS:
         result["note"] = f"Requested {requested_days} days exceeds the {MAX_TOTAL_DAYS}-day limit; showing the first {MAX_TOTAL_DAYS} days."
     return result
