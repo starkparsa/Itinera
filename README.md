@@ -149,36 +149,39 @@ generation:
   history, including past itineraries, from MySQL.
 
 ## Agentic tool-calling
-Before writing the itinerary, the backend runs a small agent loop
-(`agent_service.py`) where the model itself decides whether to call one of
-two free, no-API-key tools:
-- **Weather** (`tools.py`, via [OpenWeather](https://openweathermap.org/api))
-  — a 5-day forecast for the destination, aggregated from 3-hour interval
-  data into daily highs/lows/precipitation chance. Requires
-  `OPENWEATHER_API_KEY` in `.env` (get a free key at openweathermap.org — the
-  standard free tier covers the `/data/2.5/forecast` endpoint this uses). If
-  the key isn't set, this tool returns an error and the agent proceeds
-  without weather context rather than failing the whole request.
-- **Currency conversion** (`tools.py`, via Frankfurter/ECB rates) — if the
-  prompt mentions a budget in a specific currency
 
-The model chooses whether either tool is actually useful for a given trip —
-this isn't hardcoded. Whatever it finds gets folded into the itinerary
-prompts as context and shown in the UI under "Agent findings." This step is
-best-effort: if the model doesn't use tools well, or a tool API is
-unreachable, generation proceeds normally without it — it never blocks
-itinerary generation.
+**Currently paused** (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`).
+There used to be a small agent loop (`agent_service.py`) before writing the
+itinerary, where the model itself decided whether to call one of two
+free, no-API-key tools:
+- **Weather**, via OpenWeather — removed outright after proving unreliable
+  in practice (see CLAUDE.md's decision log).
+- **Currency conversion** (`tools.py`, via Frankfurter/ECB rates) — the
+  tool/schema are still in place, but paused alongside weather rather than
+  leaving a half-working agent step running.
 
-Findings are cached on the conversation (`Conversation.agent_context`) after
-the first turn and reused on every later turn (edits, follow-ups) in the
-same chat, rather than re-running the tool-calling loop -- and its Ollama
-round-trip -- on every single message.
+While paused, `gather_trip_context()` returns "" immediately with no
+network calls, so generation behaves exactly as if the agent step found
+nothing useful. When it was running: the model chose whether either tool
+was actually useful for a given trip (not hardcoded), findings got folded
+into the itinerary prompts as context and shown in the UI under "Agent
+findings," and the step was best-effort — if the model didn't use tools
+well, or a tool API was unreachable, generation proceeded normally without
+it. Flip `AGENT_TOOL_CALLING_ENABLED` back to `True` (and re-add a weather
+tool, if wanted) to bring this back.
+
+When enabled, findings are cached on the conversation
+(`Conversation.agent_context`) after the first turn and reused on every
+later turn (edits, follow-ups) in the same chat, rather than re-running the
+tool-calling loop -- and its Ollama round-trip -- on every single message.
 
 **Note:** tool-calling reliability varies a lot by model. `mistral` (this
 project's default) is on Ollama's supported list but is noted as less
-consistent at tool selection than newer, larger models. If the agent step
-seems to rarely trigger or behaves oddly, trying `llama3.1` or `mistral-nemo`
-instead (both stronger at tool calling) is worth testing.
+consistent at tool selection than newer, larger models -- part of why this
+step is paused rather than debugged further for now. If/when it's
+re-enabled and still seems to rarely trigger or behaves oddly, trying
+`llama3.1` or `mistral-nemo` instead (both stronger at tool calling) is
+worth testing.
 
 ## Troubleshooting
 

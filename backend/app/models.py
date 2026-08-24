@@ -24,7 +24,12 @@ class Conversation(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     title = Column(String(255), nullable=False, default="New chat")
-    agent_context = Column(Text, nullable=True)  # cached weather/currency findings, set once per conversation
+    # Cached findings from the agent tool-calling step, set once per
+    # conversation. That step is currently paused (see agent_service.py) --
+    # this stays "" until it's re-enabled -- but the column is left generic
+    # since it was weather+currency before and may be more than currency
+    # again later.
+    agent_context = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="conversations")

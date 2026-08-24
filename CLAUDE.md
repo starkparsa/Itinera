@@ -32,9 +32,16 @@ the mismatch rather than silently editing one to match the other.
 - **Backend**: FastAPI + SQLAlchemy. Chat-driven itinerary generation via
   chunked LLM calls (`llm_service.py`), an intent classification gate
   (`new_trip` / `edit_trip` / `question` / `off_topic`), a small agent
-  tool-calling loop (`agent_service.py` + `tools.py`: weather via
-  OpenWeather, currency via Frankfurter), conversation-scoped agent-findings
-  caching (`Conversation.agent_context`).
+  tool-calling loop (`agent_service.py` + `tools.py`) and conversation-scoped
+  agent-findings caching (`Conversation.agent_context`) —
+  **currently paused** (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`):
+  weather (OpenWeather) wasn't working reliably in practice and was removed
+  outright; currency conversion (Frankfurter) is still in `tools.py` but
+  paused alongside it. `gather_trip_context()` short-circuits to `""`, so
+  the rest of the pipeline (including the Q&A on-demand fetch and
+  unconditional honesty instruction added for the weather-fabrication fix)
+  behaves as if the agent step simply never finds anything — see decision
+  log.
 - **Frontend**: Streamlit chat UI (`frontend/streamlit_app.py`). Deliberately
   minimal — no trip-length field or similar form controls; trip parameters
   come from the prompt text (see decision log, this was a deliberate
@@ -55,6 +62,7 @@ the mismatch rather than silently editing one to match the other.
 | Database: MySQL → **Postgres on Neon** | pgvector lives in the same DB instance for the later cross-trip preference-memory feature — no separate vector service to run or pay for. Neon has no idle-pause gotcha (unlike Supabase's free tier). Trade-off accepted knowingly: Neon doesn't bundle free Auth the way Supabase would have, so auth is a fully separate build. |
 | Auth: built **last** | Schema already supports it (`user_id` everywhere). When it happens: **Google OAuth** specifically — Maps and Calendar both need a Google Cloud project + OAuth consent anyway, so one login flow should cover identity + Maps scope + Calendar scope together, not three separate integrations. |
 | Trip length: inferred from the prompt, no UI field | Explicitly rejected a "Trip length" slider/number-input in the Streamlit sidebar — say it in the message instead (e.g. "a week in Lisbon"). Don't re-add a form control for this without asking; it was tried and deliberately removed. |
+| Weather (OpenWeather): **removed**; agent tool-calling step **paused** (currency too) | Wasn't working reliably in practice for real answers even after the fabrication/on-demand-fetch fix (root cause not fully diagnosed this round — the API key was present and valid-looking, so this wasn't simply a missing-key issue). Rather than leave a half-working agent step running with only currency left in it, the whole step is paused (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`); `tools.py`'s `convert_currency` and its schema are kept in place, unused, for a cheap re-enable. `gather_trip_context()` returning `""` while paused is indistinguishable from "agent step ran, found nothing" to every downstream consumer, so no other code had to change. Re-diagnose weather from scratch (or reconsider the source — e.g. Open-Meteo, no key required, is already the pick for the drafted Maps/routing plan) before re-adding it. |
 | Flights: no live pricing API for MVP | No workable free flight-pricing API exists as of Aug 2026 — Amadeus self-service, the obvious free option, was fully decommissioned July 17 2026. Treat flight cost as an LLM-reasoned rough estimate, clearly labeled as such, until there's budget for a paid API (~$10-20/mo — Duffel, AeroDataBox) or a better free option surfaces. Re-check the landscape before building against a live flights integration. |
 | Hotels: search/compare only, not booking | Real reservations need PCI-compliant payment flows and hotel partner agreements — out of scope for a free-tier indie MVP. Deep-link out to Booking.com/Google Hotels rather than booking in-app. |
 | Maps: OSM-based stack (Nominatim + Overpass + OpenRouteService + Open-Meteo + Wikipedia), not Google Maps Platform | Avoids requiring a Google Cloud billing account — Google Maps Platform needs one even at $0 spend (the same constraint that originally justified bundling Maps with OAuth setup below). The OSM stack is genuinely free with no card on file, at the cost of weaker geocoding accuracy for vague free-text place names and public shared-instance reliability (Nominatim: hard 1 req/sec cap across the whole app; Overpass: no SLA). Acceptable tradeoffs for a $0-budget hobby MVP. Full design: see the planned Maps/routing integration (deep per-item coordinates + legs, deterministic energy/pacing signal, grounded-not-invented importance notes) — plan drafted, not yet built. Re-verify free-tier terms before relying on specific figures, same as every other row in this table. |
@@ -68,10 +76,13 @@ Apply these to every new tool/integration, not just the ones that exist today.
    itinerary/agent pipeline. Gate new capabilities the same way — don't
    bolt them onto the main generation path unconditionally.
 2. **Tools return small, flat, pre-aggregated JSON — never raw provider
-   payloads.** `tools.py`'s weather function reduces a 40-entry OpenWeather
-   response to 3 arrays; every new tool (Maps, flights, hotels, calendar)
-   should do the same kind of reduction before its output reaches a prompt.
-   This is a cost control once tokens cost real money, not just tidiness.
+   payloads.** `tools.py`'s `convert_currency` reduces a Frankfurter response
+   to 4 fields (the removed weather tool used to do the same, reducing a
+   40-entry OpenWeather response to 3 arrays — same standard applies
+   whenever weather or any other tool comes back); every new tool (Maps,
+   flights, hotels, calendar) should do the same kind of reduction before
+   its output reaches a prompt. This is a cost control once tokens cost
+   real money, not just tidiness.
 3. **Split client vs. tool.** Raw API wrapper (auth, retries, pagination) is
    a different layer from the LLM-facing tool function (shaped output,
    schema-described, never raises — returns `{"error": ...}` like the
@@ -112,10 +123,12 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    another one before building net-new scope. Rounds shipped so far: agent
    findings (weather/currency) over-surfacing into every conversation turn;
    Q&A fabricating weather data (wrong units, invented conditions) when
-   nothing was cached, now fixed with an unconditional anti-fabrication
+   nothing was cached, fixed with an unconditional anti-fabrication
    instruction *and* an on-demand fetch when a question needs real data and
    nothing's cached yet (see principle #7 and `answer_question`/
-   `gather_trip_context`).
+   `gather_trip_context`); weather still wasn't working reliably even after
+   that fix, so it was removed and the whole agent tool-calling step paused
+   (see decision log) rather than sunk further into this round.
 2. Gemini swap (structured output + native tool calling) — de-risks
    everything built after it; several bugs caught in the round above trace
    back to Mistral's weak instruction-following, which this step directly
@@ -169,8 +182,8 @@ backend/app/
   models.py             SQLAlchemy models: User, Conversation, Message, Trip, ItineraryItem
   database.py            DB engine/session setup
   llm_service.py          Ollama calls: intent classification, itinerary generation, Q&A
-  agent_service.py        Tool-calling loop (weather/currency) run ahead of generation
-  tools.py                 Tool implementations + schemas (OpenWeather, Frankfurter)
+  agent_service.py        Tool-calling loop run ahead of generation -- paused, see decision log
+  tools.py                 Tool implementations + schemas (currency via Frankfurter; weather removed)
   routers/trips.py         /trips/generate — the main request path, ties everything together
   routers/conversations.py  Chat history endpoints
 backend/tests/            pytest, in-memory SQLite, Ollama calls mocked
