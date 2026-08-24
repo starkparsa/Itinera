@@ -1,10 +1,14 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import llm_service, models, schemas
+from .. import agent_service, llm_service, models, schemas
 from ..database import get_db
 
 router = APIRouter(prefix="/trips", tags=["trips"])
+
+logger = logging.getLogger(__name__)
 
 MAX_CONTEXT_MESSAGES = 6  # how many recent turns to summarize for the LLM
 MAX_CONTEXT_CHARS = 1000  # cap so long histories don't bloat every prompt
@@ -92,12 +96,42 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
 
     if intent == "question":
         chat_messages = _build_chat_messages(conversation)
+
+        # Nothing gathered yet for this conversation at all -- try a real,
+        # scoped fetch before answering rather than letting the model guess
+        # (see CLAUDE.md principle #7). Gated on `is None` specifically (not
+        # just falsy) so this matches the exact same cache-once-per-
+        # conversation contract used for itinerary generation below
+        # (`was_freshly_gathered`) -- once attempted, even "" for "found
+        # nothing", it won't fire again on every later question.
+        fresh_agent_context = ""
+        if conversation.agent_context is None:
+            latest_trip = (
+                db.query(models.Trip)
+                .filter(models.Trip.conversation_id == conversation.id)
+                .order_by(models.Trip.id.desc())
+                .first()
+            )
+            # A destination hint helps when the question itself doesn't name
+            # a place ("what does the temperature look like?"); fine to
+            # leave unset if no trip exists yet -- the question text alone
+            # may name one, and the fetch degrades quietly either way.
+            fresh_agent_context = agent_service.gather_trip_context(
+                request.prompt, destination=latest_trip.destination if latest_trip else None,
+            )
+
+        effective_agent_context = fresh_agent_context or (conversation.agent_context or "")
+
         try:
             reply_text = llm_service.answer_question(
-                request.prompt, chat_messages, agent_context=conversation.agent_context or "",
+                request.prompt, chat_messages, agent_context=effective_agent_context,
             )
         except Exception as exc:
+            logger.exception("Q&A request failed for conversation %s", conversation.id)
             raise HTTPException(status_code=502, detail=f"LLM failed to answer: {exc}")
+
+        if conversation.agent_context is None:
+            conversation.agent_context = fresh_agent_context
 
         db.add(models.Message(conversation_id=conversation.id, role="user", content=request.prompt))
         db.add(models.Message(conversation_id=conversation.id, role="assistant", content=reply_text))
@@ -121,9 +155,19 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
             cached_agent_context=conversation.agent_context,
         )
     except Exception as exc:
+        logger.exception("Itinerary generation failed for conversation %s", conversation.id)
         raise HTTPException(status_code=502, detail=f"LLM generation failed: {exc}")
 
-    if conversation.agent_context is None:
+    # Only surface agent findings in *this* response when they were freshly
+    # gathered on this turn -- on later edit/regenerate turns the same
+    # (possibly stale) findings are reused from the cache, but re-showing
+    # the "Agent findings" banner every turn makes it look like the
+    # assistant keeps bringing up weather/currency unprompted. See
+    # CLAUDE.md architecture principle #5: cached findings should serve the
+    # whole conversation, but each consumer -- including this response --
+    # needs to read/surface the cache appropriately, not just blindly.
+    was_freshly_gathered = conversation.agent_context is None
+    if was_freshly_gathered:
         conversation.agent_context = result.get("agent_context", "")
 
     trip = models.Trip(
@@ -170,7 +214,7 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
         destination=trip.destination,
         itinerary=[schemas.ItineraryItemOut.model_validate(i) for i in items_out],
         note=result.get("note"),
-        agent_context=result.get("agent_context"),
+        agent_context=result.get("agent_context") if was_freshly_gathered else None,
         conversation_id=conversation.id,
     )
 

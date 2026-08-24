@@ -29,10 +29,15 @@ packing advice, or converting a stated budget to the local currency. Don't \
 call tools for things you already know or that don't need real-time data. \
 Once you have what you need (or if no tools are needed), reply with a \
 short plain-text summary, 2-4 sentences, of anything useful you found that \
-should inform the itinerary. Do not write the itinerary itself here."""
+should inform the itinerary. Do not write the itinerary itself here.
+
+If a tool result contains an "error" field, that specific data is \
+unavailable -- do not invent a plausible-sounding number or fact to fill \
+the gap. Leave that fact out of your summary (or say briefly that it \
+wasn't available) rather than guessing."""
 
 
-def gather_trip_context(prompt: str) -> str:
+def gather_trip_context(prompt: str, destination: str | None = None) -> str:
     """Runs the tool-calling loop and returns a short plain-text summary to
     fold into itinerary generation, or "" if nothing useful was found or the
     loop fails for any reason.
@@ -41,10 +46,17 @@ def gather_trip_context(prompt: str) -> str:
     doesn't support tool calling well, or a tool API is unreachable, this
     fails quietly and itinerary generation proceeds exactly as it did before
     this feature existed.
+
+    destination: optional, folded into the user message so the model isn't
+    left guessing which city to check. Needed when this is called from a
+    bare follow-up question (e.g. "what does the temperature look like?")
+    that doesn't name a place on its own -- the original trip-generation
+    prompt usually does, so callers with that context can omit this.
     """
+    user_content = f"Trip destination: {destination}\n\n{prompt}" if destination else prompt
     messages = [
         {"role": "system", "content": AGENT_SYSTEM_PROMPT},
-        {"role": "user", "content": prompt},
+        {"role": "user", "content": user_content},
     ]
 
     try:

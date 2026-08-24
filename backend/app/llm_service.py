@@ -9,6 +9,28 @@ from . import agent_service
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral")
 
+
+def _describe_ollama_error(exc: Exception) -> str:
+    """Turns a low-level requests exception from talking to Ollama into an
+    actionable message. Previously the 502 sent to the frontend just
+    restated the raw exception (e.g. "Connection refused"), which doesn't
+    say what to do about it -- this is what routers/trips.py's 502 `detail`
+    ends up showing, so both _call_ollama and answer_question's direct
+    Ollama call route through this."""
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return (
+            f"Can't reach Ollama at {OLLAMA_URL} -- is `ollama serve` running? "
+            "(In Docker, confirm host.docker.internal resolves to your host.)"
+        )
+    if isinstance(exc, requests.exceptions.Timeout):
+        return f"Ollama at {OLLAMA_URL} didn't respond in time -- it may be overloaded or still loading the model."
+    if isinstance(exc, requests.exceptions.HTTPError):
+        status = exc.response.status_code if exc.response is not None else "unknown"
+        if status == 404:
+            return f"Ollama returned 404 -- is the '{OLLAMA_MODEL}' model pulled? Run `ollama pull {OLLAMA_MODEL}`."
+        return f"Ollama returned HTTP {status}: {exc}"
+    return str(exc)
+
 # Keeps the model resident in Ollama between calls instead of unloading
 # after its default idle timeout -- avoids paying multi-second reload cost
 # on every single request within (and across) a conversation turn.
@@ -93,24 +115,34 @@ Respond with ONLY valid JSON, no markdown fences, no commentary:
 
 QUESTION_SYSTEM_PROMPT = f"""You are a travel-planning assistant. Answer the \
 user's question conversationally and concisely (2-5 sentences), using the \
-conversation history for context. {SCOPE_REMINDER}"""
+conversation history for context. {SCOPE_REMINDER}
+
+You do NOT have live access to real-time weather, prices, or exchange rates \
+unless real figures are explicitly given to you below (under "Real data \
+gathered earlier"). If the user asks about current weather, prices, or \
+exchange rates and no real figures are given to you, say plainly that you \
+don't have current data instead of estimating or guessing a plausible-\
+sounding number."""
 
 
 def _call_ollama(prompt: str, num_predict: int, num_ctx: int = 8192) -> str:
     """Sends a prompt to Ollama's /api/generate and returns the raw text response."""
-    response = requests.post(
-        f"{OLLAMA_URL}/api/generate",
-        json={
-            "model": OLLAMA_MODEL,
-            "prompt": prompt,
-            "stream": False,
-            "keep_alive": KEEP_ALIVE,
-            "options": {"num_ctx": num_ctx, "num_predict": num_predict},
-        },
-        timeout=300,
-    )
-    response.raise_for_status()
-    return response.json()["response"].strip()
+    try:
+        response = requests.post(
+            f"{OLLAMA_URL}/api/generate",
+            json={
+                "model": OLLAMA_MODEL,
+                "prompt": prompt,
+                "stream": False,
+                "keep_alive": KEEP_ALIVE,
+                "options": {"num_ctx": num_ctx, "num_predict": num_predict},
+            },
+            timeout=300,
+        )
+        response.raise_for_status()
+        return response.json()["response"].strip()
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(_describe_ollama_error(exc)) from exc
 
 
 def _parse_json(raw_text: str) -> dict:
@@ -167,9 +199,17 @@ def answer_question(prompt: str, chat_messages: list[dict], agent_context: str =
     system_prompt = QUESTION_SYSTEM_PROMPT
     if agent_context:
         system_prompt += (
-            f"\n\nReal data gathered earlier for this trip: {agent_context}\n"
-            "Use these figures when they answer the question. Do not invent "
-            "specific numbers (temperatures, prices, exchange rates) that "
+            f"\n\nReal data gathered earlier for this trip (for your reference "
+            f"only): {agent_context}\n"
+            "Only bring this up if the user's question is actually asking "
+            "about it (weather, packing for conditions, currency/prices). Do "
+            "NOT proactively mention weather, packing, or currency figures "
+            "on questions that aren't about them. When it is relevant, state "
+            "ONLY what's given above, in the same units and form it's given "
+            "in (e.g. Celsius temperatures as given, no converting to "
+            "Fahrenheit, no adding qualitative conditions like \"sunny\" or "
+            "\"cloudy\" that weren't provided). Do not invent specific "
+            "numbers (temperatures, prices, exchange rates) or details that "
             "aren't given here or in the conversation -- if you don't have "
             "the real figure, say so instead of guessing."
         )
@@ -191,8 +231,10 @@ def answer_question(prompt: str, chat_messages: list[dict], agent_context: str =
         response.raise_for_status()
         content = (response.json().get("message", {}).get("content") or "").strip()
         return content or "I don't have a good answer for that -- could you rephrase?"
+    except requests.exceptions.RequestException as exc:
+        raise RuntimeError(f"Failed to answer question: {_describe_ollama_error(exc)}") from exc
     except Exception as exc:
-        raise RuntimeError(f"Failed to answer question: {exc}")
+        raise RuntimeError(f"Failed to answer question: {exc}") from exc
 
 
 def _infer_trip_meta(prompt: str, requested_days: int | None, conversation_context: str) -> tuple[str, int]:

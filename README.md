@@ -180,6 +180,21 @@ consistent at tool selection than newer, larger models. If the agent step
 seems to rarely trigger or behaves oddly, trying `llama3.1` or `mistral-nemo`
 instead (both stronger at tool calling) is worth testing.
 
+## Troubleshooting
+
+**"502 Server Error: Bad Gateway" from `/trips/generate`** — the backend
+reached out to Ollama and the call failed, so it returns a 502 rather than a
+broken itinerary. Most often this means Ollama isn't running on your host,
+or the model in `OLLAMA_MODEL` (`mistral` by default) hasn't been pulled
+into it yet:
+```bash
+ollama ps          # confirm Ollama is running
+ollama serve        # start it if not
+ollama pull mistral  # make sure the configured model is present
+```
+The `detail` field in the error response states the specific cause
+(unreachable, timed out, or model not found) so you don't need to guess.
+
 ## How long trips are generated
 Trips longer than a few days are generated in chunks (5 days per LLM call by
 default) rather than one giant response — local models like mistral become
