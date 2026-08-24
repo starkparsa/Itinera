@@ -1,0 +1,158 @@
+# CLAUDE.md — AI Travel Planner
+
+This file is the project's north star. If a session's direction starts drifting
+from what's below — scope creep, a re-litigated decision, a "shortcut" that
+contradicts a principle here — stop and re-read this file before continuing.
+If a request would meaningfully change scope, sequencing, or one of the
+decisions below, ask the user before proceeding rather than assuming the
+original plan still holds.
+
+## What this product is
+
+A chat-driven AI travel planner. Describe a trip in plain language, get a
+day-by-day itinerary, refine it conversationally, and eventually export it
+(calendar file, live Google Calendar push). Full intended scope — not all of
+this exists yet, see "Current state":
+
+- End-to-end trip handling: itinerary planning, live/forecasted weather,
+  flight prices, Google Maps for routing/POIs, hotel search, calendar export.
+- A genuinely stateful assistant — real memory within a conversation (have
+  it), and eventually cross-conversation trip-preference memory (later,
+  separate feature — see roadmap, not to be pulled forward casually).
+- Real user accounts with per-user chat history — added **last**, once the
+  core product works (see decision log).
+- Direct itinerary export for the user to keep/use elsewhere.
+
+## Current state
+
+Code is ground truth for "what exists" — this section is a snapshot, not a
+substitute for reading the code. If they disagree, trust the code, but flag
+the mismatch rather than silently editing one to match the other.
+
+- **Backend**: FastAPI + SQLAlchemy. Chat-driven itinerary generation via
+  chunked LLM calls (`llm_service.py`), an intent classification gate
+  (`new_trip` / `edit_trip` / `question` / `off_topic`), a small agent
+  tool-calling loop (`agent_service.py` + `tools.py`: weather via
+  OpenWeather, currency via Frankfurter), conversation-scoped agent-findings
+  caching (`Conversation.agent_context`).
+- **Frontend**: Streamlit chat UI (`frontend/streamlit_app.py`). Deliberately
+  minimal — no trip-length field or similar form controls; trip parameters
+  come from the prompt text (see decision log, this was a deliberate
+  reversal).
+- **LLM**: Ollama running `mistral` locally. **Migration to Gemini is
+  planned but not done.**
+- **Database**: MySQL, wired and working. **Migration to Postgres on Neon
+  is decided but not done.**
+- **Auth**: none yet, by design. Every request uses a placeholder `user_id`;
+  every table already has `user_id` threaded through so this is cheap to
+  retrofit later.
+
+## Key decisions (with rationale — don't re-litigate without new information)
+
+| Decision | Rationale |
+|---|---|
+| LLM: Mistral (local) → **Gemini** | Workable free tier for hobby scale (as of Aug 2026: Gemini 2.5 Flash ~10 RPM/250 RPD, Flash-Lite ~15 RPM/1000 RPD, no card required — **re-verify before relying on this, limits move fast**). Also gives native structured JSON output and native function calling, replacing the current hand-rolled markdown-fence JSON parser and Ollama-specific tool loop. |
+| Database: MySQL → **Postgres on Neon** | pgvector lives in the same DB instance for the later cross-trip preference-memory feature — no separate vector service to run or pay for. Neon has no idle-pause gotcha (unlike Supabase's free tier). Trade-off accepted knowingly: Neon doesn't bundle free Auth the way Supabase would have, so auth is a fully separate build. |
+| Auth: built **last** | Schema already supports it (`user_id` everywhere). When it happens: **Google OAuth** specifically — Maps and Calendar both need a Google Cloud project + OAuth consent anyway, so one login flow should cover identity + Maps scope + Calendar scope together, not three separate integrations. |
+| Trip length: inferred from the prompt, no UI field | Explicitly rejected a "Trip length" slider/number-input in the Streamlit sidebar — say it in the message instead (e.g. "a week in Lisbon"). Don't re-add a form control for this without asking; it was tried and deliberately removed. |
+| Flights: no live pricing API for MVP | No workable free flight-pricing API exists as of Aug 2026 — Amadeus self-service, the obvious free option, was fully decommissioned July 17 2026. Treat flight cost as an LLM-reasoned rough estimate, clearly labeled as such, until there's budget for a paid API (~$10-20/mo — Duffel, AeroDataBox) or a better free option surfaces. Re-check the landscape before building against a live flights integration. |
+| Hotels: search/compare only, not booking | Real reservations need PCI-compliant payment flows and hotel partner agreements — out of scope for a free-tier indie MVP. Deep-link out to Booking.com/Google Hotels rather than booking in-app. |
+
+## Architecture principles
+
+Apply these to every new tool/integration, not just the ones that exist today.
+
+1. **Classify before anything expensive runs.** `classify_intent` exists so
+   cheap questions and off-topic messages never hit the full
+   itinerary/agent pipeline. Gate new capabilities the same way — don't
+   bolt them onto the main generation path unconditionally.
+2. **Tools return small, flat, pre-aggregated JSON — never raw provider
+   payloads.** `tools.py`'s weather function reduces a 40-entry OpenWeather
+   response to 3 arrays; every new tool (Maps, flights, hotels, calendar)
+   should do the same kind of reduction before its output reaches a prompt.
+   This is a cost control once tokens cost real money, not just tidiness.
+3. **Split client vs. tool.** Raw API wrapper (auth, retries, pagination) is
+   a different layer from the LLM-facing tool function (shaped output,
+   schema-described, never raises — returns `{"error": ...}` like the
+   existing tools do). Once there's more than one integration, use
+   `clients/` + `tools/`, not one flat file.
+4. **Cache tool calls.** Same args within a short window (same city+dates)
+   should hit a TTL cache, not the live API again. Required, not optional,
+   once running against rate-limited free tiers (Gemini, Maps).
+5. **Findings gathered once should serve the whole conversation, not be
+   re-fetched per turn — and every consumer must actually read the
+   cache.** This is why `Conversation.agent_context` exists, and why
+   `answer_question` had to be fixed to read it (it was being written but
+   never read, so follow-up questions had no real data and the model
+   invented numbers). Any new cached-findings feature needs both halves —
+   write *and* read — checked explicitly.
+6. **Never let the LLM do date arithmetic.** Inject `current_date` into
+   every prompt as a fact. Resolve relative expressions ("next weekend,"
+   "in two weeks") with real Python (`dateutil`), not model reasoning.
+7. **Don't let the model invent data it wasn't given.** Prompts referencing
+   real-world facts (weather, prices) must instruct the model to say "I
+   don't have that" instead of guessing, and must be grounded in real
+   fetched data whenever it's available — `answer_question`'s handling of
+   `agent_context` is the reference pattern for this.
+
+## MVP build order
+
+Cheapest / most self-contained first, most external-dependency risk last.
+Don't reorder without discussing it — this reflects real cost/risk
+tradeoffs from the decision log above, not arbitrary sequencing.
+
+1. Bug/correctness pass on the existing pipeline — done, see git log.
+2. Gemini swap (structured output + native tool calling) — de-risks
+   everything built after it.
+3. Itinerary export (.ics / PDF) — zero external dependencies, no quota risk.
+4. Google login (OAuth) + Google Calendar push — bundled, one OAuth setup
+   covers both.
+5. Google Maps (Places/Directions) — real free tier, but needs a Google
+   Cloud billing account on file even at $0 spend.
+6. Flights / hotels — last; scoped down per the decisions above, the most
+   expensive and least "free" part of the product.
+7. Cross-trip preference memory (pgvector) — only after the above works;
+   materially different from within-conversation memory, don't pull forward
+   without a specific reason to.
+
+## Constraints to keep in view
+
+- **Budget is $0** unless explicitly told otherwise. Every new integration
+  should be evaluated against a real, currently-live free tier — not a
+  remembered one. These change (see the Amadeus shutdown, Google Maps'
+  retired $200 credit) — verify before committing to one in a real change.
+- Free-tier numbers in this file are dated **Aug 2026**. Re-verify before
+  relying on a specific figure for a real decision, and update this file
+  when the facts change.
+
+## Commands
+
+```bash
+# Backend tests (in-memory SQLite, no live MySQL/Ollama needed)
+cd backend && pytest -v
+
+# Lint
+cd backend && ruff check .
+
+# Full stack locally
+cp .env.example .env
+docker compose up --build
+```
+
+## Repo map
+
+```
+backend/app/
+  main.py              FastAPI app, loads .env, mounts routers
+  models.py             SQLAlchemy models: User, Conversation, Message, Trip, ItineraryItem
+  database.py            DB engine/session setup
+  llm_service.py          Ollama calls: intent classification, itinerary generation, Q&A
+  agent_service.py        Tool-calling loop (weather/currency) run ahead of generation
+  tools.py                 Tool implementations + schemas (OpenWeather, Frankfurter)
+  routers/trips.py         /trips/generate — the main request path, ties everything together
+  routers/conversations.py  Chat history endpoints
+backend/tests/            pytest, in-memory SQLite, Ollama calls mocked
+frontend/streamlit_app.py  Chat UI
+docker-compose.yml         Full local stack (mysql + backend + frontend)
+.github/workflows/ci.yml   Lint + test on push/PR; build & push images to GHCR on merge to main
+```

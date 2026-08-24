@@ -56,7 +56,9 @@ def test_generate_trip_forwards_requested_days_to_llm_service():
     with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY) as mock_generate:
         client.post("/trips/generate", json={"prompt": "a month in Japan", "days": 30})
 
-    mock_generate.assert_called_once_with("a month in Japan", requested_days=30, conversation_context="")
+    mock_generate.assert_called_once_with(
+        "a month in Japan", requested_days=30, conversation_context="", cached_agent_context=None,
+    )
 
 
 def test_generate_trip_surfaces_note_from_llm_result():
@@ -127,6 +129,40 @@ def test_conversation_context_is_passed_to_llm_on_followup():
     assert "weekend in Austin" in call_kwargs["conversation_context"]
 
 
+def test_agent_context_is_cached_on_conversation_and_reused_on_followup():
+    # Conversation.agent_context exists specifically so weather/currency
+    # findings are gathered once per conversation, not re-fetched on every
+    # edit turn. First call has nothing cached yet (None); once the first
+    # call returns findings, they should be persisted and handed back to
+    # llm_service on the next turn instead of leaving it to refetch them.
+    result_with_context = {**FAKE_ITINERARY, "agent_context": "Rain expected; pack a jacket."}
+    with patch("app.llm_service.generate_itinerary", return_value=result_with_context) as mock_generate:
+        first = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+        conv_id = first.json()["conversation_id"]
+
+        assert mock_generate.call_args.kwargs["cached_agent_context"] is None
+
+        mock_generate.reset_mock()
+        mock_generate.return_value = FAKE_ITINERARY
+        client.post("/trips/generate", json={"prompt": "make it vegetarian friendly", "conversation_id": conv_id})
+
+    assert mock_generate.call_args.kwargs["cached_agent_context"] == "Rain expected; pack a jacket."
+
+
+def test_agent_context_caches_empty_string_when_nothing_found():
+    # "" (agent step ran, found nothing useful) must still count as cached --
+    # otherwise a conversation with no useful findings would re-run the
+    # agent step on every single turn forever.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY) as mock_generate:
+        first = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+        conv_id = first.json()["conversation_id"]
+
+        mock_generate.reset_mock()
+        client.post("/trips/generate", json={"prompt": "add a museum", "conversation_id": conv_id})
+
+    assert mock_generate.call_args.kwargs["cached_agent_context"] == ""
+
+
 def test_generate_trip_with_unknown_conversation_id_returns_404():
     with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
         response = client.post("/trips/generate", json={"prompt": "hello", "conversation_id": 9999})
@@ -154,6 +190,27 @@ def test_delete_conversation_removes_it():
 
     get_response = client.get(f"/conversations/{conv_id}")
     assert get_response.status_code == 404
+
+
+def test_delete_conversation_with_a_generated_trip_does_not_500():
+    # Regression test: Trip.conversation_id used to have no ondelete behavior,
+    # so deleting a conversation that had already generated a trip violated
+    # the FK constraint and raised a 500 against any DB that enforces FKs
+    # (MySQL does by default; the old test above didn't catch it because
+    # SQLite doesn't unless PRAGMA foreign_keys=ON is set -- see database.py).
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    trip_id = response.json()["trip_id"]
+    conv_id = response.json()["conversation_id"]
+    assert trip_id is not None
+
+    delete_response = client.delete(f"/conversations/{conv_id}")
+    assert delete_response.status_code == 200
+
+    # The trip itself should survive, just unlinked from the deleted conversation.
+    trip_response = client.get(f"/trips/{trip_id}")
+    assert trip_response.status_code == 200
+    assert trip_response.json()["destination"] == "Austin"
 
 
 # ---------- intent routing: off-topic, question, and skip-heavy-pipeline behavior ----------
@@ -212,6 +269,25 @@ def test_question_receives_real_chat_history_not_squashed_string():
     assert isinstance(chat_messages_arg, list)
     assert chat_messages_arg[0]["role"] == "user"
     assert "weekend in Austin" in chat_messages_arg[0]["content"]
+
+
+def test_question_receives_the_conversations_cached_agent_findings():
+    # Regression test: follow-up questions like "what's the temperature
+    # there?" were answered with invented numbers because the real forecast,
+    # gathered once and cached on Conversation.agent_context, was never
+    # passed to answer_question -- see llm_service.answer_question.
+    result_with_context = {**FAKE_ITINERARY, "agent_context": "Austin: highs of 30C, sunny."}
+    with patch("app.llm_service.generate_itinerary", return_value=result_with_context):
+        first = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    conv_id = first.json()["conversation_id"]
+
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.answer_question", return_value="It'll be hot.") as mock_answer,
+    ):
+        client.post("/trips/generate", json={"prompt": "what's the temperature there?", "conversation_id": conv_id})
+
+    assert mock_answer.call_args.kwargs["agent_context"] == "Austin: highs of 30C, sunny."
 
 
 def test_question_answer_failure_returns_502_not_500():

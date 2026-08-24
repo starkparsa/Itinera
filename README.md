@@ -45,8 +45,11 @@ host-gateway` out of the box) or run Ollama in its own container instead.
 cd backend
 python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cp ../.env.example ../.env   # if you haven't already; values here are read automatically
 # Point DATABASE_URL at a MySQL instance you're running some other way,
-# or start just the MySQL service: docker compose up mysql
+# or start just the MySQL service: docker compose up mysql -- note this
+# maps to host port 3307, not 3306, so update DATABASE_URL in .env
+# accordingly if you go this route
 uvicorn app.main:app --reload
 ```
 
@@ -166,6 +169,11 @@ best-effort: if the model doesn't use tools well, or a tool API is
 unreachable, generation proceeds normally without it — it never blocks
 itinerary generation.
 
+Findings are cached on the conversation (`Conversation.agent_context`) after
+the first turn and reused on every later turn (edits, follow-ups) in the
+same chat, rather than re-running the tool-calling loop -- and its Ollama
+round-trip -- on every single message.
+
 **Note:** tool-calling reliability varies a lot by model. `mistral` (this
 project's default) is on Ollama's supported list but is noted as less
 consistent at tool selection than newer, larger models. If the agent step
@@ -176,9 +184,12 @@ instead (both stronger at tool calling) is worth testing.
 Trips longer than a few days are generated in chunks (5 days per LLM call by
 default) rather than one giant response — local models like mistral become
 unreliable at producing long, unbroken JSON in a single call, and this keeps
-each individual request small regardless of total trip length. A trip length
-can be provided explicitly (the Streamlit UI has a "Trip length" field), or
-left for the model to infer from the prompt itself. Requests are capped at
+each individual request small regardless of total trip length. Trip length
+is inferred by the model from the prompt itself (e.g. "a week in Lisbon" ->
+7 days) -- say how long the trip is in your message rather than a separate
+field. The API's `/trips/generate` endpoint also accepts an explicit `days`
+override for programmatic callers, but the Streamlit UI doesn't expose it.
+Requests are capped at
 `MAX_TOTAL_DAYS` (60, configurable in `llm_service.py`) to avoid unbounded
 generation time; longer requests are silently clamped and a note is returned
 explaining the cap.

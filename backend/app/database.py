@@ -1,6 +1,6 @@
 import os
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -19,6 +19,15 @@ if DATABASE_URL.startswith("sqlite"):
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    # SQLite ignores foreign key constraints unless told otherwise, while
+    # MySQL (what we actually run in prod) enforces them by default. Without
+    # this, the test suite can't catch FK violations -- e.g. deleting a
+    # conversation that still has a trip pointing at it would pass here and
+    # crash for real against MySQL.
+    @event.listens_for(engine, "connect")
+    def _enable_sqlite_foreign_keys(dbapi_connection, _):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
 else:
     engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
