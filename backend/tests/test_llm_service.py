@@ -2,6 +2,7 @@ import json
 from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from app import llm_service
 
@@ -126,6 +127,51 @@ def test_agent_context_is_surfaced_in_result_and_prompt():
     assert "near-freezing" in captured_prompts[1]
 
 
+def test_call_ollama_connection_error_has_actionable_message():
+    # Regression test: a raw "Connection refused" (or similar) exception
+    # used to be surfaced to the user verbatim in the 502 response, with no
+    # hint of what to actually do about it. This is the most common cause
+    # in practice -- Ollama simply isn't running.
+    with (
+        patch("app.llm_service.requests.post", side_effect=requests.exceptions.ConnectionError("Connection refused")),
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        llm_service.generate_itinerary("3 days in Reykjavik")
+
+    assert "ollama serve" in str(exc_info.value)
+
+
+def test_call_ollama_404_hints_model_not_pulled():
+    # A 404 from Ollama's /api/generate almost always means the configured
+    # model was never pulled -- the message should say so directly instead
+    # of just restating "404 Client Error".
+    mock_response = Mock()
+    mock_response.status_code = 404
+    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
+        "404 Client Error", response=mock_response,
+    )
+
+    with (
+        patch("app.llm_service.requests.post", return_value=mock_response),
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        llm_service.generate_itinerary("3 days in Reykjavik")
+
+    assert "ollama pull" in str(exc_info.value)
+
+
+def test_answer_question_translates_connection_error():
+    with (
+        patch("app.llm_service.requests.post", side_effect=requests.exceptions.ConnectionError("Connection refused")),
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        llm_service.answer_question("what's the weather like?", [])
+
+    message = str(exc_info.value)
+    assert message.startswith("Failed to answer question:")  # preserves the existing contract
+    assert "ollama serve" in message
+
+
 def test_cached_agent_context_skips_the_agent_step_entirely():
     meta = json.dumps({"destination": "Reykjavik", "total_days": 3})
     chunk = json.dumps({"days": [{"day_number": i, "items": [{"activity": "sightsee"}]} for i in range(1, 4)]})
@@ -211,6 +257,26 @@ def test_answer_question_grounds_the_model_in_real_agent_findings():
     assert "invent" in sent_system_prompt.lower()  # instructed not to fabricate numbers
 
 
+def test_answer_question_instructs_model_not_to_volunteer_agent_context():
+    # Regression test: cached agent_context (weather/currency findings from
+    # turn 1) was being surfaced unconditionally on every later question in
+    # the conversation, so the model kept bringing up weather even on
+    # unrelated questions ("what's a good day-3 restaurant area?"). The
+    # system prompt must explicitly tell it to only use the data when the
+    # question is actually about it.
+    mock_response = Mock()
+    mock_response.json.return_value = {"message": {"content": "Try the east side for dinner."}}
+    mock_response.raise_for_status = Mock()
+
+    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+        llm_service.answer_question(
+            "what's a good area for dinner?", [], agent_context="Kyoto: highs of 22-26C, low rain chance.",
+        )
+
+    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    assert "not proactively mention" in sent_system_prompt.lower()
+
+
 def test_answer_question_without_agent_context_still_works():
     # No findings cached yet (e.g. first message in a conversation is a
     # question) -- should behave exactly as before, no crash, no empty note.
@@ -224,3 +290,41 @@ def test_answer_question_without_agent_context_still_works():
     sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
     assert sent_system_prompt == llm_service.QUESTION_SYSTEM_PROMPT
     assert result == "I'd need a destination to check that."
+
+
+def test_answer_question_instructs_honesty_even_with_no_agent_context():
+    # Regression test: a weather question with nothing cached yet (no prior
+    # trip generation, or the agent step found nothing) got zero grounding
+    # AND zero instruction not to guess -- the model just fabricated a
+    # confident-sounding forecast (wrong units, invented conditions like
+    # "sunny" that don't even exist in the tool's data shape). The base
+    # system prompt must forbid guessing real-time facts unconditionally,
+    # not just when real data happens to be available.
+    mock_response = Mock()
+    mock_response.json.return_value = {"message": {"content": "I don't have current data for that."}}
+    mock_response.raise_for_status = Mock()
+
+    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+        llm_service.answer_question("what does the temperature look like?", [], agent_context="")
+
+    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    assert "do not have live access" in sent_system_prompt.lower()
+    assert "don't have current data" in sent_system_prompt.lower()
+
+
+def test_answer_question_forbids_inventing_units_or_conditions_not_given():
+    # Regression test for the exact bug: real agent_context had Celsius
+    # numbers only, but the model answered in Fahrenheit with invented sky
+    # conditions ("Partly cloudy") that were never part of the data.
+    mock_response = Mock()
+    mock_response.json.return_value = {"message": {"content": "Highs around 24C, per the forecast."}}
+    mock_response.raise_for_status = Mock()
+
+    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+        llm_service.answer_question(
+            "what's the temperature there?", [], agent_context="Kyoto: highs of 22-26C, low rain chance.",
+        )
+
+    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    assert "fahrenheit" in sent_system_prompt.lower()
+    assert "sunny" in sent_system_prompt.lower() or "cloudy" in sent_system_prompt.lower()

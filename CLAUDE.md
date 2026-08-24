@@ -57,6 +57,7 @@ the mismatch rather than silently editing one to match the other.
 | Trip length: inferred from the prompt, no UI field | Explicitly rejected a "Trip length" slider/number-input in the Streamlit sidebar — say it in the message instead (e.g. "a week in Lisbon"). Don't re-add a form control for this without asking; it was tried and deliberately removed. |
 | Flights: no live pricing API for MVP | No workable free flight-pricing API exists as of Aug 2026 — Amadeus self-service, the obvious free option, was fully decommissioned July 17 2026. Treat flight cost as an LLM-reasoned rough estimate, clearly labeled as such, until there's budget for a paid API (~$10-20/mo — Duffel, AeroDataBox) or a better free option surfaces. Re-check the landscape before building against a live flights integration. |
 | Hotels: search/compare only, not booking | Real reservations need PCI-compliant payment flows and hotel partner agreements — out of scope for a free-tier indie MVP. Deep-link out to Booking.com/Google Hotels rather than booking in-app. |
+| Maps: OSM-based stack (Nominatim + Overpass + OpenRouteService + Open-Meteo + Wikipedia), not Google Maps Platform | Avoids requiring a Google Cloud billing account — Google Maps Platform needs one even at $0 spend (the same constraint that originally justified bundling Maps with OAuth setup below). The OSM stack is genuinely free with no card on file, at the cost of weaker geocoding accuracy for vague free-text place names and public shared-instance reliability (Nominatim: hard 1 req/sec cap across the whole app; Overpass: no SLA). Acceptable tradeoffs for a $0-budget hobby MVP. Full design: see the planned Maps/routing integration (deep per-item coordinates + legs, deterministic energy/pacing signal, grounded-not-invented importance notes) — plan drafted, not yet built. Re-verify free-tier terms before relying on specific figures, same as every other row in this table. |
 
 ## Architecture principles
 
@@ -91,9 +92,14 @@ Apply these to every new tool/integration, not just the ones that exist today.
    "in two weeks") with real Python (`dateutil`), not model reasoning.
 7. **Don't let the model invent data it wasn't given.** Prompts referencing
    real-world facts (weather, prices) must instruct the model to say "I
-   don't have that" instead of guessing, and must be grounded in real
-   fetched data whenever it's available — `answer_question`'s handling of
-   `agent_context` is the reference pattern for this.
+   don't have that" instead of guessing — **unconditionally**, not just when
+   real data happens to already be available (a gap that let `answer_question`
+   fabricate a whole invented forecast, wrong units included, when nothing
+   was cached yet). Ground prompts in real fetched data whenever it's
+   available, and when it's not, actually go try to fetch it rather than
+   settling for a bare "I don't know" if the answer is gettable —
+   `answer_question`/`gather_trip_context`'s on-demand-fetch-when-nothing's-
+   cached handling is the reference pattern for both halves of this.
 
 ## MVP build order
 
@@ -101,14 +107,30 @@ Cheapest / most self-contained first, most external-dependency risk last.
 Don't reorder without discussing it — this reflects real cost/risk
 tradeoffs from the decision log above, not arbitrary sequencing.
 
-1. Bug/correctness pass on the existing pipeline — done, see git log.
+1. Bug/correctness pass — **ongoing discipline, not a one-time step.**
+   Don't mark this "done" again; treat every session as a chance to catch
+   another one before building net-new scope. Rounds shipped so far: agent
+   findings (weather/currency) over-surfacing into every conversation turn;
+   Q&A fabricating weather data (wrong units, invented conditions) when
+   nothing was cached, now fixed with an unconditional anti-fabrication
+   instruction *and* an on-demand fetch when a question needs real data and
+   nothing's cached yet (see principle #7 and `answer_question`/
+   `gather_trip_context`).
 2. Gemini swap (structured output + native tool calling) — de-risks
-   everything built after it.
+   everything built after it; several bugs caught in the round above trace
+   back to Mistral's weak instruction-following, which this step directly
+   targets.
 3. Itinerary export (.ics / PDF) — zero external dependencies, no quota risk.
-4. Google login (OAuth) + Google Calendar push — bundled, one OAuth setup
-   covers both.
-5. Google Maps (Places/Directions) — real free tier, but needs a Google
-   Cloud billing account on file even at $0 spend.
+4. Maps/routing integration (OSM-based: Nominatim + Overpass +
+   OpenRouteService + Open-Meteo + Wikipedia — see decision log) — real
+   coordinates, distances, travel time, place importance, and a per-day
+   energy/pacing signal. Moved up from its earlier position after Google
+   OAuth+Calendar: it no longer needs a Google Cloud project or billing
+   account, so it doesn't need to wait on OAuth setup. OpenRouteService
+   needs one free signup (API key, no card). Plan drafted, not yet built.
+5. Google login (OAuth) + Google Calendar push — bundled, one OAuth setup
+   covers both. No longer needs to be bundled with Maps, since Maps moved
+   off Google infrastructure (see above).
 6. Flights / hotels — last; scoped down per the decisions above, the most
    expensive and least "free" part of the product.
 7. Cross-trip preference memory (pgvector) — only after the above works;

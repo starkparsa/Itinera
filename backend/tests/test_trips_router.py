@@ -3,7 +3,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app.database import Base, engine
+from app import models
+from app.database import Base, SessionLocal, engine
 from app.main import app
 
 client = TestClient(app)
@@ -141,12 +142,19 @@ def test_agent_context_is_cached_on_conversation_and_reused_on_followup():
         conv_id = first.json()["conversation_id"]
 
         assert mock_generate.call_args.kwargs["cached_agent_context"] is None
+        # Freshly gathered on this turn -- should be surfaced in the response
+        # so the frontend shows the "Agent findings" banner once.
+        assert first.json()["agent_context"] == "Rain expected; pack a jacket."
 
         mock_generate.reset_mock()
         mock_generate.return_value = FAKE_ITINERARY
-        client.post("/trips/generate", json={"prompt": "make it vegetarian friendly", "conversation_id": conv_id})
+        second = client.post("/trips/generate", json={"prompt": "make it vegetarian friendly", "conversation_id": conv_id})
 
     assert mock_generate.call_args.kwargs["cached_agent_context"] == "Rain expected; pack a jacket."
+    # Reused from cache on this turn, not freshly gathered -- must NOT be
+    # surfaced again, otherwise the same findings banner reappears on every
+    # edit turn in the conversation even though nothing new was found.
+    assert second.json()["agent_context"] is None
 
 
 def test_agent_context_caches_empty_string_when_nothing_found():
@@ -242,6 +250,7 @@ def test_off_topic_reply_is_saved_to_conversation():
 def test_question_message_calls_answer_question_not_generate_itinerary():
     with (
         patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.llm_service.answer_question", return_value="It'll likely be warm and sunny.") as mock_answer,
         patch("app.llm_service.generate_itinerary") as mock_generate,
     ):
@@ -293,8 +302,90 @@ def test_question_receives_the_conversations_cached_agent_findings():
 def test_question_answer_failure_returns_502_not_500():
     with (
         patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.llm_service.answer_question", side_effect=RuntimeError("ollama unreachable")),
     ):
         response = client.post("/trips/generate", json={"prompt": "how much does that cost?"})
 
     assert response.status_code == 502
+
+
+def test_question_triggers_on_demand_fetch_when_nothing_cached_yet():
+    # Regression test for the reported bug: a weather question with nothing
+    # cached yet (no prior trip generation in this conversation at all) got
+    # no real data and no live fetch attempt -- the model just invented a
+    # plausible-sounding forecast (wrong units, invented conditions). The
+    # first question in a fresh conversation should try a real, scoped
+    # fetch before answering.
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch(
+            "app.routers.trips.agent_service.gather_trip_context",
+            return_value="Austin: highs of 32C, dry.",
+        ) as mock_fetch,
+        patch("app.llm_service.answer_question", return_value="It'll be hot and dry.") as mock_answer,
+    ):
+        response = client.post("/trips/generate", json={"prompt": "what's the weather in Austin?"})
+
+    assert response.status_code == 200
+    mock_fetch.assert_called_once_with("what's the weather in Austin?", destination=None)
+    assert mock_answer.call_args.kwargs["agent_context"] == "Austin: highs of 32C, dry."
+
+
+def test_question_on_demand_finding_is_cached_and_not_refetched():
+    # Once an on-demand fetch has been attempted for a conversation (even if
+    # it found nothing), it must not fire again on every later question --
+    # same cache-once contract as itinerary generation's agent_context.
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch(
+            "app.routers.trips.agent_service.gather_trip_context",
+            return_value="Austin: highs of 32C, dry.",
+        ),
+        patch("app.llm_service.answer_question", return_value="It'll be hot and dry."),
+    ):
+        first = client.post("/trips/generate", json={"prompt": "what's the weather in Austin?"})
+    conv_id = first.json()["conversation_id"]
+
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context") as mock_fetch_again,
+        patch("app.llm_service.answer_question", return_value="Still hot.") as mock_answer,
+    ):
+        client.post("/trips/generate", json={"prompt": "is it humid too?", "conversation_id": conv_id})
+
+    mock_fetch_again.assert_not_called()
+    assert mock_answer.call_args.kwargs["agent_context"] == "Austin: highs of 32C, dry."
+
+
+def test_question_on_demand_fetch_uses_existing_trip_destination_as_hint():
+    # A bare follow-up ("what does the temperature look like?") doesn't name
+    # a place on its own -- if a trip already exists for this conversation,
+    # its destination should be passed along so the fetch knows which city
+    # to check.
+    db = SessionLocal()
+    try:
+        user = models.User(id=1, email="placeholder-1@example.com")
+        db.add(user)
+        db.flush()
+        conversation = models.Conversation(user_id=1, title="Test")
+        db.add(conversation)
+        db.flush()
+        trip = models.Trip(user_id=1, conversation_id=conversation.id, destination="Austin", prompt="weekend in Austin")
+        db.add(trip)
+        db.commit()
+        conv_id = conversation.id
+    finally:
+        db.close()
+
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value="") as mock_fetch,
+        patch("app.llm_service.answer_question", return_value="Not sure."),
+    ):
+        client.post(
+            "/trips/generate",
+            json={"prompt": "what does the temperature look like?", "conversation_id": conv_id},
+        )
+
+    mock_fetch.assert_called_once_with("what does the temperature look like?", destination="Austin")
