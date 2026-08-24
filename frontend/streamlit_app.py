@@ -69,12 +69,6 @@ with st.sidebar:
         start_new_chat()
         st.rerun()
 
-    trip_length = st.number_input(
-        "Trip length (days)", min_value=0, max_value=60, value=0, step=1,
-        help="Applies to your next message. Leave at 0 to let the model infer "
-             "the length from what you type (e.g. \"a week in Lisbon\").",
-    )
-
     st.caption("Chats")
     for conv in st.session_state.conversations:
         is_active = conv["id"] == st.session_state.active_conversation_id
@@ -129,8 +123,6 @@ if prompt:
                 payload = {"prompt": prompt}
                 if st.session_state.active_conversation_id:
                     payload["conversation_id"] = st.session_state.active_conversation_id
-                if trip_length:
-                    payload["days"] = int(trip_length)
 
                 res = requests.post(f"{BACKEND_URL}/trips/generate", json=payload, timeout=900)
                 res.raise_for_status()

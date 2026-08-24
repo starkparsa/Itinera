@@ -150,10 +150,31 @@ def classify_intent(prompt: str, conversation_context: str) -> str:
         return "new_trip"
 
 
-def answer_question(prompt: str, chat_messages: list[dict]) -> str:
+def answer_question(prompt: str, chat_messages: list[dict], agent_context: str = "") -> str:
     """Answers a conversational question using real chat-formatted history
-    (not the squashed summary string), without regenerating an itinerary."""
-    messages = [{"role": "system", "content": QUESTION_SYSTEM_PROMPT}, *chat_messages, {"role": "user", "content": prompt}]
+    (not the squashed summary string), without regenerating an itinerary.
+
+    agent_context: the weather/currency findings already gathered for this
+    conversation (Conversation.agent_context), if any. Without this, the
+    model has no real data to draw on for a question like "what's the
+    temperature there?" -- the actual forecast was fetched once during
+    itinerary generation and shown in the UI, but never made it into the
+    stored message history this function otherwise relies on, so the model
+    would just invent a plausible-sounding number instead of using the real
+    one. Passing it here, plus telling the model not to guess when it's
+    missing, fixes both the wrong-number case and the making-one-up case.
+    """
+    system_prompt = QUESTION_SYSTEM_PROMPT
+    if agent_context:
+        system_prompt += (
+            f"\n\nReal data gathered earlier for this trip: {agent_context}\n"
+            "Use these figures when they answer the question. Do not invent "
+            "specific numbers (temperatures, prices, exchange rates) that "
+            "aren't given here or in the conversation -- if you don't have "
+            "the real figure, say so instead of guessing."
+        )
+
+    messages = [{"role": "system", "content": system_prompt}, *chat_messages, {"role": "user", "content": prompt}]
 
     try:
         response = requests.post(

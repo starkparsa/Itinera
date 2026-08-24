@@ -93,7 +93,9 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
     if intent == "question":
         chat_messages = _build_chat_messages(conversation)
         try:
-            reply_text = llm_service.answer_question(request.prompt, chat_messages)
+            reply_text = llm_service.answer_question(
+                request.prompt, chat_messages, agent_context=conversation.agent_context or "",
+            )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"LLM failed to answer: {exc}")
 

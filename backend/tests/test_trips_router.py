@@ -271,6 +271,25 @@ def test_question_receives_real_chat_history_not_squashed_string():
     assert "weekend in Austin" in chat_messages_arg[0]["content"]
 
 
+def test_question_receives_the_conversations_cached_agent_findings():
+    # Regression test: follow-up questions like "what's the temperature
+    # there?" were answered with invented numbers because the real forecast,
+    # gathered once and cached on Conversation.agent_context, was never
+    # passed to answer_question -- see llm_service.answer_question.
+    result_with_context = {**FAKE_ITINERARY, "agent_context": "Austin: highs of 30C, sunny."}
+    with patch("app.llm_service.generate_itinerary", return_value=result_with_context):
+        first = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    conv_id = first.json()["conversation_id"]
+
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.answer_question", return_value="It'll be hot.") as mock_answer,
+    ):
+        client.post("/trips/generate", json={"prompt": "what's the temperature there?", "conversation_id": conv_id})
+
+    assert mock_answer.call_args.kwargs["agent_context"] == "Austin: highs of 30C, sunny."
+
+
 def test_question_answer_failure_returns_502_not_500():
     with (
         patch("app.llm_service.classify_intent", return_value="question"),

@@ -189,3 +189,38 @@ def test_answer_question_raises_on_failure():
             assert False, "expected RuntimeError"
         except RuntimeError as exc:
             assert "Failed to answer" in str(exc)
+
+
+def test_answer_question_grounds_the_model_in_real_agent_findings():
+    # Regression test: temperature/weather questions were being answered with
+    # invented numbers because the real forecast (agent_context) was fetched
+    # once during generation and shown in the UI, but never made it into the
+    # prompt for follow-up questions -- the model had nothing real to draw on
+    # and made something up. The real findings must reach the system prompt.
+    mock_response = Mock()
+    mock_response.json.return_value = {"message": {"content": "Highs around 24C, per the forecast."}}
+    mock_response.raise_for_status = Mock()
+
+    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+        llm_service.answer_question(
+            "what's the temperature there?", [], agent_context="Kyoto: highs of 22-26C, low rain chance.",
+        )
+
+    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    assert "Kyoto: highs of 22-26C" in sent_system_prompt
+    assert "invent" in sent_system_prompt.lower()  # instructed not to fabricate numbers
+
+
+def test_answer_question_without_agent_context_still_works():
+    # No findings cached yet (e.g. first message in a conversation is a
+    # question) -- should behave exactly as before, no crash, no empty note.
+    mock_response = Mock()
+    mock_response.json.return_value = {"message": {"content": "I'd need a destination to check that."}}
+    mock_response.raise_for_status = Mock()
+
+    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+        result = llm_service.answer_question("what's the temperature there?", [])
+
+    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    assert sent_system_prompt == llm_service.QUESTION_SYSTEM_PROMPT
+    assert result == "I'd need a destination to check that."

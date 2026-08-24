@@ -184,9 +184,12 @@ instead (both stronger at tool calling) is worth testing.
 Trips longer than a few days are generated in chunks (5 days per LLM call by
 default) rather than one giant response — local models like mistral become
 unreliable at producing long, unbroken JSON in a single call, and this keeps
-each individual request small regardless of total trip length. A trip length
-can be provided explicitly (the Streamlit UI has a "Trip length" field), or
-left for the model to infer from the prompt itself. Requests are capped at
+each individual request small regardless of total trip length. Trip length
+is inferred by the model from the prompt itself (e.g. "a week in Lisbon" ->
+7 days) -- say how long the trip is in your message rather than a separate
+field. The API's `/trips/generate` endpoint also accepts an explicit `days`
+override for programmatic callers, but the Streamlit UI doesn't expose it.
+Requests are capped at
 `MAX_TOTAL_DAYS` (60, configurable in `llm_service.py`) to avoid unbounded
 generation time; longer requests are silently clamped and a note is returned
 explaining the cap.
