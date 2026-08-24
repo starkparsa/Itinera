@@ -1,3 +1,13 @@
+from dotenv import load_dotenv
+
+# Must run before any sibling module is imported -- database.py,
+# llm_service.py, agent_service.py, and tools.py all read config via
+# os.getenv() at import time. Walks up from this file's directory to find
+# the repo-root .env, so it works regardless of the process's cwd. No-ops
+# harmlessly in Docker/CI, where real env vars are already set and no .env
+# file is present in the image.
+load_dotenv()
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 

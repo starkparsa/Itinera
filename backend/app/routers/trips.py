@@ -108,10 +108,21 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
     # days -- true diff-based editing is a bigger feature for another time.
     try:
         result = llm_service.generate_itinerary(
-            request.prompt, requested_days=request.days, conversation_context=conversation_context,
+            request.prompt,
+            requested_days=request.days,
+            conversation_context=conversation_context,
+            # Reuse weather/currency findings gathered earlier in this chat
+            # instead of re-running the agent step on every edit turn.
+            # conversation.agent_context is None only for a chat that hasn't
+            # generated a trip yet; once set (even to "" for "found
+            # nothing"), it's cached for the conversation's lifetime.
+            cached_agent_context=conversation.agent_context,
         )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM generation failed: {exc}")
+
+    if conversation.agent_context is None:
+        conversation.agent_context = result.get("agent_context", "")
 
     trip = models.Trip(
         user_id=request.user_id,

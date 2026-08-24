@@ -26,7 +26,10 @@ class TripResponse(BaseModel):
     itinerary: list[ItineraryItemOut] = []
     note: str | None = None
     agent_context: str | None = None
-    conversation_id: int
+    # Nullable: a trip's conversation can be deleted out from under it
+    # (Trip.conversation_id is ON DELETE SET NULL, see models.py) and old
+    # trips predating conversation linkage never had one either.
+    conversation_id: int | None = None
     reply: str | None = None  # plain-text reply for question/off-topic turns (no itinerary generated)
 
 

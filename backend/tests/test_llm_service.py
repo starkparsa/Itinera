@@ -126,6 +126,22 @@ def test_agent_context_is_surfaced_in_result_and_prompt():
     assert "near-freezing" in captured_prompts[1]
 
 
+def test_cached_agent_context_skips_the_agent_step_entirely():
+    meta = json.dumps({"destination": "Reykjavik", "total_days": 3})
+    chunk = json.dumps({"days": [{"day_number": i, "items": [{"activity": "sightsee"}]} for i in range(1, 4)]})
+
+    with (
+        patch("app.llm_service.agent_service.gather_trip_context") as mock_gather,
+        patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence([meta, chunk])),
+    ):
+        result = llm_service.generate_itinerary(
+            "3 days in Reykjavik", cached_agent_context="Already known: expect snow.",
+        )
+
+    mock_gather.assert_not_called()  # the whole point of caching -- no network round-trip
+    assert result["agent_context"] == "Already known: expect snow."
+
+
 # ---------- intent classification ----------
 
 def test_classify_intent_new_trip():

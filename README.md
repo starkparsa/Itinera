@@ -45,8 +45,11 @@ host-gateway` out of the box) or run Ollama in its own container instead.
 cd backend
 python -m venv .venv && source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+cp ../.env.example ../.env   # if you haven't already; values here are read automatically
 # Point DATABASE_URL at a MySQL instance you're running some other way,
-# or start just the MySQL service: docker compose up mysql
+# or start just the MySQL service: docker compose up mysql -- note this
+# maps to host port 3307, not 3306, so update DATABASE_URL in .env
+# accordingly if you go this route
 uvicorn app.main:app --reload
 ```
 
@@ -165,6 +168,11 @@ prompts as context and shown in the UI under "Agent findings." This step is
 best-effort: if the model doesn't use tools well, or a tool API is
 unreachable, generation proceeds normally without it — it never blocks
 itinerary generation.
+
+Findings are cached on the conversation (`Conversation.agent_context`) after
+the first turn and reused on every later turn (edits, follow-ups) in the
+same chat, rather than re-running the tool-calling loop -- and its Ollama
+round-trip -- on every single message.
 
 **Note:** tool-calling reliability varies a lot by model. `mistral` (this
 project's default) is on Ollama's supported list but is noted as less

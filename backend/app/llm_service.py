@@ -225,7 +225,12 @@ def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: i
     return parsed.get("days", [])
 
 
-def generate_itinerary(prompt: str, requested_days: int | None = None, conversation_context: str = "") -> dict:
+def generate_itinerary(
+    prompt: str,
+    requested_days: int | None = None,
+    conversation_context: str = "",
+    cached_agent_context: str | None = None,
+) -> dict:
     """Calls the local Ollama server and returns a complete itinerary,
     generating it in day-range chunks so trip length doesn't degrade output
     quality or risk truncation.
@@ -233,20 +238,34 @@ def generate_itinerary(prompt: str, requested_days: int | None = None, conversat
     conversation_context is a short plain-text summary of earlier turns in
     the same chat, letting the model reference what was discussed before.
 
+    cached_agent_context: pass a previously-returned "agent_context" string
+    (even "" for "the agent step ran and found nothing useful") to reuse it
+    instead of re-running the weather/currency tool-calling loop. Findings
+    like weather or a currency conversion are properties of the trip, not of
+    one turn, so callers should gather this once per conversation and pass
+    it back on every later turn (edits, etc.) -- this also removes a full
+    model round-trip from every turn after the first. Leave as None (the
+    default) to run the agent step fresh, e.g. for a brand-new conversation
+    that hasn't gathered context yet.
+
     The agentic tool-calling step (agent_service.py) and the destination/
-    length inference call are independent of each other, so they run
-    concurrently rather than back-to-back -- a real latency win since it
-    removes one full model round-trip's worth of wall-clock time from every
-    generation.
+    length inference call are independent of each other, so when the agent
+    step does need to run, it runs concurrently with inference rather than
+    back-to-back -- a real latency win since it removes one full model
+    round-trip's worth of wall-clock time from generation.
 
     Swapping to a cloud model later only means changing this function's
     internals -- routers/trips.py never needs to know which provider is used.
     """
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-        agent_future = executor.submit(agent_service.gather_trip_context, prompt)
-        meta_future = executor.submit(_infer_trip_meta, prompt, requested_days, conversation_context)
-        trip_context = agent_future.result()
-        destination, total_days = meta_future.result()
+    if cached_agent_context is not None:
+        trip_context = cached_agent_context
+        destination, total_days = _infer_trip_meta(prompt, requested_days, conversation_context)
+    else:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            agent_future = executor.submit(agent_service.gather_trip_context, prompt)
+            meta_future = executor.submit(_infer_trip_meta, prompt, requested_days, conversation_context)
+            trip_context = agent_future.result()
+            destination, total_days = meta_future.result()
 
     all_days: list[dict] = []
     covered_activities: list[str] = []

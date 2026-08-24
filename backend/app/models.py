@@ -30,7 +30,7 @@ class Conversation(Base):
     owner = relationship("User", back_populates="conversations")
     messages = relationship(
         "Message", back_populates="conversation",
-        cascade="all, delete-orphan", order_by="Message.created_at",
+        cascade="all, delete-orphan", order_by="Message.id",
     )
 
 
@@ -53,7 +53,13 @@ class Trip(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=True)
+    # ondelete="SET NULL": deleting a conversation shouldn't be blocked by (or
+    # cascade-delete) trips it produced -- MySQL enforces FK constraints by
+    # default (unlike SQLite, which is why this only surfaced against a real
+    # database), so without this, deleting any conversation that has
+    # generated a trip raises an IntegrityError. The trip and its itinerary
+    # survive; it just becomes unlinked from the (now-gone) chat thread.
+    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
     destination = Column(String(255), nullable=False)
     prompt = Column(Text)  # the original natural-language request
     created_at = Column(DateTime, default=datetime.utcnow)
