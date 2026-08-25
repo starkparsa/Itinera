@@ -10,19 +10,19 @@ budget converts to X local currency") that then gets folded into the
 itinerary prompts as plain text -- the itinerary writer never has to make
 tool-calling decisions itself, only the agent step does.
 
-PAUSED for now (AGENT_TOOL_CALLING_ENABLED = False): the weather tool this
-loop used to also call (OpenWeather, in tools.py) wasn't working reliably in
-practice, so it was removed outright; currency conversion was paused
-alongside it too rather than leaving a half-working agent step running.
-gather_trip_context() short-circuits to "" below without any I/O while
-paused -- callers don't need to change, they just get "no findings" the
-same way they already handle an agent step that found nothing useful.
-Flip the flag back to True (and re-add a weather tool to tools.py, if
-wanted) to re-enable.
+RE-ENABLED (AGENT_TOOL_CALLING_ENABLED = True) as of this session: the
+weather tool this loop used to also call (OpenWeather, in tools.py) wasn't
+working reliably in practice, so it was removed outright; currency
+conversion was paused alongside it too rather than leaving a half-working
+agent step running, and is now turned back on by itself -- being verified
+live before further build-order work proceeds. gather_trip_context() now
+actually runs the loop again instead of short-circuiting to "". Flip
+AGENT_TOOL_CALLING_ENABLED back to False as a kill switch if currency proves
+unreliable too (same as weather did).
 
 Migrated to Gemini's function-calling shape (google.genai.types) alongside
-llm_service.py, even while paused, so the mechanics don't need migrating
-again whenever this gets re-enabled.
+llm_service.py before this was re-enabled, so the mechanics didn't need
+migrating again once it was.
 """
 from google.genai import types
 
@@ -30,7 +30,7 @@ from . import llm_service, tools
 
 MAX_TOOL_ROUNDS = 4
 
-AGENT_TOOL_CALLING_ENABLED = False
+AGENT_TOOL_CALLING_ENABLED = True
 
 AGENT_SYSTEM_PROMPT = """You are a travel planning assistant with access to \
 a tool for currency conversion. Given a trip request, call the tool only if \

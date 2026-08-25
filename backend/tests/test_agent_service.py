@@ -23,13 +23,15 @@ def _mock_tool_response(text: str | None = None, function_calls: list | None = N
     return resp
 
 
-def test_agent_step_is_paused_by_default_and_makes_no_network_call():
-    # The agent tool-calling step (weather + currency) is currently paused --
-    # weather was removed outright after proving unreliable, and currency
-    # was paused alongside it rather than leaving a half-working step
-    # running. gather_trip_context must short-circuit to "" without touching
-    # the network at all while paused.
-    with patch("app.agent_service._call_gemini_with_tools") as mock_call:
+def test_agent_step_short_circuits_to_empty_when_disabled():
+    # When AGENT_TOOL_CALLING_ENABLED is False (the kill switch for this
+    # step -- e.g. if currency proves unreliable too, same as weather did),
+    # gather_trip_context must short-circuit to "" without touching the
+    # network at all.
+    with (
+        patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", False),
+        patch("app.agent_service._call_gemini_with_tools") as mock_call,
+    ):
         result = agent_service.gather_trip_context("weekend in Chicago")
 
     assert result == ""

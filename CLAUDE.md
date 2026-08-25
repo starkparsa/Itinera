@@ -34,14 +34,13 @@ the mismatch rather than silently editing one to match the other.
   (`new_trip` / `edit_trip` / `question` / `off_topic`), a small agent
   tool-calling loop (`agent_service.py` + `tools.py`) and conversation-scoped
   agent-findings caching (`Conversation.agent_context`) —
-  **currently paused** (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`):
-  weather (OpenWeather) wasn't working reliably in practice and was removed
-  outright; currency conversion (Frankfurter) is still in `tools.py` but
-  paused alongside it. `gather_trip_context()` short-circuits to `""`, so
-  the rest of the pipeline (including the Q&A on-demand fetch and
-  unconditional honesty instruction added for the weather-fabrication fix)
-  behaves as if the agent step simply never finds anything — see decision
-  log.
+  **re-enabled** (`agent_service.AGENT_TOOL_CALLING_ENABLED = True`) as of
+  2026-08-25: weather (OpenWeather) wasn't working reliably in practice and
+  was removed outright and stays removed; currency conversion (Frankfurter)
+  was paused alongside it but is now back on and verified live (see decision
+  log) — `gather_trip_context()` actually runs the loop again instead of
+  short-circuiting to `""`. The flag remains a kill switch if currency turns
+  out to have the same reliability problem weather did.
 - **Frontend**: Streamlit chat UI (`frontend/streamlit_app.py`). Deliberately
   minimal — no trip-length field or similar form controls; trip parameters
   come from the prompt text (see decision log, this was a deliberate
@@ -70,7 +69,7 @@ the mismatch rather than silently editing one to match the other.
 | Database: MySQL → **Postgres on Neon** | pgvector lives in the same DB instance for the later cross-trip preference-memory feature — no separate vector service to run or pay for. Neon has no idle-pause gotcha (unlike Supabase's free tier). Trade-off accepted knowingly: Neon doesn't bundle free Auth the way Supabase would have, so auth is a fully separate build. |
 | Auth: built **last** | Schema already supports it (`user_id` everywhere). When it happens: **Google OAuth** specifically — Maps and Calendar both need a Google Cloud project + OAuth consent anyway, so one login flow should cover identity + Maps scope + Calendar scope together, not three separate integrations. |
 | Trip length: inferred from the prompt, no UI field | Explicitly rejected a "Trip length" slider/number-input in the Streamlit sidebar — say it in the message instead (e.g. "a week in Lisbon"). Don't re-add a form control for this without asking; it was tried and deliberately removed. |
-| Weather (OpenWeather): **removed**; agent tool-calling step **paused** (currency too) | Wasn't working reliably in practice for real answers even after the fabrication/on-demand-fetch fix (root cause not fully diagnosed this round — the API key was present and valid-looking, so this wasn't simply a missing-key issue). Rather than leave a half-working agent step running with only currency left in it, the whole step is paused (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`); `tools.py`'s `convert_currency` and its schema are kept in place, unused, for a cheap re-enable. `gather_trip_context()` returning `""` while paused is indistinguishable from "agent step ran, found nothing" to every downstream consumer, so no other code had to change. Re-diagnose weather from scratch (or reconsider the source — e.g. Open-Meteo, no key required, is already the pick for the drafted Maps/routing plan) before re-adding it. |
+| Weather (OpenWeather): **removed**; agent tool-calling step **re-enabled**, currency only | Weather wasn't working reliably in practice for real answers even after the fabrication/on-demand-fetch fix (root cause not fully diagnosed — the API key was present and valid-looking, so this wasn't simply a missing-key issue) and stays removed; re-diagnose from scratch (or reconsider the source — e.g. Open-Meteo, no key required, is already the pick for the drafted Maps/routing plan) before ever re-adding it. Currency conversion was paused alongside weather at the time rather than leaving a half-working step running, but has now been flipped back on (`agent_service.AGENT_TOOL_CALLING_ENABLED = True`, 2026-08-25) and verified live: a real Frankfurter call (500 USD → 60,624 ISK) was correctly picked up by the model, folded into a grounded summary with matching numbers, and — separately — a no-budget prompt correctly triggered no tool call at all rather than inventing one. `AGENT_TOOL_CALLING_ENABLED` stays as a kill switch if currency ever shows the same unreliability weather did. |
 | Flights: no live pricing API for MVP | No workable free flight-pricing API exists as of Aug 2026 — Amadeus self-service, the obvious free option, was fully decommissioned July 17 2026. Treat flight cost as an LLM-reasoned rough estimate, clearly labeled as such, until there's budget for a paid API (~$10-20/mo — Duffel, AeroDataBox) or a better free option surfaces. Re-check the landscape before building against a live flights integration. |
 | Hotels: search/compare only, not booking | Real reservations need PCI-compliant payment flows and hotel partner agreements — out of scope for a free-tier indie MVP. Deep-link out to Booking.com/Google Hotels rather than booking in-app. |
 | Maps: OSM-based stack (Nominatim + Overpass + OpenRouteService + Open-Meteo + Wikipedia), not Google Maps Platform | Avoids requiring a Google Cloud billing account — Google Maps Platform needs one even at $0 spend (the same constraint that originally justified bundling Maps with OAuth setup below). The OSM stack is genuinely free with no card on file, at the cost of weaker geocoding accuracy for vague free-text place names and public shared-instance reliability (Nominatim: hard 1 req/sec cap across the whole app; Overpass: no SLA). Acceptable tradeoffs for a $0-budget hobby MVP. Full design: see the planned Maps/routing integration (deep per-item coordinates + legs, deterministic energy/pacing signal, grounded-not-invented importance notes) — plan drafted, not yet built. Re-verify free-tier terms before relying on specific figures, same as every other row in this table. |
@@ -139,9 +138,9 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    (see decision log) rather than sunk further into this round.
 2. Gemini swap (structured output + native tool calling) — **done** (see
    decision log for the concrete `gemini-3.6-flash`/`thinking_level`/
-   `role="user"` corrections found only by actually building it). Weather
-   and the agent tool-calling step are still paused, independent of this —
-   re-enabling them is a separate decision (next up, per this session).
+   `role="user"` corrections found only by actually building it). The agent
+   tool-calling step is **re-enabled** (currency only — weather stays
+   removed, see decision log), verified live 2026-08-25.
 3. Itinerary export (.ics / PDF) — zero external dependencies, no quota risk.
 4. Maps/routing integration (OSM-based: Nominatim + Overpass +
    OpenRouteService + Open-Meteo + Wikipedia — see decision log) — real
@@ -175,6 +174,10 @@ tradeoffs from the decision log above, not arbitrary sequencing.
 # Backend tests (in-memory SQLite, no live MySQL/GEMINI_API_KEY needed)
 cd backend && pytest -v
 
+# Single test file / single test
+cd backend && pytest tests/test_llm_service.py -v
+cd backend && pytest tests/test_llm_service.py::test_classify_intent_new_trip -v
+
 # Lint
 cd backend && ruff check .
 
@@ -182,6 +185,11 @@ cd backend && ruff check .
 cp .env.example .env
 docker compose up --build
 ```
+
+Env vars (`.env`, see `.env.example`): `DATABASE_URL` (MySQL), `GEMINI_API_KEY`
+(free tier, no card — aistudio.google.com/apikey), `GEMINI_MODEL`
+(`gemini-3.6-flash` default), `BACKEND_URL` (frontend → backend). None of
+these are needed to run the test suite itself.
 
 ## Repo map
 
@@ -193,6 +201,7 @@ backend/app/
   llm_service.py          Gemini calls: intent classification, itinerary generation, Q&A
   agent_service.py        Tool-calling loop run ahead of generation -- paused, see decision log
   tools.py                 Tool implementations + schemas (currency via Frankfurter; weather removed)
+  schemas.py                Pydantic request/response models (TripRequest, TripResponse, etc.)
   routers/trips.py         /trips/generate — the main request path, ties everything together
   routers/conversations.py  Chat history endpoints
 backend/tests/            pytest, in-memory SQLite, Gemini calls mocked
