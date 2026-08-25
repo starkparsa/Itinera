@@ -1,42 +1,45 @@
-import json
 from unittest.mock import Mock, patch
 
 import pytest
-import requests
+from google.genai import errors as genai_errors
 
 from app import llm_service
+from app.llm_service import (
+    ChunkItineraryDay,
+    ChunkItineraryItem,
+    IntentResult,
+    ItineraryChunk,
+    TripMeta,
+)
 
 
 @pytest.fixture(autouse=True)
 def mock_agent_context():
     # Every test in this file exercises the itinerary pipeline in isolation.
     # Without this, generate_itinerary's call to agent_service.gather_trip_context
-    # would make a real network call to Ollama's /api/chat during tests.
+    # would make a real network call to Gemini during tests.
     with patch("app.llm_service.agent_service.gather_trip_context", return_value=""):
         yield
 
 
-def _mock_ollama_sequence(responses):
-    """Returns a function that yields each response in order on successive
-    calls to _call_ollama -- lets tests simulate the meta call followed by
-    however many chunk calls a trip needs."""
-    responses_iter = iter(responses)
-
-    def _fake_call(prompt, num_predict, num_ctx=8192):
-        return next(responses_iter)
-
-    return _fake_call
+def _chunk(day_activity_pairs: list[tuple[int, str]]) -> ItineraryChunk:
+    """Builds an ItineraryChunk from (day_number, activity) pairs -- a
+    shorthand for the common case of one activity per day in these tests."""
+    return ItineraryChunk(days=[
+        ChunkItineraryDay(day_number=day, items=[ChunkItineraryItem(activity=activity)])
+        for day, activity in day_activity_pairs
+    ])
 
 
 def test_short_trip_makes_one_meta_call_and_one_chunk_call():
-    meta = json.dumps({"destination": "Kyoto", "total_days": 3})
-    chunk = json.dumps({"days": [
-        {"day_number": 1, "items": [{"time_of_day": "morning", "activity": "Fushimi Inari"}]},
-        {"day_number": 2, "items": [{"time_of_day": "morning", "activity": "Arashiyama"}]},
-        {"day_number": 3, "items": [{"time_of_day": "morning", "activity": "Nishiki Market"}]},
-    ]})
+    meta = TripMeta(destination="Kyoto", total_days=3)
+    chunk = ItineraryChunk(days=[
+        ChunkItineraryDay(day_number=1, items=[ChunkItineraryItem(time_of_day="morning", activity="Fushimi Inari")]),
+        ChunkItineraryDay(day_number=2, items=[ChunkItineraryItem(time_of_day="morning", activity="Arashiyama")]),
+        ChunkItineraryDay(day_number=3, items=[ChunkItineraryItem(time_of_day="morning", activity="Nishiki Market")]),
+    ])
 
-    with patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence([meta, chunk])):
+    with patch("app.llm_service._call_gemini", side_effect=[meta, chunk]):
         result = llm_service.generate_itinerary("3 days in Kyoto")
 
     assert result["destination"] == "Kyoto"
@@ -46,12 +49,12 @@ def test_short_trip_makes_one_meta_call_and_one_chunk_call():
 
 def test_long_trip_is_split_into_multiple_chunk_calls():
     # 12 days at CHUNK_SIZE_DAYS=5 should produce 3 chunk calls (5, 5, 2).
-    meta = json.dumps({"destination": "Italy", "total_days": 12})
-    chunk1 = json.dumps({"days": [{"day_number": i, "items": [{"activity": f"Day {i} activity"}]} for i in range(1, 6)]})
-    chunk2 = json.dumps({"days": [{"day_number": i, "items": [{"activity": f"Day {i} activity"}]} for i in range(6, 11)]})
-    chunk3 = json.dumps({"days": [{"day_number": i, "items": [{"activity": f"Day {i} activity"}]} for i in range(11, 13)]})
+    meta = TripMeta(destination="Italy", total_days=12)
+    chunk1 = _chunk([(i, f"Day {i} activity") for i in range(1, 6)])
+    chunk2 = _chunk([(i, f"Day {i} activity") for i in range(6, 11)])
+    chunk3 = _chunk([(i, f"Day {i} activity") for i in range(11, 13)])
 
-    with patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence([meta, chunk1, chunk2, chunk3])) as mock_call:
+    with patch("app.llm_service._call_gemini", side_effect=[meta, chunk1, chunk2, chunk3]) as mock_call:
         result = llm_service.generate_itinerary("12 days touring Italy")
 
     assert len(result["days"]) == 12
@@ -60,22 +63,22 @@ def test_long_trip_is_split_into_multiple_chunk_calls():
 
 
 def test_explicit_requested_days_overrides_model_inference():
-    meta = json.dumps({"destination": "Peru", "total_days": 7})  # model guesses wrong
-    chunk1 = json.dumps({"days": [{"day_number": i, "items": [{"activity": "hike"}]} for i in range(1, 6)]})
-    chunk2 = json.dumps({"days": [{"day_number": i, "items": [{"activity": "hike"}]} for i in range(6, 11)]})
+    meta = TripMeta(destination="Peru", total_days=7)  # model guesses wrong
+    chunk1 = _chunk([(i, "hike") for i in range(1, 6)])
+    chunk2 = _chunk([(i, "hike") for i in range(6, 11)])
 
-    with patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence([meta, chunk1, chunk2])):
+    with patch("app.llm_service._call_gemini", side_effect=[meta, chunk1, chunk2]):
         result = llm_service.generate_itinerary("trip to Peru", requested_days=10)
 
     assert len(result["days"]) == 10
 
 
 def test_requested_days_beyond_cap_is_clamped_with_note():
-    meta = json.dumps({"destination": "World Tour", "total_days": 7})
+    meta = TripMeta(destination="World Tour", total_days=7)
     # MAX_TOTAL_DAYS=60 -> 12 chunk calls of 5 days each
-    chunks = [json.dumps({"days": [{"day_number": i, "items": [{"activity": "explore"}]} for i in range(s, min(s + 5, 61))]}) for s in range(1, 61, 5)]
+    chunks = [_chunk([(i, "explore") for i in range(s, min(s + 5, 61))]) for s in range(1, 61, 5)]
 
-    with patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence([meta, *chunks])):
+    with patch("app.llm_service._call_gemini", side_effect=[meta, *chunks]):
         result = llm_service.generate_itinerary("a 100 day round the world trip", requested_days=100)
 
     assert len(result["days"]) == 60
@@ -83,42 +86,52 @@ def test_requested_days_beyond_cap_is_clamped_with_note():
     assert "60" in result["note"]
 
 
-def test_invalid_meta_json_falls_back_to_defaults():
-    chunk1 = json.dumps({"days": [{"day_number": i, "items": [{"activity": "explore"}]} for i in range(1, 6)]})
-    chunk2 = json.dumps({"days": [{"day_number": i, "items": [{"activity": "explore"}]} for i in range(6, 8)]})
+def test_invalid_meta_falls_back_to_defaults():
+    # Simulates _call_gemini failing on the meta call (e.g. the model's
+    # output didn't validate against TripMeta) -- _infer_trip_meta must
+    # degrade to defaults rather than blow up the whole request.
+    chunk1 = _chunk([(i, "explore") for i in range(1, 6)])
+    chunk2 = _chunk([(i, "explore") for i in range(6, 8)])
 
-    with patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence(["not json", chunk1, chunk2])):
+    with patch("app.llm_service._call_gemini", side_effect=[RuntimeError("schema mismatch"), chunk1, chunk2]):
         result = llm_service.generate_itinerary("somewhere vague")
 
     assert result["destination"] == "Unknown"
     assert len(result["days"]) == 7  # DEFAULT_TOTAL_DAYS
 
 
-def test_truncated_chunk_response_raises_clear_error():
-    meta = json.dumps({"destination": "Austin", "total_days": 3})
-    truncated_chunk = '{"days": [{"day_number": 1, "items": [{"activity": "Zilker'
+def test_call_gemini_schema_mismatch_hints_truncation_when_max_tokens():
+    # Regression test for the old _parse_json truncation hint, now living
+    # inside _call_gemini itself: when response.parsed is None (the model's
+    # output didn't validate against the schema) and the response was cut
+    # off by the token budget, the error should say so, not just "invalid".
+    fake_candidate = Mock(finish_reason="FinishReason.MAX_TOKENS")
+    fake_response = Mock(parsed=None, text='{"days": [{"day_number": 1, "items": [{"activity": "Zilker', candidates=[fake_candidate])
+    fake_client = Mock()
+    fake_client.models.generate_content.return_value = fake_response
 
-    with patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence([meta, truncated_chunk])):
-        try:
-            llm_service.generate_itinerary("weekend in Austin")
-            assert False, "expected ValueError"
-        except ValueError as exc:
-            assert "cut off" in str(exc)
+    with (
+        patch("app.llm_service._get_client", return_value=fake_client),
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        llm_service._call_gemini("prompt", response_schema=ItineraryChunk)
+
+    assert "cut off" in str(exc_info.value)
 
 
 def test_agent_context_is_surfaced_in_result_and_prompt():
-    meta = json.dumps({"destination": "Reykjavik", "total_days": 3})
-    chunk = json.dumps({"days": [{"day_number": i, "items": [{"activity": "sightsee"}]} for i in range(1, 4)]})
+    meta = TripMeta(destination="Reykjavik", total_days=3)
+    chunk = _chunk([(i, "sightsee") for i in range(1, 4)])
 
     captured_prompts = []
 
-    def _fake_call(prompt, num_predict, num_ctx=8192):
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
         captured_prompts.append(prompt)
         return [meta, chunk][len(captured_prompts) - 1]
 
     with (
         patch("app.llm_service.agent_service.gather_trip_context", return_value="Expect near-freezing temps; pack layers."),
-        patch("app.llm_service._call_ollama", side_effect=_fake_call),
+        patch("app.llm_service._call_gemini", side_effect=_fake_call),
     ):
         result = llm_service.generate_itinerary("3 days in Reykjavik")
 
@@ -127,58 +140,69 @@ def test_agent_context_is_surfaced_in_result_and_prompt():
     assert "near-freezing" in captured_prompts[1]
 
 
-def test_call_ollama_connection_error_has_actionable_message():
-    # Regression test: a raw "Connection refused" (or similar) exception
-    # used to be surfaced to the user verbatim in the 502 response, with no
-    # hint of what to actually do about it. This is the most common cause
-    # in practice -- Ollama simply isn't running.
+def test_describe_gemini_error_missing_api_key():
+    exc = ValueError("No API key was provided. Please pass a valid API key.")
+    assert "GEMINI_API_KEY" in llm_service._describe_gemini_error(exc)
+
+
+def test_describe_gemini_error_invalid_model():
+    exc = genai_errors.ClientError(404, {"error": {"message": "model not found", "status": "NOT_FOUND"}})
+    message = llm_service._describe_gemini_error(exc)
+    assert llm_service.GEMINI_MODEL in message
+    assert "ai.google.dev" in message
+
+
+def test_describe_gemini_error_rate_limit():
+    exc = genai_errors.ClientError(429, {"error": {"message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}})
+    message = llm_service._describe_gemini_error(exc)
+    assert "rate limit" in message.lower()
+
+
+def test_call_gemini_missing_api_key_has_actionable_message():
+    # Regression test: a raw low-level exception used to be surfaced to the
+    # user verbatim in the 502 response, with no hint of what to actually do
+    # about it. Missing/blank GEMINI_API_KEY is the most common setup error.
     with (
-        patch("app.llm_service.requests.post", side_effect=requests.exceptions.ConnectionError("Connection refused")),
+        patch("app.llm_service._get_client", side_effect=ValueError("No API key was provided.")),
         pytest.raises(RuntimeError) as exc_info,
     ):
         llm_service.generate_itinerary("3 days in Reykjavik")
 
-    assert "ollama serve" in str(exc_info.value)
+    assert "GEMINI_API_KEY" in str(exc_info.value)
 
 
-def test_call_ollama_404_hints_model_not_pulled():
-    # A 404 from Ollama's /api/generate almost always means the configured
-    # model was never pulled -- the message should say so directly instead
-    # of just restating "404 Client Error".
-    mock_response = Mock()
-    mock_response.status_code = 404
-    mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError(
-        "404 Client Error", response=mock_response,
-    )
-
+def test_call_gemini_404_hints_invalid_model():
     with (
-        patch("app.llm_service.requests.post", return_value=mock_response),
+        patch(
+            "app.llm_service._get_client",
+            side_effect=genai_errors.ClientError(404, {"error": {"message": "not found", "status": "NOT_FOUND"}}),
+        ),
         pytest.raises(RuntimeError) as exc_info,
     ):
         llm_service.generate_itinerary("3 days in Reykjavik")
 
-    assert "ollama pull" in str(exc_info.value)
+    assert "model" in str(exc_info.value).lower()
 
 
-def test_answer_question_translates_connection_error():
+def test_answer_question_translates_missing_api_key():
     with (
-        patch("app.llm_service.requests.post", side_effect=requests.exceptions.ConnectionError("Connection refused")),
+        patch("app.llm_service._call_gemini_chat", side_effect=RuntimeError("GEMINI_API_KEY is not set -- add it to your .env file.")),
         pytest.raises(RuntimeError) as exc_info,
     ):
         llm_service.answer_question("what's the weather like?", [])
 
     message = str(exc_info.value)
     assert message.startswith("Failed to answer question:")  # preserves the existing contract
-    assert "ollama serve" in message
+    assert "GEMINI_API_KEY" in message
 
 
 def test_cached_agent_context_skips_the_agent_step_entirely():
-    meta = json.dumps({"destination": "Reykjavik", "total_days": 3})
-    chunk = json.dumps({"days": [{"day_number": i, "items": [{"activity": "sightsee"}]} for i in range(1, 4)]})
+    meta = TripMeta(destination="Reykjavik", total_days=3)
+    chunk = _chunk([(i, "sightsee") for i in range(1, 4)])
 
     with (
         patch("app.llm_service.agent_service.gather_trip_context") as mock_gather,
-        patch("app.llm_service._call_ollama", side_effect=_mock_ollama_sequence([meta, chunk])),
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
     ):
         result = llm_service.generate_itinerary(
             "3 days in Reykjavik", cached_agent_context="Already known: expect snow.",
@@ -191,45 +215,44 @@ def test_cached_agent_context_skips_the_agent_step_entirely():
 # ---------- intent classification ----------
 
 def test_classify_intent_new_trip():
-    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "new_trip"})):
+    with patch("app.llm_service._call_gemini", return_value=IntentResult(intent="new_trip")):
         assert llm_service.classify_intent("plan me a trip to Peru", "") == "new_trip"
 
 
 def test_classify_intent_off_topic():
-    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "off_topic"})):
+    with patch("app.llm_service._call_gemini", return_value=IntentResult(intent="off_topic")):
         assert llm_service.classify_intent("write me a sorting algorithm", "") == "off_topic"
 
 
 def test_classify_intent_question():
-    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "question"})):
+    with patch("app.llm_service._call_gemini", return_value=IntentResult(intent="question")):
         assert llm_service.classify_intent("what's the weather like there?", "trip to Kyoto discussed") == "question"
 
 
-def test_classify_intent_invalid_category_falls_back_to_new_trip():
-    with patch("app.llm_service._call_ollama", return_value=json.dumps({"intent": "something_made_up"})):
+def test_classify_intent_schema_mismatch_falls_back_to_new_trip():
+    # The Literal-typed schema means Gemini can't return an invalid category
+    # in the first place -- the failure mode now is _call_gemini raising
+    # when the model's output doesn't validate at all.
+    with patch("app.llm_service._call_gemini", side_effect=RuntimeError("schema mismatch")):
         assert llm_service.classify_intent("plan a trip", "") == "new_trip"
 
 
 def test_classify_intent_failure_fails_open_to_new_trip():
-    with patch("app.llm_service._call_ollama", side_effect=ConnectionError("unreachable")):
+    with patch("app.llm_service._call_gemini", side_effect=ConnectionError("unreachable")):
         assert llm_service.classify_intent("plan a trip", "") == "new_trip"
 
 
 # ---------- conversational Q&A path ----------
 
 def test_answer_question_returns_model_content():
-    mock_response = Mock()
-    mock_response.json.return_value = {"message": {"content": "It should be sunny and warm in June."}}
-    mock_response.raise_for_status = Mock()
-
-    with patch("app.llm_service.requests.post", return_value=mock_response):
+    with patch("app.llm_service._call_gemini_chat", return_value="It should be sunny and warm in June."):
         result = llm_service.answer_question("what's the weather like?", [{"role": "user", "content": "trip to Kyoto"}])
 
     assert result == "It should be sunny and warm in June."
 
 
 def test_answer_question_raises_on_failure():
-    with patch("app.llm_service.requests.post", side_effect=ConnectionError("unreachable")):
+    with patch("app.llm_service._call_gemini_chat", side_effect=RuntimeError("unreachable")):
         try:
             llm_service.answer_question("what's the weather like?", [])
             assert False, "expected RuntimeError"
@@ -243,16 +266,12 @@ def test_answer_question_grounds_the_model_in_real_agent_findings():
     # once during generation and shown in the UI, but never made it into the
     # prompt for follow-up questions -- the model had nothing real to draw on
     # and made something up. The real findings must reach the system prompt.
-    mock_response = Mock()
-    mock_response.json.return_value = {"message": {"content": "Highs around 24C, per the forecast."}}
-    mock_response.raise_for_status = Mock()
-
-    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+    with patch("app.llm_service._call_gemini_chat", return_value="Highs around 24C, per the forecast.") as mock_call:
         llm_service.answer_question(
             "what's the temperature there?", [], agent_context="Kyoto: highs of 22-26C, low rain chance.",
         )
 
-    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    sent_system_prompt = mock_call.call_args.args[0]
     assert "Kyoto: highs of 22-26C" in sent_system_prompt
     assert "invent" in sent_system_prompt.lower()  # instructed not to fabricate numbers
 
@@ -264,30 +283,22 @@ def test_answer_question_instructs_model_not_to_volunteer_agent_context():
     # unrelated questions ("what's a good day-3 restaurant area?"). The
     # system prompt must explicitly tell it to only use the data when the
     # question is actually about it.
-    mock_response = Mock()
-    mock_response.json.return_value = {"message": {"content": "Try the east side for dinner."}}
-    mock_response.raise_for_status = Mock()
-
-    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+    with patch("app.llm_service._call_gemini_chat", return_value="Try the east side for dinner.") as mock_call:
         llm_service.answer_question(
             "what's a good area for dinner?", [], agent_context="Kyoto: highs of 22-26C, low rain chance.",
         )
 
-    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    sent_system_prompt = mock_call.call_args.args[0]
     assert "not proactively mention" in sent_system_prompt.lower()
 
 
 def test_answer_question_without_agent_context_still_works():
     # No findings cached yet (e.g. first message in a conversation is a
     # question) -- should behave exactly as before, no crash, no empty note.
-    mock_response = Mock()
-    mock_response.json.return_value = {"message": {"content": "I'd need a destination to check that."}}
-    mock_response.raise_for_status = Mock()
-
-    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+    with patch("app.llm_service._call_gemini_chat", return_value="I'd need a destination to check that.") as mock_call:
         result = llm_service.answer_question("what's the temperature there?", [])
 
-    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    sent_system_prompt = mock_call.call_args.args[0]
     assert sent_system_prompt == llm_service.QUESTION_SYSTEM_PROMPT
     assert result == "I'd need a destination to check that."
 
@@ -300,14 +311,10 @@ def test_answer_question_instructs_honesty_even_with_no_agent_context():
     # "sunny" that don't even exist in the tool's data shape). The base
     # system prompt must forbid guessing real-time facts unconditionally,
     # not just when real data happens to be available.
-    mock_response = Mock()
-    mock_response.json.return_value = {"message": {"content": "I don't have current data for that."}}
-    mock_response.raise_for_status = Mock()
-
-    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+    with patch("app.llm_service._call_gemini_chat", return_value="I don't have current data for that.") as mock_call:
         llm_service.answer_question("what does the temperature look like?", [], agent_context="")
 
-    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    sent_system_prompt = mock_call.call_args.args[0]
     assert "do not have live access" in sent_system_prompt.lower()
     assert "don't have current data" in sent_system_prompt.lower()
 
@@ -316,15 +323,28 @@ def test_answer_question_forbids_inventing_units_or_conditions_not_given():
     # Regression test for the exact bug: real agent_context had Celsius
     # numbers only, but the model answered in Fahrenheit with invented sky
     # conditions ("Partly cloudy") that were never part of the data.
-    mock_response = Mock()
-    mock_response.json.return_value = {"message": {"content": "Highs around 24C, per the forecast."}}
-    mock_response.raise_for_status = Mock()
-
-    with patch("app.llm_service.requests.post", return_value=mock_response) as mock_post:
+    with patch("app.llm_service._call_gemini_chat", return_value="Highs around 24C, per the forecast.") as mock_call:
         llm_service.answer_question(
             "what's the temperature there?", [], agent_context="Kyoto: highs of 22-26C, low rain chance.",
         )
 
-    sent_system_prompt = mock_post.call_args.kwargs["json"]["messages"][0]["content"]
+    sent_system_prompt = mock_call.call_args.args[0]
     assert "fahrenheit" in sent_system_prompt.lower()
     assert "sunny" in sent_system_prompt.lower() or "cloudy" in sent_system_prompt.lower()
+
+
+def test_answer_question_maps_chat_history_roles_for_gemini():
+    # Gemini's Content.role expects "user"/"model" -- "assistant" (this
+    # app's DB convention) is not a recognized role and gets rejected by the
+    # real API (confirmed live during this migration).
+    with patch("app.llm_service._get_client") as mock_get_client:
+        fake_response = Mock(text="answer")
+        mock_get_client.return_value.models.generate_content.return_value = fake_response
+
+        llm_service.answer_question(
+            "day 3?", [{"role": "user", "content": "trip to Kyoto"}, {"role": "assistant", "content": "sounds great"}],
+        )
+
+    sent_contents = mock_get_client.return_value.models.generate_content.call_args.kwargs["contents"]
+    roles = [c.role for c in sent_contents]
+    assert roles == ["user", "model", "user"]

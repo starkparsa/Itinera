@@ -46,8 +46,16 @@ the mismatch rather than silently editing one to match the other.
   minimal — no trip-length field or similar form controls; trip parameters
   come from the prompt text (see decision log, this was a deliberate
   reversal).
-- **LLM**: Ollama running `mistral` locally. **Migration to Gemini is
-  planned but not done.**
+- **LLM**: Gemini API (`google-genai`), model `gemini-3.6-flash` by default
+  (`GEMINI_MODEL` env var). Migrated off local Ollama/Mistral this session —
+  native structured output (`response_schema`) replaced the hand-rolled
+  markdown-fence JSON parser, native function calling
+  (`types.FunctionDeclaration`) replaced the Ollama-specific tool loop in
+  `agent_service.py`. `gemini-2.5-flash` (this file's original target) turned
+  out to 404 for new API keys once actually tried — Google's own error
+  redirects to `gemini-3.6-flash`; re-verify the current model string at
+  `ai.google.dev/gemini-api/docs/models` if this starts 404ing again, model
+  strings get retired without much notice.
 - **Database**: MySQL, wired and working. **Migration to Postgres on Neon
   is decided but not done.**
 - **Auth**: none yet, by design. Every request uses a placeholder `user_id`;
@@ -58,7 +66,7 @@ the mismatch rather than silently editing one to match the other.
 
 | Decision | Rationale |
 |---|---|
-| LLM: Mistral (local) → **Gemini** | Workable free tier for hobby scale (as of Aug 2026: Gemini 2.5 Flash ~10 RPM/250 RPD, Flash-Lite ~15 RPM/1000 RPD, no card required — **re-verify before relying on this, limits move fast**). Also gives native structured JSON output and native function calling, replacing the current hand-rolled markdown-fence JSON parser and Ollama-specific tool loop. |
+| LLM: Mistral (local) → **Gemini** — **done** | Workable free tier for hobby scale, no card required. Gives native structured JSON output (`response_schema`) and native function calling, replacing the old hand-rolled markdown-fence JSON parser and Ollama-specific tool loop — confirmed delivered, not just aspirational (`_parse_json` is gone entirely). Concrete correction found only by actually trying it: `gemini-2.5-flash` (this row's original target) 404s for new API keys; migrated to `gemini-3.6-flash` instead, which is a reasoning model requiring `thinking_config.thinking_level=MINIMAL` to avoid burning the output-token budget on invisible thinking tokens, and whose function-response messages must use `role="user"` (`role="tool"` is rejected outright, despite that being Ollama's shape). Free-tier RPM/TPM/RPD numbers are no longer published in static docs (only live per-account in AI Studio) — re-verify via your own account before relying on a specific figure. |
 | Database: MySQL → **Postgres on Neon** | pgvector lives in the same DB instance for the later cross-trip preference-memory feature — no separate vector service to run or pay for. Neon has no idle-pause gotcha (unlike Supabase's free tier). Trade-off accepted knowingly: Neon doesn't bundle free Auth the way Supabase would have, so auth is a fully separate build. |
 | Auth: built **last** | Schema already supports it (`user_id` everywhere). When it happens: **Google OAuth** specifically — Maps and Calendar both need a Google Cloud project + OAuth consent anyway, so one login flow should cover identity + Maps scope + Calendar scope together, not three separate integrations. |
 | Trip length: inferred from the prompt, no UI field | Explicitly rejected a "Trip length" slider/number-input in the Streamlit sidebar — say it in the message instead (e.g. "a week in Lisbon"). Don't re-add a form control for this without asking; it was tried and deliberately removed. |
@@ -129,10 +137,11 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    `gather_trip_context`); weather still wasn't working reliably even after
    that fix, so it was removed and the whole agent tool-calling step paused
    (see decision log) rather than sunk further into this round.
-2. Gemini swap (structured output + native tool calling) — de-risks
-   everything built after it; several bugs caught in the round above trace
-   back to Mistral's weak instruction-following, which this step directly
-   targets.
+2. Gemini swap (structured output + native tool calling) — **done** (see
+   decision log for the concrete `gemini-3.6-flash`/`thinking_level`/
+   `role="user"` corrections found only by actually building it). Weather
+   and the agent tool-calling step are still paused, independent of this —
+   re-enabling them is a separate decision (next up, per this session).
 3. Itinerary export (.ics / PDF) — zero external dependencies, no quota risk.
 4. Maps/routing integration (OSM-based: Nominatim + Overpass +
    OpenRouteService + Open-Meteo + Wikipedia — see decision log) — real
@@ -163,7 +172,7 @@ tradeoffs from the decision log above, not arbitrary sequencing.
 ## Commands
 
 ```bash
-# Backend tests (in-memory SQLite, no live MySQL/Ollama needed)
+# Backend tests (in-memory SQLite, no live MySQL/GEMINI_API_KEY needed)
 cd backend && pytest -v
 
 # Lint
@@ -181,12 +190,12 @@ backend/app/
   main.py              FastAPI app, loads .env, mounts routers
   models.py             SQLAlchemy models: User, Conversation, Message, Trip, ItineraryItem
   database.py            DB engine/session setup
-  llm_service.py          Ollama calls: intent classification, itinerary generation, Q&A
+  llm_service.py          Gemini calls: intent classification, itinerary generation, Q&A
   agent_service.py        Tool-calling loop run ahead of generation -- paused, see decision log
   tools.py                 Tool implementations + schemas (currency via Frankfurter; weather removed)
   routers/trips.py         /trips/generate — the main request path, ties everything together
   routers/conversations.py  Chat history endpoints
-backend/tests/            pytest, in-memory SQLite, Ollama calls mocked
+backend/tests/            pytest, in-memory SQLite, Gemini calls mocked
 frontend/streamlit_app.py  Chat UI
 docker-compose.yml         Full local stack (mysql + backend + frontend)
 .github/workflows/ci.yml   Lint + test on push/PR; build & push images to GHCR on merge to main

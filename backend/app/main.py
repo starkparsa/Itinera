@@ -8,16 +8,29 @@ from dotenv import load_dotenv
 # file is present in the image.
 load_dotenv()
 
+import time
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
 from .routers import conversations, trips
 
-# For local dev this creates tables directly. Once the schema stabilizes,
-# switch to `alembic upgrade head` and drop this line -- migrations should
-# own schema changes so history is tracked in git.
-Base.metadata.create_all(bind=engine)
+# Retry logic to wait for database to be ready
+max_retries = 10
+retry_delay = 2  # seconds
+
+for attempt in range(max_retries):
+    try:
+        Base.metadata.create_all(bind=engine)
+        break
+    except Exception:
+        if attempt < max_retries - 1:
+            print(f"Database not ready, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})")
+            time.sleep(retry_delay)
+        else:
+            print(f"Failed to connect to database after {max_retries} attempts")
+            raise
 
 app = FastAPI(title="AI Travel Planner API")
 

@@ -3,10 +3,23 @@ from unittest.mock import Mock, patch
 from app import agent_service
 
 
-def _mock_chat_response(message: dict) -> Mock:
+def _mock_function_call(name: str, args: dict) -> Mock:
+    call = Mock()
+    call.name = name
+    call.args = args
+    return call
+
+
+def _mock_tool_response(text: str | None = None, function_calls: list | None = None) -> Mock:
+    """Fakes google.genai's GenerateContentResponse shape well enough for
+    gather_trip_context's loop: .function_calls (None or a list of
+    FunctionCall-like objects with .name/.args), .text, and
+    .candidates[0].content (the "model" turn replayed back into the
+    conversation when there IS a tool call)."""
     resp = Mock()
-    resp.json.return_value = {"message": message}
-    resp.raise_for_status = Mock()
+    resp.function_calls = function_calls
+    resp.text = text
+    resp.candidates = [Mock(content=Mock(role="model"))]
     return resp
 
 
@@ -16,19 +29,19 @@ def test_agent_step_is_paused_by_default_and_makes_no_network_call():
     # was paused alongside it rather than leaving a half-working step
     # running. gather_trip_context must short-circuit to "" without touching
     # the network at all while paused.
-    with patch("app.agent_service.requests.post") as mock_post:
+    with patch("app.agent_service._call_gemini_with_tools") as mock_call:
         result = agent_service.gather_trip_context("weekend in Chicago")
 
     assert result == ""
-    mock_post.assert_not_called()
+    mock_call.assert_not_called()
 
 
 def test_no_tool_needed_returns_content_directly():
-    response = _mock_chat_response({"role": "assistant", "content": "No special context needed for this trip."})
+    response = _mock_tool_response(text="No special context needed for this trip.")
 
     with (
         patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
-        patch("app.agent_service.requests.post", return_value=response),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response),
     ):
         result = agent_service.gather_trip_context("weekend in Chicago")
 
@@ -40,33 +53,29 @@ def test_destination_is_folded_into_the_outgoing_message():
     # does the temperature look like?") that doesn't name a place on its
     # own -- without this, the model has nothing to tell it which city to
     # check.
-    response = _mock_chat_response({"role": "assistant", "content": "No special context needed."})
+    response = _mock_tool_response(text="No special context needed.")
 
     with (
         patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
-        patch("app.agent_service.requests.post", return_value=response) as mock_post,
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
     ):
         agent_service.gather_trip_context("what does the temperature look like?", destination="Austin")
 
-    sent_messages = mock_post.call_args.kwargs["json"]["messages"]
-    user_message = next(m["content"] for m in sent_messages if m["role"] == "user")
+    sent_contents = mock_call.call_args.args[0]
+    user_message = sent_contents[0].parts[0].text
     assert "Austin" in user_message
     assert "what does the temperature look like?" in user_message
 
 
 def test_single_tool_call_executes_and_returns_final_summary():
-    tool_call_response = _mock_chat_response({
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [{"function": {"name": "convert_currency", "arguments": {
-            "amount": 500, "from_currency": "USD", "to_currency": "ISK",
-        }}}],
-    })
-    final_response = _mock_chat_response({"role": "assistant", "content": "500 USD is about 68,500 ISK."})
+    tool_call_response = _mock_tool_response(function_calls=[
+        _mock_function_call("convert_currency", {"amount": 500, "from_currency": "USD", "to_currency": "ISK"}),
+    ])
+    final_response = _mock_tool_response(text="500 USD is about 68,500 ISK.")
 
     with (
         patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
-        patch("app.agent_service.requests.post", side_effect=[tool_call_response, final_response]),
+        patch("app.agent_service._call_gemini_with_tools", side_effect=[tool_call_response, final_response]),
         patch("app.tools.convert_currency", return_value={"converted": 68500}) as mock_convert,
     ):
         result = agent_service.gather_trip_context("3 days in Reykjavik, budget is 500 USD")
@@ -75,17 +84,35 @@ def test_single_tool_call_executes_and_returns_final_summary():
     assert result == "500 USD is about 68,500 ISK."
 
 
-def test_unknown_tool_name_does_not_crash_the_loop():
-    tool_call_response = _mock_chat_response({
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [{"function": {"name": "totally_made_up_tool", "arguments": {}}}],
-    })
-    final_response = _mock_chat_response({"role": "assistant", "content": "Proceeding without extra context."})
+def test_function_response_is_sent_back_with_user_role_not_tool_role():
+    # Confirmed live against the real API: role="tool" is rejected outright
+    # ("Role 'tool' is not supported"), despite that being the shape
+    # Ollama's /api/chat used. Function-response parts must go back in a
+    # role="user" turn.
+    tool_call_response = _mock_tool_response(function_calls=[
+        _mock_function_call("convert_currency", {"amount": 500, "from_currency": "USD", "to_currency": "ISK"}),
+    ])
+    final_response = _mock_tool_response(text="done")
 
     with (
         patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
-        patch("app.agent_service.requests.post", side_effect=[tool_call_response, final_response]),
+        patch("app.agent_service._call_gemini_with_tools", side_effect=[tool_call_response, final_response]) as mock_call,
+        patch("app.tools.convert_currency", return_value={"converted": 68500}),
+    ):
+        agent_service.gather_trip_context("3 days in Reykjavik, budget is 500 USD")
+
+    # second call's contents: [user turn, model's function-call turn, function-response turn]
+    second_call_contents = mock_call.call_args_list[1].args[0]
+    assert second_call_contents[-1].role == "user"
+
+
+def test_unknown_tool_name_does_not_crash_the_loop():
+    tool_call_response = _mock_tool_response(function_calls=[_mock_function_call("totally_made_up_tool", {})])
+    final_response = _mock_tool_response(text="Proceeding without extra context.")
+
+    with (
+        patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", side_effect=[tool_call_response, final_response]),
     ):
         result = agent_service.gather_trip_context("a trip somewhere")
 
@@ -95,7 +122,7 @@ def test_unknown_tool_name_does_not_crash_the_loop():
 def test_network_failure_fails_quietly_and_returns_empty_string():
     with (
         patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
-        patch("app.agent_service.requests.post", side_effect=ConnectionError("no route to host")),
+        patch("app.agent_service._call_gemini_with_tools", side_effect=ConnectionError("no route to host")),
     ):
         result = agent_service.gather_trip_context("weekend in Denver")
 
@@ -114,17 +141,13 @@ def test_system_prompt_instructs_against_inventing_data_for_failed_tools():
 
 def test_exceeding_max_rounds_returns_empty_string():
     # A response that keeps requesting the same tool forever should not loop indefinitely.
-    infinite_tool_call = _mock_chat_response({
-        "role": "assistant",
-        "content": "",
-        "tool_calls": [{"function": {"name": "convert_currency", "arguments": {
-            "amount": 10, "from_currency": "USD", "to_currency": "EUR",
-        }}}],
-    })
+    infinite_tool_call = _mock_tool_response(function_calls=[
+        _mock_function_call("convert_currency", {"amount": 10, "from_currency": "USD", "to_currency": "EUR"}),
+    ])
 
     with (
         patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
-        patch("app.agent_service.requests.post", return_value=infinite_tool_call),
+        patch("app.agent_service._call_gemini_with_tools", return_value=infinite_tool_call),
         patch("app.tools.convert_currency", return_value={"converted": 9.2}),
     ):
         result = agent_service.gather_trip_context("endless trip")
