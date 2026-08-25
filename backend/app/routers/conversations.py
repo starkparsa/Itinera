@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import models, schemas
+from .. import models, schemas, weather_service
 from ..database import get_db
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
@@ -33,11 +33,16 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
         trip_out = None
         if message.trip is not None:
             trip = message.trip
+            # Same cached-read pattern as routers/trips.py -- this is what
+            # actually renders long-term (the frontend reloads the whole
+            # conversation after every turn), so it needs the forecast too.
+            weather_out = weather_service.get_or_refresh_trip_weather(trip, trip.items)
             trip_out = schemas.TripResponse(
                 trip_id=trip.id,
                 destination=trip.destination,
                 itinerary=[schemas.ItineraryItemOut.model_validate(i) for i in trip.items],
                 conversation_id=conversation.id,
+                weather=[schemas.DayWeatherOut(**w) for w in weather_out],
             )
         messages_out.append(
             schemas.MessageOut(
@@ -48,6 +53,8 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
                 created_at=message.created_at,
             )
         )
+
+    db.commit()  # persists any weather cache refreshed above
 
     return schemas.ConversationDetail(
         id=conversation.id,

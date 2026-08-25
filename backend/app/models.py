@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -67,6 +67,17 @@ class Trip(Base):
     conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
     destination = Column(String(255), nullable=False)
     prompt = Column(Text)  # the original natural-language request
+    # Real calendar start date, resolved deterministically (date_resolver.py,
+    # never LLM arithmetic -- CLAUDE.md principle #6) from the prompt. Null
+    # when nothing date-like was said; the weather feature below just stays
+    # inactive for that trip rather than guessing.
+    start_date = Column(Date, nullable=True)
+    # Cached per-day forecast (weather_service.py) as a small JSON blob, plus
+    # when it was fetched -- avoids re-hitting Open-Meteo on every view/
+    # follow-up (principles #4/#5). Refreshed only once stale; see
+    # routers/trips.py's _fetch_weather_for_trip.
+    weather_json = Column(Text, nullable=True)
+    weather_fetched_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="trips")

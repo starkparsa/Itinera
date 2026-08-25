@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -20,6 +20,16 @@ class ItineraryItemOut(BaseModel):
         from_attributes = True
 
 
+class DayWeatherOut(BaseModel):
+    day_number: int
+    date: date
+    temp_min: float
+    temp_max: float
+    temp_min_f: float
+    temp_max_f: float
+    condition: str
+
+
 class TripResponse(BaseModel):
     trip_id: int | None = None
     destination: str | None = None
@@ -31,6 +41,10 @@ class TripResponse(BaseModel):
     # trips predating conversation linkage never had one either.
     conversation_id: int | None = None
     reply: str | None = None  # plain-text reply for question/off-topic turns (no itinerary generated)
+    # Real forecast per day, only for days within Open-Meteo's horizon and
+    # only when a start date was resolvable -- empty, never fabricated, is
+    # the fallback (see date_resolver.py / weather_service.py).
+    weather: list[DayWeatherOut] = []
 
 
 class MessageOut(BaseModel):

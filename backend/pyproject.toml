@@ -5,4 +5,8 @@ line-length = 100
 ignore = [
     "B008",   # FastAPI's Depends() in defaults is the standard, intended pattern
     "BLE001", # broad except at the API boundary is intentional here, converted to HTTP 502
+    "DTZ",    # naive UTC datetimes are the deliberate convention throughout this app
+              # (Trip.created_at etc. are plain DateTime columns, no tz) -- flagging
+              # every datetime.utcnow()/date.today() call for this would mean either
+              # a project-wide switch to tz-aware columns or a noqa on every call site
 ]

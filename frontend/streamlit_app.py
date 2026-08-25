@@ -40,6 +40,24 @@ def start_new_chat():
     st.session_state.messages = []
 
 
+def _weather_icon(condition: str) -> str:
+    """Small keyword lookup, not an LLM call -- see backend/app/weather_service.py."""
+    c = condition.lower()
+    if "thunder" in c:
+        return "⛈️"
+    if "snow" in c:
+        return "❄️"
+    if "rain" in c or "drizzle" in c:
+        return "🌧️"
+    if "fog" in c:
+        return "🌫️"
+    if "overcast" in c or "cloud" in c:
+        return "☁️"
+    if "clear" in c:
+        return "☀️"
+    return "🌤️"
+
+
 def render_trip(trip: dict):
     if trip.get("agent_context"):
         st.success(f"🔎 **Agent findings:** {trip['agent_context']}")
@@ -50,8 +68,20 @@ def render_trip(trip: dict):
     for item in trip["itinerary"]:
         days.setdefault(item["day_number"], []).append(item)
 
+    # Real-time per-day forecast, only present for days within Open-Meteo's
+    # horizon with a resolvable trip start date -- see date_resolver.py /
+    # weather_service.py. Absent entirely for a day is normal, not an error.
+    weather_by_day = {w["day_number"]: w for w in trip.get("weather", [])}
+
     for day_number in sorted(days):
         with st.expander(f"Day {day_number}", expanded=True):
+            weather = weather_by_day.get(day_number)
+            if weather:
+                icon = _weather_icon(weather["condition"])
+                st.caption(
+                    f"{icon} High {weather['temp_max']:.0f}°C / {weather['temp_max_f']:.0f}°F "
+                    f"— Low {weather['temp_min']:.0f}°C / {weather['temp_min_f']:.0f}°F — {weather['condition']}"
+                )
             for item in days[day_number]:
                 label = f"**{item['time_of_day']}** — {item['activity']}" if item["time_of_day"] else item["activity"]
                 st.markdown(f"- {label}")

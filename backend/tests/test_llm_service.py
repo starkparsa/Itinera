@@ -119,6 +119,97 @@ def test_call_gemini_schema_mismatch_hints_truncation_when_max_tokens():
     assert "cut off" in str(exc_info.value)
 
 
+# ---------- Groq fallback: only on Gemini's rate-limit failure ----------
+
+def _rate_limit_error() -> genai_errors.ClientError:
+    return genai_errors.ClientError(429, {"error": {"message": "quota exceeded", "status": "RESOURCE_EXHAUSTED"}})
+
+
+def test_call_gemini_falls_back_to_groq_on_rate_limit():
+    meta = TripMeta(destination="Reykjavik", total_days=3)
+
+    with (
+        patch("app.llm_service._get_client", side_effect=_rate_limit_error()),
+        patch("app.llm_service.groq_service.GROQ_API_KEY", "fake-groq-key"),
+        patch("app.llm_service.groq_service._call_groq", return_value=meta) as mock_groq,
+    ):
+        result = llm_service._call_gemini("prompt", response_schema=TripMeta)
+
+    assert result == meta
+    mock_groq.assert_called_once_with("prompt", TripMeta, 800)
+
+
+def test_call_gemini_chat_falls_back_to_groq_on_rate_limit():
+    with (
+        patch("app.llm_service._get_client", side_effect=_rate_limit_error()),
+        patch("app.llm_service.groq_service.GROQ_API_KEY", "fake-groq-key"),
+        patch("app.llm_service.groq_service._call_groq_chat", return_value="Groq answered instead.") as mock_groq,
+    ):
+        result = llm_service._call_gemini_chat("system prompt", [], "a question")
+
+    assert result == "Groq answered instead."
+    mock_groq.assert_called_once()
+
+
+def test_call_gemini_rate_limit_and_groq_also_fails_raises_combined_error():
+    with (
+        patch("app.llm_service._get_client", side_effect=_rate_limit_error()),
+        patch("app.llm_service.groq_service.GROQ_API_KEY", "fake-groq-key"),
+        patch("app.llm_service.groq_service._call_groq", side_effect=RuntimeError("groq is also down")),
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        llm_service._call_gemini("prompt", response_schema=TripMeta)
+
+    assert "groq is also down" in str(exc_info.value)
+
+
+def test_call_gemini_non_rate_limit_error_does_not_fall_back_to_groq():
+    # A schema mismatch, bad key, etc. must fail exactly as it always has --
+    # falling back to Groq there would mask a real bug behind "well, Groq
+    # answered", not just fill a genuine quota gap.
+    not_found = genai_errors.ClientError(404, {"error": {"message": "not found", "status": "NOT_FOUND"}})
+
+    with (
+        patch("app.llm_service._get_client", side_effect=not_found),
+        patch("app.llm_service.groq_service.GROQ_API_KEY", "fake-groq-key"),
+        patch("app.llm_service.groq_service._call_groq") as mock_groq,
+        pytest.raises(RuntimeError),
+    ):
+        llm_service._call_gemini("prompt", response_schema=TripMeta)
+
+    mock_groq.assert_not_called()
+
+
+def test_call_gemini_rate_limit_without_groq_key_does_not_fall_back():
+    # No GROQ_API_KEY configured -- must raise the original Gemini message,
+    # not attempt a Groq call that would fail confusingly on a missing key.
+    with (
+        patch("app.llm_service._get_client", side_effect=_rate_limit_error()),
+        patch("app.llm_service.groq_service.GROQ_API_KEY", None),
+        patch("app.llm_service.groq_service._call_groq") as mock_groq,
+        pytest.raises(RuntimeError) as exc_info,
+    ):
+        llm_service._call_gemini("prompt", response_schema=TripMeta)
+
+    mock_groq.assert_not_called()
+    assert "rate limit" in str(exc_info.value).lower()
+
+
+def test_call_gemini_happy_path_never_calls_groq():
+    fake_response = Mock(parsed=TripMeta(destination="Lisbon", total_days=4))
+    fake_client = Mock()
+    fake_client.models.generate_content.return_value = fake_response
+
+    with (
+        patch("app.llm_service._get_client", return_value=fake_client),
+        patch("app.llm_service.groq_service._call_groq") as mock_groq,
+    ):
+        result = llm_service._call_gemini("prompt", response_schema=TripMeta)
+
+    assert result.destination == "Lisbon"
+    mock_groq.assert_not_called()
+
+
 def test_agent_context_is_surfaced_in_result_and_prompt():
     meta = TripMeta(destination="Reykjavik", total_days=3)
     chunk = _chunk([(i, "sightsee") for i in range(1, 4)])

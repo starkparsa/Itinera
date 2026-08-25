@@ -7,16 +7,31 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel
 
-from . import agent_service
+from . import agent_service, groq_service
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-# gemini-2.5-flash is no longer available to new API keys as of this
-# migration (confirmed live: it 404s, Google's own error message points at
-# gemini-3.6-flash) -- re-verify at ai.google.dev/gemini-api/docs/models
-# before changing this if it moves again.
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+# gemini-2.5-flash is no longer available to new API keys (confirmed live:
+# it 404s, Google's own error message points at gemini-3.6-flash).
+# gemini-3.6-flash itself was swapped out 2026-08-25 after hitting its
+# free tier's hard 20-requests/*day* cap live (RESOURCE_EXHAUSTED,
+# GenerateRequestsPerDayPerProjectPerModel-FreeTier) -- disqualifying for
+# anything that needs to survive a live demo. gemini-3.5-flash-lite is a
+# separate model in Google's quota system (answered successfully while
+# gemini-3.6-flash's daily cap was still exhausted) and was verified live
+# to match on every axis that mattered: clean response_schema output (no
+# markdown-fence leakage), correct start_day/end_day chunk-range
+# instruction-following, and correct function-calling behavior (calls
+# convert_currency when useful, doesn't over-call when not). See
+# CLAUDE.md's decision log for the comparison against Gemma 4, which was
+# tried first and rejected -- its structured output leaked a trailing
+# ```` ``` ```` fence past response_schema and it didn't reliably follow
+# the day-range instruction. Re-verify at
+# ai.google.dev/gemini-api/docs/models before changing this again --
+# model strings and deprecations move fast, gemini-2.5-flash-lite (an
+# earlier candidate) already 404s for new users as of this change.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
-# gemini-3.6-flash is a reasoning model with an internal "thinking" token
+# gemini-3.6-flash was a reasoning model with an internal "thinking" token
 # budget that's spent out of the same max_output_tokens budget as the
 # visible answer -- confirmed live: leaving thinking at its default consumed
 # an entire small max_output_tokens budget on invisible reasoning tokens,
@@ -25,6 +40,9 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 # appropriate for classification/extraction/structured generation and even
 # for conversational Q&A here, since QUESTION_SYSTEM_PROMPT is already
 # explicit/directive rather than relying on the model's own deliberation.
+# Also confirmed harmless (no error, no behavior change) on
+# gemini-3.5-flash-lite, which isn't itself a reasoning model in the same
+# sense -- kept for consistency and as cheap insurance if that changes.
 _THINKING_CONFIG = types.ThinkingConfig(thinking_level=types.ThinkingLevel.MINIMAL)
 
 _client: genai.Client | None = None
@@ -45,6 +63,15 @@ def _get_client() -> genai.Client:
             ),
         )
     return _client
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    """True only for Gemini's quota/rate-limit failure (HTTP 429) --
+    the one case the Groq fallback below is allowed to kick in for. Any
+    other failure (bad schema, invalid key, Google's servers down) must
+    fail exactly as it always has, not silently mask a real bug behind
+    'well, Groq answered'."""
+    return isinstance(exc, genai_errors.ClientError) and exc.code == 429
 
 
 def _describe_gemini_error(exc: Exception) -> str:
@@ -184,6 +211,14 @@ def _call_gemini(
     generation to the schema natively, replacing the old markdown-fence-
     stripping + json.loads + truncation-hint dance), otherwise the raw
     stripped text. Test patch target: app.llm_service._call_gemini.
+
+    Falls back to Groq (groq_service.py) only when Gemini fails
+    specifically because its request quota is exhausted (_is_rate_limited)
+    and GROQ_API_KEY is configured -- see CLAUDE.md decision log for why:
+    Gemini's free tier is capped at a hard 20 requests/*day*, a wall that
+    doesn't move again until the next day, which is disqualifying for
+    anything that needs to survive a live demo. Any other failure raises
+    exactly as it did before this fallback existed.
     """
     try:
         config = types.GenerateContentConfig(
@@ -204,6 +239,13 @@ def _call_gemini(
             raise ValueError(f"Gemini did not return output matching the expected schema{hint}. Raw: {(response.text or '')[:800]}")
         return response.parsed
     except Exception as exc:
+        if _is_rate_limited(exc) and groq_service.GROQ_API_KEY:
+            try:
+                return groq_service._call_groq(prompt, response_schema, max_output_tokens)
+            except Exception as groq_exc:
+                raise RuntimeError(
+                    f"Gemini rate limit hit and the Groq fallback also failed: {groq_exc}"
+                ) from groq_exc
         raise RuntimeError(_describe_gemini_error(exc)) from exc
 
 
@@ -215,6 +257,9 @@ def _call_gemini_chat(system_instruction: str, chat_messages: list[dict], prompt
     Roles: stored messages use "user"/"assistant" (this app's convention);
     Gemini's Content.role expects "user"/"model" -- "tool" is invalid here
     (confirmed live) and "assistant" is not a recognized role either.
+
+    Falls back to Groq on a Gemini quota failure -- see _call_gemini's
+    docstring for why.
     """
     contents = [
         types.Content(role=("model" if m["role"] == "assistant" else "user"), parts=[types.Part(text=m["content"])])
@@ -234,6 +279,13 @@ def _call_gemini_chat(system_instruction: str, chat_messages: list[dict], prompt
         )
         return (response.text or "").strip()
     except Exception as exc:
+        if _is_rate_limited(exc) and groq_service.GROQ_API_KEY:
+            try:
+                return groq_service._call_groq_chat(system_instruction, chat_messages, prompt, max_output_tokens)
+            except Exception as groq_exc:
+                raise RuntimeError(
+                    f"Gemini rate limit hit and the Groq fallback also failed: {groq_exc}"
+                ) from groq_exc
         raise RuntimeError(_describe_gemini_error(exc)) from exc
 
 
@@ -262,15 +314,22 @@ def answer_question(prompt: str, chat_messages: list[dict], agent_context: str =
     """Answers a conversational question using real chat-formatted history
     (not the squashed summary string), without regenerating an itinerary.
 
-    agent_context: the weather/currency findings already gathered for this
-    conversation (Conversation.agent_context), if any. Without this, the
-    model has no real data to draw on for a question like "what's the
-    temperature there?" -- the actual forecast was fetched once during
-    itinerary generation and shown in the UI, but never made it into the
-    stored message history this function otherwise relies on, so the model
-    would just invent a plausible-sounding number instead of using the real
-    one. Passing it here, plus telling the model not to guess when it's
-    missing, fixes both the wrong-number case and the making-one-up case.
+    agent_context: real grounding data for this conversation, if any --
+    the caller (routers/trips.py) combines two independent sources into
+    this one string: the currency-conversion agent step's findings
+    (Conversation.agent_context) and the real per-day forecast
+    (weather_service.summarize_for_prompt), when a trip with one exists.
+    Without this, the model has no real data to draw on for a question
+    like "what's the temperature there?" or "what should I pack?" -- the
+    real forecast is fetched once during itinerary generation and shown in
+    the UI, but never makes it into the stored message history this
+    function otherwise relies on, so the model would just invent a
+    plausible-sounding number instead of using the real one (confirmed
+    live: asked to suggest outfits for a 104-108°F Austin forecast, it
+    guessed "high 70s to low 80s" -- a real fabrication bug, not
+    hypothetical). Passing the real data here, plus telling the model not
+    to guess when it's missing, fixes both the wrong-number case and the
+    making-one-up case.
     """
     system_prompt = QUESTION_SYSTEM_PROMPT
     if agent_context:
@@ -282,12 +341,14 @@ def answer_question(prompt: str, chat_messages: list[dict], agent_context: str =
             "NOT proactively mention weather, packing, or currency figures "
             "on questions that aren't about them. When it is relevant, state "
             "ONLY what's given above, in the same units and form it's given "
-            "in (e.g. Celsius temperatures as given, no converting to "
-            "Fahrenheit, no adding qualitative conditions like \"sunny\" or "
-            "\"cloudy\" that weren't provided). Do not invent specific "
-            "numbers (temperatures, prices, exchange rates) or details that "
-            "aren't given here or in the conversation -- if you don't have "
-            "the real figure, say so instead of guessing."
+            "in (e.g. use the exact Celsius and/or Fahrenheit figures given "
+            "-- do not recompute, round differently, or convert a "
+            "temperature yourself if only one unit was given; no adding "
+            "qualitative conditions like \"sunny\" or \"cloudy\" that "
+            "weren't provided). Do not invent specific numbers "
+            "(temperatures, prices, exchange rates) or details that aren't "
+            "given here or in the conversation -- if you don't have the "
+            "real figure, say so instead of guessing."
         )
 
     try:

@@ -7,6 +7,11 @@ If a request would meaningfully change scope, sequencing, or one of the
 decisions below, ask the user before proceeding rather than assuming the
 original plan still holds.
 
+This file is a snapshot of current state and decisions, not a timeline —
+for the session-by-session history (what changed, what broke, what was
+learned building it), see [`docs/sessions/`](docs/sessions/README.md). Add
+an entry there at the end of a session with real, shippable changes.
+
 ## What this product is
 
 A chat-driven AI travel planner. Describe a trip in plain language, get a
@@ -65,14 +70,16 @@ the mismatch rather than silently editing one to match the other.
 
 | Decision | Rationale |
 |---|---|
-| LLM: Mistral (local) → **Gemini** — **done** | Workable free tier for hobby scale, no card required. Gives native structured JSON output (`response_schema`) and native function calling, replacing the old hand-rolled markdown-fence JSON parser and Ollama-specific tool loop — confirmed delivered, not just aspirational (`_parse_json` is gone entirely). Concrete correction found only by actually trying it: `gemini-2.5-flash` (this row's original target) 404s for new API keys; migrated to `gemini-3.6-flash` instead, which is a reasoning model requiring `thinking_config.thinking_level=MINIMAL` to avoid burning the output-token budget on invisible thinking tokens, and whose function-response messages must use `role="user"` (`role="tool"` is rejected outright, despite that being Ollama's shape). Free-tier RPM/TPM/RPD numbers are no longer published in static docs (only live per-account in AI Studio) — re-verify via your own account before relying on a specific figure. |
+| LLM: Mistral (local) → **Gemini** — **done** | Workable free tier for hobby scale, no card required. Gives native structured JSON output (`response_schema`) and native function calling, replacing the old hand-rolled markdown-fence JSON parser and Ollama-specific tool loop — confirmed delivered, not just aspirational (`_parse_json` is gone entirely). Concrete correction found only by actually trying it: `gemini-2.5-flash` (this row's original target) 404s for new API keys; migrated to `gemini-3.6-flash` instead, which is a reasoning model requiring `thinking_config.thinking_level=MINIMAL` to avoid burning the output-token budget on invisible thinking tokens, and whose function-response messages must use `role="user"` (`role="tool"` is rejected outright, despite that being Ollama's shape). Free-tier RPM/TPM/RPD numbers are no longer published in static docs (only live per-account in AI Studio) — re-verify via your own account before relying on a specific figure. **One concrete figure this account actually hit, 2026-08-25**: `gemini-3.6-flash`'s free tier is capped at **20 requests/day** per project (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`, confirmed via a live 429 after a day of testing) — easy to exhaust during active development (each `/trips/generate` call alone is 2+ Gemini calls: meta-inference + at least one chunk), not just real usage. A `502 Bad Gateway` from `/trips/generate` most likely means this, not a code/deploy problem — check the backend container logs for `RESOURCE_EXHAUSTED` before assuming otherwise. **Model swapped again, same day, 2026-08-25 — `gemini-3.6-flash` → `gemini-3.5-flash-lite`**, specifically to escape the above 20/day wall: `gemini-3.5-flash-lite` is a distinct model in Google's quota system (confirmed live — it answered successfully while `gemini-3.6-flash`'s daily cap was still exhausted) and passed every mechanical check live: clean `response_schema`/`.parsed` output, correct `start_day`/`end_day` chunk-range instruction-following, correct `convert_currency` function-calling (calls when useful, doesn't over-call when a prompt has no budget). **Google's open-weight Gemma 4 (`gemma-4-31b-it`, `gemma-4-26b-a4b-it`, also servable via the same Gemini API/SDK) was tried first and rejected** after live testing found real problems: `response_schema` didn't stop it from appending a trailing `` ``` `` markdown fence after the JSON (broke `response.parsed` entirely — Gemma answered `None`, the raw text needed manual `model_validate_json` and even then failed on the trailing fence), and it didn't reliably follow the explicit "write ONLY days N through M" chunk instruction (returned 1 day when 3 were asked for). The 26B-A4B (MoE) variant was worse still — a real degenerate token-repetition loop on part of a generated itinerary ("...-alonnage-alonnage-alonnage..." repeated dozens of times), not usable for user-facing content. Gemma 4 remains a real, notable option (Apache 2.0, self-hostable later, native function calling) but not a drop-in replacement without real prompt-engineering work first — don't re-attempt it as a quick fix without addressing both issues found here. `gemini-2.5-flash-lite` (an earlier candidate) is confirmed 404ing for new users as of this change, redirecting to `gemini-3.5-flash-lite` — that's already what's in use. |
 | Database: MySQL → **Postgres on Neon** | pgvector lives in the same DB instance for the later cross-trip preference-memory feature — no separate vector service to run or pay for. Neon has no idle-pause gotcha (unlike Supabase's free tier). Trade-off accepted knowingly: Neon doesn't bundle free Auth the way Supabase would have, so auth is a fully separate build. |
-| Auth: built **last** | Schema already supports it (`user_id` everywhere). When it happens: **Google OAuth** specifically — Maps and Calendar both need a Google Cloud project + OAuth consent anyway, so one login flow should cover identity + Maps scope + Calendar scope together, not three separate integrations. |
+| Auth: built **last** | Schema already supports it (`user_id` everywhere). When it happens: **Google OAuth** specifically — Calendar's MCP server needs a Google Cloud project + OAuth consent anyway (see Calendar row), so the login flow should cover identity + Calendar scope together. Maps MCP now also needs the same Google Cloud project for billing (see Maps row), though its exact auth mechanism (OAuth vs. a plain API key) isn't confirmed yet — if it turns out to be API-key-only, Maps doesn't need to be bundled into the user-facing OAuth flow itself, just the shared Cloud project/billing setup. Confirm before finalizing the OAuth build-order step. |
 | Trip length: inferred from the prompt, no UI field | Explicitly rejected a "Trip length" slider/number-input in the Streamlit sidebar — say it in the message instead (e.g. "a week in Lisbon"). Don't re-add a form control for this without asking; it was tried and deliberately removed. |
-| Weather (OpenWeather): **removed**; agent tool-calling step **re-enabled**, currency only | Weather wasn't working reliably in practice for real answers even after the fabrication/on-demand-fetch fix (root cause not fully diagnosed — the API key was present and valid-looking, so this wasn't simply a missing-key issue) and stays removed; re-diagnose from scratch (or reconsider the source — e.g. Open-Meteo, no key required, is already the pick for the drafted Maps/routing plan) before ever re-adding it. Currency conversion was paused alongside weather at the time rather than leaving a half-working step running, but has now been flipped back on (`agent_service.AGENT_TOOL_CALLING_ENABLED = True`, 2026-08-25) and verified live: a real Frankfurter call (500 USD → 60,624 ISK) was correctly picked up by the model, folded into a grounded summary with matching numbers, and — separately — a no-budget prompt correctly triggered no tool call at all rather than inventing one. `AGENT_TOOL_CALLING_ENABLED` stays as a kill switch if currency ever shows the same unreliability weather did. |
+| Weather (OpenWeather): **removed**; agent tool-calling step **re-enabled**, currency only | Weather wasn't working reliably in practice for real answers even after the fabrication/on-demand-fetch fix (root cause not fully diagnosed — the API key was present and valid-looking, so this wasn't simply a missing-key issue) and stays removed; re-diagnose from scratch (or reconsider the source — e.g. Open-Meteo, no key required, remains the pick regardless of the Maps-stack decision) before ever re-adding it. Currency conversion was paused alongside weather at the time rather than leaving a half-working step running, but has now been flipped back on (`agent_service.AGENT_TOOL_CALLING_ENABLED = True`, 2026-08-25) and verified live: a real Frankfurter call (500 USD → 60,624 ISK) was correctly picked up by the model, folded into a grounded summary with matching numbers, and — separately — a no-budget prompt correctly triggered no tool call at all rather than inventing one. `AGENT_TOOL_CALLING_ENABLED` stays as a kill switch if currency ever shows the same unreliability weather did. **Resolved, 2026-08-25 — weather is back, real-time, per-day, via Open-Meteo, and it's neither an MCP server nor a Gemini tool at all.** Evaluated community Open-Meteo MCP servers vs. building one ourselves vs. a plain `tools.py`-shaped function (per principle #8's decision rules) — landed on a fourth option once it became clear weather-to-*display* is never a judgment call the model makes (unlike currency, which the model opts into). It's a plain deterministic backend service (`date_resolver.py` + `weather_service.py`), called directly by `routers/trips.py`/`routers/conversations.py` on every trip, not registered in `tools.py`'s `TOOL_SCHEMAS`/routed through `agent_service.py` at all — so MCP's reason for existing (giving an LLM discoverable, callable tools) doesn't apply here, and the feature's marginal LLM cost is zero (no extra Gemini call, no extra tokens). Needed a new prerequisite that didn't exist at all: `Trip.start_date`, resolved from the prompt in real Python (`date_resolver.py`, regex-extracted date substrings + `dateutil`, never a whole-prompt fuzzy parse — that was tried first and confirmed live to misfire, e.g. "September 3rd" inside "...starting September 3rd" got polluted by an unrelated "5" elsewhere in the prompt into 2003-09-05) per principle #6. Verified live: real geocoding + a real Reykjavik forecast (7–11°C, overcast/light drizzle) came back correctly for a resolved date. Cached per-trip (`Trip.weather_json`/`weather_fetched_at`, 3-hour TTL) to stay well inside Open-Meteo's free 10,000/day cap regardless of how many times a trip is reloaded. **Fahrenheit added, 2026-08-25**: `weather_service._celsius_to_fahrenheit` computes both units with real Python arithmetic at fetch time (never left for the LLM to convert, same discipline as principle #6) — `DayWeatherOut` carries `temp_min_f`/`temp_max_f` alongside the existing Celsius fields, and the Streamlit display shows both ("High 11°C / 52°F"). **Threaded into conversational Q&A too, 2026-08-25** (see the bug/correctness-pass entry below for why): `routers/trips.py`'s question branch now looks up the conversation's latest trip's real forecast on every question turn and folds it into `answer_question`'s grounding via `weather_service.summarize_for_prompt` — `answer_question`'s system prompt was updated to allow stating the real Celsius/Fahrenheit figures exactly as given (not to invent a conversion when only one unit was provided, which is a different thing). |
 | Flights: no live pricing API for MVP | No workable free flight-pricing API exists as of Aug 2026 — Amadeus self-service, the obvious free option, was fully decommissioned July 17 2026. Treat flight cost as an LLM-reasoned rough estimate, clearly labeled as such, until there's budget for a paid API (~$10-20/mo — Duffel, AeroDataBox) or a better free option surfaces. Re-check the landscape before building against a live flights integration. |
 | Hotels: search/compare only, not booking | Real reservations need PCI-compliant payment flows and hotel partner agreements — out of scope for a free-tier indie MVP. Deep-link out to Booking.com/Google Hotels rather than booking in-app. |
-| Maps: OSM-based stack (Nominatim + Overpass + OpenRouteService + Open-Meteo + Wikipedia), not Google Maps Platform | Avoids requiring a Google Cloud billing account — Google Maps Platform needs one even at $0 spend (the same constraint that originally justified bundling Maps with OAuth setup below). The OSM stack is genuinely free with no card on file, at the cost of weaker geocoding accuracy for vague free-text place names and public shared-instance reliability (Nominatim: hard 1 req/sec cap across the whole app; Overpass: no SLA). Acceptable tradeoffs for a $0-budget hobby MVP. Full design: see the planned Maps/routing integration (deep per-item coordinates + legs, deterministic energy/pacing signal, grounded-not-invented importance notes) — plan drafted, not yet built. Re-verify free-tier terms before relying on specific figures, same as every other row in this table. |
+| Maps: OSM-based stack → **reversed, Aug 2026 — switching to Google's official Maps MCP server** | Originally picked to avoid a Google Cloud billing account (Maps Platform needs one even at $0 spend). Reversed after Google shipped a fully-managed, officially supported Maps MCP server in 2026 (same wave as the Calendar MCP server below) that per Google's announcement bundles weather-forecast grounding alongside places/routing — potentially covering both the weather and Maps items on the future-tools list with one integration. Knowingly re-accepts the billing-account requirement the OSM pivot existed to avoid; judged worth it for an officially maintained server instead of hand-rolling and maintaining a 5-service OSM client (Nominatim/Overpass/OpenRouteService/Open-Meteo/Wikipedia) with its own reliability caveats (Nominatim's 1 req/sec cap, Overpass's no-SLA). **Unverified as of this decision** — Google's announcement didn't disclose Maps MCP pricing, free-tier limits, or exact auth flow (OAuth vs. API key); confirm all three before writing any code against it. The previously-drafted OSM-based Maps/routing plan (deep per-item coordinates + legs, energy/pacing signal, grounded importance notes) is superseded — re-derive the design against Maps MCP's actual tool surface once the above is confirmed, don't assume the old design transfers as-is. |
+| Calendar: hand-rolled `googleapiclient` calls → **Google's official Calendar MCP server** (`calendarmcp.googleapis.com`) | Google shipped a fully-managed, officially supported remote Calendar MCP server in 2026 (OAuth 2.0, 8 tools: list calendars, retrieve events, check availability, create/update/delete events) — same prerequisite this project already needed anyway (a Google Cloud project + OAuth consent screen for the planned Google login), so adopting it costs nothing extra in setup and replaces what would've been hand-written `googleapiclient` calls with a maintained server. Still bundled with Google OAuth login exactly as originally planned (build order item 5) — unchanged by this decision, just the Calendar half is now MCP instead of a direct API client. |
+| Reliability: **Groq added as an automatic fallback** when Gemini's quota is exhausted, 2026-08-25 | Direct response to the `gemini-3.6-flash` 20-requests/day wall above — a live demo can't be allowed to 502 mid-presentation. Groq's free tier (30 RPM / 6,000 TPM / **14,400 requests/day**, no card, no expiry) is ~700x that cap. Scoped to `llm_service.py`'s core paths only (`_call_gemini`/`_call_gemini_chat`, so every caller — intent classification, meta inference, chunk generation, Q&A — gets it automatically) and gated strictly on `_is_rate_limited` (HTTP 429 specifically) so a real bug (bad schema, invalid key, Google's servers down) still fails exactly as before rather than being masked by "well, Groq answered." Deliberately **not** wired into `agent_service.py`'s currency tool-calling step — that already degrades gracefully to `""` on any failure, so it's lower-stakes and out of scope. New `groq_service.py`, using the `openai` SDK pointed at Groq's OpenAI-compatible endpoint (principle #3: reuse an existing wrapper, don't hand-roll one) — model is `llama-3.3-70b-versatile`, deliberately **not Gemma 4** despite Gemma also being servable via Groq (see the row above: real problems found live). Anthropic Claude and OpenAI were evaluated and ruled out for this — neither has a persistent free API tier in 2026 (both give a one-time ~$5 trial credit, then pay-as-you-go), which doesn't sustain this project's $0 budget; revisit if that constraint ever changes. Groq's structured-output strict mode requires every schema property to be listed as required, which doesn't match this app's schemas (e.g. optional `notes` fields) — used in best-effort (`strict: false`) mode plus manual `model_validate_json` instead of fighting that mismatch. Not yet live-verified end-to-end (no `GROQ_API_KEY` was available to test with this session) — verified via mocked tests only; live-verify before relying on this for an actual presentation. |
 
 ## Architecture principles
 
@@ -118,6 +125,41 @@ Apply these to every new tool/integration, not just the ones that exist today.
    settling for a bare "I don't know" if the answer is gettable —
    `answer_question`/`gather_trip_context`'s on-demand-fetch-when-nothing's-
    cached handling is the reference pattern for both halves of this.
+8. **Prefer MCP for new external tool integrations, when a trustworthy
+   server exists.** As of Aug 2026, Google ships fully-managed, officially
+   supported remote MCP servers for both Calendar (`calendarmcp.
+   googleapis.com`) and Maps (via Google Maps Platform), and `google-genai`'s
+   Python SDK has experimental native MCP support — pass an
+   `mcp.ClientSession` straight into `GenerateContentConfig(tools=[...])`
+   and Gemini both discovers the server's tools and calls them, largely
+   replacing the hand-rolled `FunctionDeclaration` schema + manual
+   round-trip loop that `agent_service.py`/`tools.py` use today for
+   currency. This does **not** mean tools "talk to the LLM directly"
+   bypassing the backend — the backend is still the MCP *client*: it still
+   owns the connection to each MCP server (remote HTTP or a self-hosted
+   subprocess), still routes results through Gemini, and still needs the
+   same anti-fabrication grounding (principle #7) regardless of transport.
+   What MCP actually buys: less hand-written REST-wrapper code, and a
+   standard shape that scales to more integrations without every one
+   becoming a bespoke client. Decide per integration, not blanket:
+   - An **official, managed, remote** MCP server (HTTP/OAuth, e.g.
+     Calendar's) is the easy case — no subprocess to run, no third-party
+     code to vet, roughly interchangeable with hand-rolling the same calls
+     via `googleapiclient`.
+   - A **self-hosted third-party** MCP server (stdio subprocess/container,
+     e.g. a community Open-Meteo weather server) trades hand-written REST
+     code for a Docker Compose service and a third-party codebase you now
+     have to trust and keep updated — evaluate it like any new dependency,
+     don't add one uncritically just because it exists.
+   - A **small MCP server we write ourselves** is often better than
+     importing a third-party one when the tool surface is narrow — one
+     purpose-built tool with the exact flat/pre-aggregated shape
+     principle #2 already requires, versus a generic multi-tool community
+     server with more surface area (and more to trust) than the app needs.
+   - `google-genai`'s MCP support is **experimental** — re-verify it's
+     graduated (or learn its current limitations) before depending on it
+     for anything load-bearing, same as every other dated fact in this
+     file.
 
 ## MVP build order
 
@@ -135,7 +177,36 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    nothing's cached yet (see principle #7 and `answer_question`/
    `gather_trip_context`); weather still wasn't working reliably even after
    that fix, so it was removed and the whole agent tool-calling step paused
-   (see decision log) rather than sunk further into this round.
+   (see decision log) rather than sunk further into this round. **New
+   round, 2026-08-25** (after real per-day weather came back, see decision
+   log): confirmed live that a follow-up question ("what outfits would you
+   suggest based on the weather") got answered with plausible-but-wrong
+   temperatures (~70-80°F) against a real 104-108°F forecast, because the
+   real `Trip.weather_json` data was never passed to `answer_question` at
+   all -- only the currency-only `agent_context` was, a completely
+   separate mechanism. Fixed by having `routers/trips.py`'s question
+   branch look up the conversation's latest trip's weather on *every*
+   question turn (cheap: `weather_service` caches internally, unlike the
+   currency agent step which is a real Gemini call and stays cache-once-
+   per-conversation) via the new `weather_service.summarize_for_prompt`,
+   combined with the existing agent_context before reaching the model.
+   Re-verified live against the exact reported prompt after the fix: the
+   same follow-up now correctly cites 104-108°F. **Same day, next round**:
+   a second real gap found live -- "4 days from now" (vs. the already-
+   handled "in 4 days") silently resolved to no start date at all, so
+   weather never activated and the model correctly said it had no data
+   rather than guessing (the anti-fabrication path worked as designed --
+   this wasn't a fabrication bug, it was a date-phrase coverage gap).
+   `date_resolver.py` now also matches "N days/weeks from now/today", not
+   just "in N days/weeks". Also checked live whether the prompt's "reyjevik"
+   typo was a contributing factor (Open-Meteo's geocoder does fail on it,
+   confirmed) -- it wasn't, in this case: `_infer_trip_meta`'s Gemini call
+   already normalizes the destination before it ever reaches
+   `weather_service.geocode`, confirmed by the assistant's own itinerary
+   summary correctly saying "Reykjavik". A destination typo the model
+   *doesn't* catch remains a latent, unconfirmed risk -- geocoding has no
+   fuzzy-match fallback -- but isn't worth solving speculatively without a
+   real case.
 2. Gemini swap (structured output + native tool calling) — **done** (see
    decision log for the concrete `gemini-3.6-flash`/`thinking_level`/
    `role="user"` corrections found only by actually building it). The agent
@@ -149,9 +220,20 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    OAuth+Calendar: it no longer needs a Google Cloud project or billing
    account, so it doesn't need to wait on OAuth setup. OpenRouteService
    needs one free signup (API key, no card). Plan drafted, not yet built.
+   **Superseded by the Aug 2026 decision-log reversal** (see decision log):
+   now planned as Google's official Maps MCP server, not the OSM stack. The
+   rationale that originally moved this item up — "no longer needs a Google
+   Cloud project or billing account" — no longer holds, since Maps MCP needs
+   the same billing-enabled Google Cloud project as Calendar (item 5). Worth
+   reconsidering whether Maps and Calendar/OAuth should now be
+   sequenced/built together given that shared prerequisite — flagged here,
+   not resolved; don't resequence without discussing it first.
 5. Google login (OAuth) + Google Calendar push — bundled, one OAuth setup
    covers both. No longer needs to be bundled with Maps, since Maps moved
-   off Google infrastructure (see above).
+   off Google infrastructure (see above). Calendar side now planned via
+   Google's official Calendar MCP server (see decision log) rather than
+   hand-rolled `googleapiclient` calls; the OAuth/Cloud-project prerequisite
+   is unchanged.
 6. Flights / hotels — last; scoped down per the decisions above, the most
    expensive and least "free" part of the product.
 7. Cross-trip preference memory (pgvector) — only after the above works;
@@ -188,8 +270,10 @@ docker compose up --build
 
 Env vars (`.env`, see `.env.example`): `DATABASE_URL` (MySQL), `GEMINI_API_KEY`
 (free tier, no card — aistudio.google.com/apikey), `GEMINI_MODEL`
-(`gemini-3.6-flash` default), `BACKEND_URL` (frontend → backend). None of
-these are needed to run the test suite itself.
+(`gemini-3.5-flash-lite` default), `GROQ_API_KEY` (optional — free tier, no
+card, console.groq.com/keys; enables the automatic fallback when Gemini's
+quota is exhausted, see decision log), `BACKEND_URL` (frontend → backend).
+None of these are needed to run the test suite itself.
 
 ## Repo map
 
@@ -198,9 +282,12 @@ backend/app/
   main.py              FastAPI app, loads .env, mounts routers
   models.py             SQLAlchemy models: User, Conversation, Message, Trip, ItineraryItem
   database.py            DB engine/session setup
-  llm_service.py          Gemini calls: intent classification, itinerary generation, Q&A
-  agent_service.py        Tool-calling loop run ahead of generation -- paused, see decision log
+  llm_service.py          Gemini calls: intent classification, itinerary generation, Q&A -- falls back to groq_service.py on quota exhaustion, see decision log
+  groq_service.py          Fallback LLM provider (Groq, OpenAI-compatible SDK), only invoked on a Gemini 429 -- see decision log
+  agent_service.py        Tool-calling loop run ahead of generation -- re-enabled, see decision log
   tools.py                 Tool implementations + schemas (currency via Frankfurter; weather removed)
+  date_resolver.py          Real-Python date extraction from the prompt (no LLM) -- see decision log
+  weather_service.py        Open-Meteo geocode + per-day forecast, not a Gemini tool -- see decision log
   schemas.py                Pydantic request/response models (TripRequest, TripResponse, etc.)
   routers/trips.py         /trips/generate — the main request path, ties everything together
   routers/conversations.py  Chat history endpoints
@@ -208,4 +295,5 @@ backend/tests/            pytest, in-memory SQLite, Gemini calls mocked
 frontend/streamlit_app.py  Chat UI
 docker-compose.yml         Full local stack (mysql + backend + frontend)
 .github/workflows/ci.yml   Lint + test on push/PR; build & push images to GHCR on merge to main
+docs/sessions/             Session-by-session history/learnings log -- see its README.md
 ```

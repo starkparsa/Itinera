@@ -1,9 +1,10 @@
 import logging
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from .. import agent_service, llm_service, models, schemas
+from .. import agent_service, date_resolver, llm_service, models, schemas, weather_service
 from ..database import get_db
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -97,6 +98,18 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
     if intent == "question":
         chat_messages = _build_chat_messages(conversation)
 
+        # Needed below for both the on-demand currency fetch's destination
+        # hint and the real weather grounding -- looked up unconditionally
+        # now (not just inside the "nothing cached yet" branch below),
+        # since weather needs it on every question turn, not just the
+        # first one in a conversation.
+        latest_trip = (
+            db.query(models.Trip)
+            .filter(models.Trip.conversation_id == conversation.id)
+            .order_by(models.Trip.id.desc())
+            .first()
+        )
+
         # Nothing gathered yet for this conversation at all -- try a real,
         # scoped fetch before answering rather than letting the model guess
         # (see CLAUDE.md principle #7). Gated on `is None` specifically (not
@@ -106,12 +119,6 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
         # nothing", it won't fire again on every later question.
         fresh_agent_context = ""
         if conversation.agent_context is None:
-            latest_trip = (
-                db.query(models.Trip)
-                .filter(models.Trip.conversation_id == conversation.id)
-                .order_by(models.Trip.id.desc())
-                .first()
-            )
             # A destination hint helps when the question itself doesn't name
             # a place ("what does the temperature look like?"); fine to
             # leave unset if no trip exists yet -- the question text alone
@@ -122,9 +129,27 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
 
         effective_agent_context = fresh_agent_context or (conversation.agent_context or "")
 
+        # Real per-day forecast, if this conversation has a trip with one.
+        # Regression fix: a question about weather-appropriate outfits was
+        # answered with plausible-but-wrong temperatures (~70-80F for a
+        # real 104-108F forecast) because this data never reached the Q&A
+        # path at all -- only the currency agent_context above did (see
+        # CLAUDE.md decision log). Called on every question turn, not just
+        # once per conversation like the agent step above -- unlike that
+        # Gemini call, weather_service caches internally (3h TTL, see
+        # get_or_refresh_trip_weather), so this is a cheap cache read in
+        # the common case, not a fresh fetch every time.
+        weather_context = ""
+        if latest_trip:
+            weather_data = weather_service.get_or_refresh_trip_weather(latest_trip, latest_trip.items)
+            if weather_data:
+                weather_context = weather_service.summarize_for_prompt(latest_trip.destination, weather_data)
+
+        combined_context = " ".join(part for part in (effective_agent_context, weather_context) if part)
+
         try:
             reply_text = llm_service.answer_question(
-                request.prompt, chat_messages, agent_context=effective_agent_context,
+                request.prompt, chat_messages, agent_context=combined_context,
             )
         except Exception as exc:
             logger.exception("Q&A request failed for conversation %s", conversation.id)
@@ -170,11 +195,28 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
     if was_freshly_gathered:
         conversation.agent_context = result.get("agent_context", "")
 
+    # Real calendar start date, resolved in Python (never LLM arithmetic --
+    # principle #6). If this turn's prompt doesn't say a date (e.g. an
+    # edit_trip turn like "make it longer"), fall back to whatever the
+    # previous trip in this conversation resolved, the same reuse pattern
+    # already used for the agent_context cache and the Q&A destination hint.
+    start_date = date_resolver.resolve_trip_start_date(request.prompt, date.today())
+    if start_date is None:
+        previous_trip = (
+            db.query(models.Trip)
+            .filter(models.Trip.conversation_id == conversation.id)
+            .order_by(models.Trip.id.desc())
+            .first()
+        )
+        if previous_trip:
+            start_date = previous_trip.start_date
+
     trip = models.Trip(
         user_id=request.user_id,
         conversation_id=conversation.id,
         destination=result.get("destination", "Unknown"),
         prompt=request.prompt,
+        start_date=start_date,
     )
     db.add(trip)
 
@@ -193,6 +235,8 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
                 )
                 db.add(db_item)
                 items_out.append(db_item)
+
+        weather_out = weather_service.get_or_refresh_trip_weather(trip, items_out)
 
         assistant_summary = _summarize_itinerary(trip.destination, items_out)
 
@@ -216,6 +260,7 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
         note=result.get("note"),
         agent_context=result.get("agent_context") if was_freshly_gathered else None,
         conversation_id=conversation.id,
+        weather=[schemas.DayWeatherOut(**w) for w in weather_out],
     )
 
 
@@ -225,9 +270,13 @@ def get_trip(trip_id: int, db: Session = Depends(get_db)):
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
 
+    weather_out = weather_service.get_or_refresh_trip_weather(trip, trip.items)
+    db.commit()
+
     return schemas.TripResponse(
         trip_id=trip.id,
         destination=trip.destination,
         itinerary=[schemas.ItineraryItemOut.model_validate(i) for i in trip.items],
         conversation_id=trip.conversation_id,
+        weather=[schemas.DayWeatherOut(**w) for w in weather_out],
     )

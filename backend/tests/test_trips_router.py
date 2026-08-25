@@ -1,3 +1,4 @@
+from datetime import date
 from unittest.mock import patch
 
 import pytest
@@ -389,3 +390,175 @@ def test_question_on_demand_fetch_uses_existing_trip_destination_as_hint():
         )
 
     mock_fetch.assert_called_once_with("what does the temperature look like?", destination="Austin")
+
+
+# ---------- weather: date resolution + forecast attachment ----------
+
+def test_weather_is_empty_when_no_date_resolves():
+    # No date-like signal in the prompt -- resolve_trip_start_date returns
+    # None, so Trip.start_date stays unset and get_or_refresh_trip_weather's
+    # own short-circuit kicks in (see test_weather_service.py) without ever
+    # hitting the network. weather_service is deliberately left unmocked
+    # here to prove that: a real network call would make this test flaky/
+    # slow instead of just failing loudly.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+
+    assert response.json()["weather"] == []
+
+
+def test_weather_present_when_start_date_resolves():
+    fake_weather = [
+        {"day_number": 1, "date": "2026-08-30", "temp_min": 14.0, "temp_max": 22.5, "temp_min_f": 57.2, "temp_max_f": 72.5, "condition": "Clear sky"},
+    ]
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+    ):
+        response = client.post("/trips/generate", json={"prompt": "weekend in Austin starting 2026-08-30"})
+
+    assert response.json()["weather"] == fake_weather
+
+
+def test_weather_falls_back_to_previous_trips_start_date_on_a_followup():
+    # An edit turn ("make it a full week") rarely repeats the date -- should
+    # reuse the date resolved on the first turn in the same conversation,
+    # same reuse pattern already used for agent_context/destination hints.
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]),
+    ):
+        first = client.post("/trips/generate", json={"prompt": "weekend in Austin starting 2026-08-30"})
+    conv_id = first.json()["conversation_id"]
+
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]) as mock_weather,
+    ):
+        client.post("/trips/generate", json={"prompt": "make it a full week", "conversation_id": conv_id})
+
+    second_trip_arg = mock_weather.call_args.args[0]
+    assert second_trip_arg.start_date == date(2026, 8, 30)
+
+
+def test_get_trip_by_id_includes_weather():
+    fake_weather = [
+        {"day_number": 1, "date": "2026-08-30", "temp_min": 14.0, "temp_max": 22.5, "temp_min_f": 57.2, "temp_max_f": 72.5, "condition": "Clear sky"},
+    ]
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+    ):
+        created = client.post("/trips/generate", json={"prompt": "weekend in Austin starting 2026-08-30"})
+    trip_id = created.json()["trip_id"]
+
+    with patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather):
+        fetched = client.get(f"/trips/{trip_id}")
+
+    assert fetched.json()["weather"] == fake_weather
+
+
+def test_conversation_reload_includes_weather():
+    fake_weather = [
+        {"day_number": 1, "date": "2026-08-30", "temp_min": 14.0, "temp_max": 22.5, "temp_min_f": 57.2, "temp_max_f": 72.5, "condition": "Clear sky"},
+    ]
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+    ):
+        created = client.post("/trips/generate", json={"prompt": "weekend in Austin starting 2026-08-30"})
+    conv_id = created.json()["conversation_id"]
+
+    with patch("app.routers.conversations.weather_service.get_or_refresh_trip_weather", return_value=fake_weather):
+        conv = client.get(f"/conversations/{conv_id}").json()
+
+    assert conv["messages"][1]["trip"]["weather"] == fake_weather
+
+
+# ---------- regression: real weather must reach Q&A, not just currency ----------
+
+def test_question_about_weather_is_grounded_in_the_real_forecast():
+    # Regression test for the exact reported bug: "what should I pack given
+    # the weather" was answered with plausible-but-wrong temperatures
+    # (~70-80F) when the real fetched forecast was 104-108F, because the
+    # real per-day weather was never passed to answer_question at all --
+    # only the currency-only agent_context was. Weather must reach the
+    # Q&A grounding even though it's a completely separate mechanism
+    # (Trip.weather_json) from Conversation.agent_context.
+    fake_weather = [
+        {"day_number": 1, "date": "2026-08-26", "temp_min": 25.0, "temp_max": 40.0, "temp_min_f": 77.0, "temp_max_f": 104.0, "condition": "Overcast"},
+    ]
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+    ):
+        first = client.post("/trips/generate", json={"prompt": "4 days in Austin starting 2026-08-26"})
+    conv_id = first.json()["conversation_id"]
+
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+        patch("app.llm_service.answer_question", return_value="Light, breathable clothing given the heat.") as mock_answer,
+    ):
+        client.post(
+            "/trips/generate",
+            json={"prompt": "what outfits would you suggest based on the weather", "conversation_id": conv_id},
+        )
+
+    sent_context = mock_answer.call_args.kwargs["agent_context"]
+    assert "104" in sent_context  # the real high, not an invented one
+    assert "Austin" in sent_context
+
+
+def test_question_weather_grounding_refreshes_every_turn_unlike_currency():
+    # Unlike the currency agent step (gathered once per conversation and
+    # cached on Conversation.agent_context), weather has its own cache
+    # inside weather_service itself -- so it should be looked up on every
+    # question turn, not just the first, even after Conversation.agent_context
+    # is already set.
+    fake_weather = [
+        {"day_number": 1, "date": "2026-08-26", "temp_min": 25.0, "temp_max": 40.0, "temp_min_f": 77.0, "temp_max_f": 104.0, "condition": "Overcast"},
+    ]
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+    ):
+        first = client.post("/trips/generate", json={"prompt": "4 days in Austin starting 2026-08-26"})
+    conv_id = first.json()["conversation_id"]
+
+    # First question -- Conversation.agent_context transitions from None to "".
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+        patch("app.llm_service.answer_question", return_value="It'll be hot."),
+    ):
+        client.post("/trips/generate", json={"prompt": "how's the weather?", "conversation_id": conv_id})
+
+    # Second question -- Conversation.agent_context is now "" (cached), but
+    # weather grounding must still be fetched and included.
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context") as mock_currency_fetch,
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather) as mock_weather_fetch,
+        patch("app.llm_service.answer_question", return_value="Still hot.") as mock_answer,
+    ):
+        client.post("/trips/generate", json={"prompt": "what should I wear?", "conversation_id": conv_id})
+
+    mock_currency_fetch.assert_not_called()  # currency stays cache-once, unchanged
+    mock_weather_fetch.assert_called_once()  # weather is looked up again
+    assert "104" in mock_answer.call_args.kwargs["agent_context"]
+
+
+def test_question_with_no_trip_has_no_weather_context():
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather") as mock_weather_fetch,
+        patch("app.llm_service.answer_question", return_value="I'm not sure yet.") as mock_answer,
+    ):
+        client.post("/trips/generate", json={"prompt": "what's the weather like somewhere?"})
+
+    mock_weather_fetch.assert_not_called()  # no trip in this conversation to fetch weather for
+    assert mock_answer.call_args.kwargs["agent_context"] == ""
