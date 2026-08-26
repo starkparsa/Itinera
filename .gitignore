@@ -14,8 +14,13 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to repo root (leading /) -- the bare `lib/`/`lib64/` this
+# generic Python template ships with matches at ANY depth, which was
+# silently swallowing frontend/src/lib/ (Server Actions, JWT signing,
+# shared types -- 6 files) from git entirely since the initial commit.
+# Found during the 2026-08-26 cleanup pass; see CLAUDE.md's decision log.
+/lib/
+/lib64/
 parts/
 sdist/
 var/

@@ -81,7 +81,7 @@ Open http://localhost:3000.
 ## Running tests
 ```bash
 cd backend
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-dev.txt
 pytest -v
 ```
 Tests use an in-memory SQLite database and mock the Gemini calls, so no

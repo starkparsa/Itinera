@@ -1,0 +1,24 @@
+# Keeps the build context small -- .venv alone runs 250MB+ locally and none
+# of this is ever COPYed into the image (the Dockerfile only copies
+# requirements.txt and app/), so without this file every `docker build`
+# tars and uploads it all to the Docker daemon for nothing.
+.venv
+venv
+env/
+__pycache__
+**/__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+
+# Tests and dev tooling aren't needed to run the API in the image.
+tests
+pyproject.toml
+
+# Never ship local secrets or VCS metadata into an image layer.
+.env
+.git
+.gitignore

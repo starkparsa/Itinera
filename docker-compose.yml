@@ -26,7 +26,7 @@ services:
     environment:
       DATABASE_URL: mysql+pymysql://travel_user:travel_pass@mysql:3306/travel_planner
       GEMINI_API_KEY: ${GEMINI_API_KEY}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       AUTH_BACKEND_SECRET: ${AUTH_BACKEND_SECRET}
       # Needed to refresh a user's Calendar access token (Phase D) --
       # google_calendar.py builds a real google-auth Credentials object

@@ -40,26 +40,41 @@ the mismatch rather than silently editing one to match the other.
   tool-calling loop (`agent_service.py` + `tools.py`) and conversation-scoped
   agent-findings caching (`Conversation.agent_context`) —
   **paused again** (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`) as
-  of 2026-08-26. Weather (OpenWeather) was removed outright on 2026-08-25
-  because it wasn't working reliably in practice, and stays removed.
-  Currency conversion (Frankfurter) was re-enabled the same day and verified
-  live working correctly, but is paused again as of 2026-08-26 for a
-  different reason — a product decision that it isn't needed, not a
+  of 2026-08-26, currency-only (this is the tool-calling *loop*, not
+  weather). Weather (OpenWeather, the tool that used to live in this same
+  loop) was removed outright on 2026-08-25 because it wasn't working
+  reliably in practice, and stays removed *as a Gemini tool* — but real
+  weather itself is back the same day via a completely different path:
+  `weather_service.py`, a plain deterministic Open-Meteo client called
+  directly by the routers on every trip, never routed through
+  `agent_service.py`/Gemini at all (see decision log's Weather row). Don't
+  conflate the two: the agent tool-calling loop is paused (currency only),
+  weather is live and unrelated to that loop's on/off state. Currency
+  conversion (Frankfurter) was re-enabled the same day the loop covers and
+  verified live working correctly, but is paused again as of 2026-08-26 for
+  a different reason — a product decision that it isn't needed, not a
   reliability problem (see decision log) — via the same kill switch flag,
   so `gather_trip_context()` short-circuits to `""` exactly as it did during
   its earlier pause.
 - **Frontend**: Next.js (App Router, TypeScript), `frontend/src/`. Migrated
-  off Streamlit 2026-08-26 (see decision log) — **Phase A only**: full UI
-  parity with the old Streamlit app (chat, sidebar history, itinerary +
-  weather rendering, both `.ics` export buttons), calling the **unmodified**
-  backend, no auth yet. Phases B–D (Google OAuth via Auth.js, per-user data
-  isolation, Calendar MCP push) are planned but not built — every request
-  still runs under the placeholder user, same as before the migration.
-  Deliberately minimal — no trip-length field or similar form controls;
-  trip parameters come from the prompt text (see decision log, this was a
-  deliberate reversal, predates the Next.js migration and still applies).
-- **LLM**: Gemini API (`google-genai`), model `gemini-3.6-flash` by default
-  (`GEMINI_MODEL` env var). Migrated off local Ollama/Mistral this session —
+  off Streamlit 2026-08-26 (see decision log). All four planned phases are
+  now done: Phase A (UI parity, no auth), Phase B (Auth.js Google login +
+  JWT bridge), Phase C (per-user data isolation), Phase D (Calendar push).
+  The old two-button export UI (a `.ics` download button plus a separate
+  "Connect Google Calendar" step) was merged into one always-shown
+  **"Export Plan"** button (`CalendarPushButton.tsx`) the same day, once
+  Calendar access got bundled into the base login — see decision log's
+  Auth row for the full sequencing. Deliberately minimal — no trip-length
+  field or similar form controls; trip parameters come from the prompt text
+  (see decision log, this was a deliberate reversal, predates the Next.js
+  migration and still applies).
+- **LLM**: Gemini API (`google-genai`), model `gemini-3.5-flash-lite` by
+  default (`GEMINI_MODEL` env var, `llm_service.py`; `docker-compose.yml`'s
+  inline fallback was still naming the pre-swap `gemini-3.6-flash` until the
+  2026-08-26 cleanup pass caught and fixed the mismatch — harmless in
+  practice as long as `GEMINI_MODEL` is set in `.env`, since that overrides
+  either fallback, but worth knowing the two files can drift). Migrated
+  off local Ollama/Mistral this session —
   native structured output (`response_schema`) replaced the hand-rolled
   markdown-fence JSON parser, native function calling
   (`types.FunctionDeclaration`) replaced the Ollama-specific tool loop in
@@ -75,8 +90,11 @@ the mismatch rather than silently editing one to match the other.
   see decision log. Every trip/conversation endpoint requires a valid
   signed-in session and is scoped to the caller's own data;
   `POST /trips/{id}/push-to-calendar` pushes an itinerary as real events
-  once a user has connected Calendar access (incremental OAuth consent —
-  never requested at plain login). Not usable end-to-end without a real
+  once a user has connected Calendar access — the Calendar scope is
+  bundled into the base Google login itself as of the same-day Export Plan
+  merge (see decision log's Auth row), not requested incrementally;
+  `connectGoogleCalendarAction`'s incremental re-consent flow survives only
+  as a fallback for a stale/revoked credential. Not usable end-to-end without a real
   Google OAuth client (`AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET`,
   `TOKEN_ENCRYPTION_KEY` in `.env`) — every phase verified as far as
   possible without one, up to Google's own `invalid_client` rejection of
@@ -170,6 +188,7 @@ backend-bound JWT gets attached to these same calls.
 | Maps: OSM-based stack → **reversed, Aug 2026 — switching to Google's official Maps MCP server** | Originally picked to avoid a Google Cloud billing account (Maps Platform needs one even at $0 spend). Reversed after Google shipped a fully-managed, officially supported Maps MCP server in 2026 (same wave as the Calendar MCP server below) that per Google's announcement bundles weather-forecast grounding alongside places/routing — potentially covering both the weather and Maps items on the future-tools list with one integration. Knowingly re-accepts the billing-account requirement the OSM pivot existed to avoid; judged worth it for an officially maintained server instead of hand-rolling and maintaining a 5-service OSM client (Nominatim/Overpass/OpenRouteService/Open-Meteo/Wikipedia) with its own reliability caveats (Nominatim's 1 req/sec cap, Overpass's no-SLA). **Unverified as of this decision** — Google's announcement didn't disclose Maps MCP pricing, free-tier limits, or exact auth flow (OAuth vs. API key); confirm all three before writing any code against it. The previously-drafted OSM-based Maps/routing plan (deep per-item coordinates + legs, energy/pacing signal, grounded importance notes) is superseded — re-derive the design against Maps MCP's actual tool surface once the above is confirmed, don't assume the old design transfers as-is. |
 | Calendar: hand-rolled `googleapiclient` calls → **Google's official Calendar MCP server** (`calendarmcp.googleapis.com`) → **reversed back to `googleapiclient`, 2026-08-26** | Google shipped a fully-managed, officially supported remote Calendar MCP server in 2026 (OAuth 2.0, 8 tools: list calendars, retrieve events, check availability, create/update/delete events) — same prerequisite this project already needed anyway (a Google Cloud project + OAuth consent screen for the planned Google login), so adopting it costs nothing extra in setup and replaces what would've been hand-written `googleapiclient` calls with a maintained server. Still bundled with Google OAuth login exactly as originally planned (build order item 5) — unchanged by this decision, just the Calendar half is now MCP instead of a direct API client. **Reversed at Phase D implementation time**: the go/no-go check this row's own principle-#8 caveat called for came back negative — `google-genai`'s MCP support is still explicitly "experimental" (live-verified via Google's own SDK docs, not assumed), and the Calendar MCP server itself is gated behind Google's Workspace Developer Preview Program, not GA. Went with the originally-superseded `googleapiclient` approach instead (see the Auth decision row's Phase D entry for the implementation) — also the better architectural fit on independent merits: a Calendar push is a deterministic user click, not a Gemini judgment call, so MCP's "give an LLM discoverable tools" rationale never actually applied here the way it does for a real agent-facing integration. |
 | Reliability: **Groq added as an automatic fallback** when Gemini's quota is exhausted, 2026-08-25 | Direct response to the `gemini-3.6-flash` 20-requests/day wall above — a live demo can't be allowed to 502 mid-presentation. Groq's free tier (30 RPM / 6,000 TPM / **14,400 requests/day**, no card, no expiry) is ~700x that cap. Scoped to `llm_service.py`'s core paths only (`_call_gemini`/`_call_gemini_chat`, so every caller — intent classification, meta inference, chunk generation, Q&A — gets it automatically) and gated strictly on `_is_rate_limited` (HTTP 429 specifically) so a real bug (bad schema, invalid key, Google's servers down) still fails exactly as before rather than being masked by "well, Groq answered." Deliberately **not** wired into `agent_service.py`'s currency tool-calling step — that already degrades gracefully to `""` on any failure, so it's lower-stakes and out of scope. New `groq_service.py`, using the `openai` SDK pointed at Groq's OpenAI-compatible endpoint (principle #3: reuse an existing wrapper, don't hand-roll one) — model is `llama-3.3-70b-versatile`, deliberately **not Gemma 4** despite Gemma also being servable via Groq (see the row above: real problems found live). Anthropic Claude and OpenAI were evaluated and ruled out for this — neither has a persistent free API tier in 2026 (both give a one-time ~$5 trial credit, then pay-as-you-go), which doesn't sustain this project's $0 budget; revisit if that constraint ever changes. Groq's structured-output strict mode requires every schema property to be listed as required, which doesn't match this app's schemas (e.g. optional `notes` fields) — used in best-effort (`strict: false`) mode plus manual `model_validate_json` instead of fighting that mismatch. Not yet live-verified end-to-end (no `GROQ_API_KEY` was available to test with this session) — verified via mocked tests only; live-verify before relying on this for an actual presentation. |
+| Codebase cleanup pass, 2026-08-26 | Full read-through of every file under `backend/app/`, `backend/tests/`, and `frontend/src/` after the OAuth work above — not just `ruff`/`eslint`, which only catch dead code *within* a file, not a whole function/route with zero callers anywhere, and (as this pass found) neither one checks whether a file is in version control at all. **Most significant finding, a real bug, not a style issue**: `frontend/src/lib/` — `authActions.ts`, `authHeader.ts`, `backend.ts`, `mintBackendJwt.ts`, `types.ts`, `weatherIcon.ts` (the Server Actions that call FastAPI, the entire JWT-minting/auth-bridge logic, shared types) — had **never been committed to git, since the initial commit**, confirmed via `git log --all` returning zero commits for any of them. Root cause: the root `.gitignore`'s generic Python-packaging boilerplate has a bare `lib/` line meant for a Python build's output directory; unanchored gitignore patterns match at any depth, so it was also silently swallowing `frontend/src/lib/`. Every "full suite passes"/"Docker rebuilt and confirmed running" verification earlier this session was against this local disk, which still had the real files on it regardless of git — none of that would have caught this; only an actual fresh clone or a real CI checkout from `origin` would (and per this repo's own `ci.yml`, likely has been failing the `frontend-lint-and-build`/`build-and-push` jobs since Phase A, since GitHub Actions checks out from the remote, not this disk). Fixed by anchoring the pattern to the repo root (`/lib/`, `/lib64/`) and `git add`-ing all six files for the first time; scanned every other tracked directory for the same shadowing pattern and found no other collisions. Confirm the next real push actually shows these files landing in the GitHub repo, and check whether past CI runs on `main` were in fact red because of this. Found and removed one genuinely dead export: `frontend/src/lib/backend.ts`'s `getGoogleCalendarStatus()`, a leftover Server Action from before the same-day "Export Plan" button merge, with zero callers anywhere in the app (confirmed via repo-wide grep). Also found `backend/` had **no `.dockerignore` at all** — `docker build ./backend`'s context included the full local `.venv` (261MB, confirmed via `du`), even though nothing in it is ever `COPY`'d into the image; added one, verified the build context dropped to 772 bytes and the image still builds and runs identically. Split `pytest`/`httpx` out of `requirements.txt` into a new `requirements-dev.txt` — the production backend image was installing a test runner and test-only HTTP client for no runtime reason; `ci.yml` and `README.md` updated to install both files for lint/test, `Dockerfile` needed no change (it only ever installed `requirements.txt`). Two other candidates — `GET /trips/{id}/calendar.ics` + its Next.js proxy route, and `GET /auth/google-calendar-status` — looked unreachable (nothing in the current UI links to either) but turned out to be **intentional** retentions from the same-day Export Plan merge, not oversights; kept as-is after confirming with the user rather than unilaterally deleting a documented product decision (see the Itinerary export and Auth rows below). Full backend suite still 180 passed, frontend lint/typecheck still clean, real `docker build` verified. See [`docs/sessions/2026-08-26-codebase-cleanup.md`](docs/sessions/2026-08-26-codebase-cleanup.md). **Deliberately not touched**: `datetime.utcnow()`'s Python 3.12+ deprecation warnings (360 across the test suite) — naive UTC datetimes are this project's documented, project-wide convention (see `backend/pyproject.toml`'s `DTZ` ruff-ignore comment); switching every call site to timezone-aware datetimes is a real architectural decision, not a cleanup-pass side effect. |
 | Itinerary export: **.ics only, built 2026-08-26** — PDF deferred | Build-order item 3. New `calendar_export.py` (pure formatting, no LLM, no network call) builds one `VEVENT` per `ItineraryItem` via the `icalendar` library (pinned `==7.3.0`, the current stable release verified on PyPI at build time — pure Python, no transitive network-calling deps). Each event's real date is `trip.start_date + (day_number - 1)`, plain Python arithmetic (principle #6's discipline, even with no LLM anywhere near this feature). Exposed as `GET /trips/{trip_id}/calendar.ics` in `routers/trips.py`, returning `404` for an unknown trip and `400` when `trip.start_date` is `None` (a defensive check for direct API callers — the UI never surfaces an export control in that state at all, see below). **Deliberately floating local time, no `TZID`**: no reliable per-destination timezone is available at this layer without a second geocode call (`weather_service`'s Open-Meteo request resolves one internally via `timezone=auto`, but that value never surfaces past that module), and floating time is valid, correct RFC 5545 behavior for "9am in Lisbon" regardless of the importing calendar app's own timezone — revisit only if a real user complaint surfaces, not speculatively. `time_of_day` (freeform text — "morning", "14:00", "flexible", or `None`) is resolved to a real clock time via a small regex-plus-keyword heuristic (literal 24h/12h times first, then a fixed keyword table — "late morning" checked before the plainer "morning" so more specific phrasing wins), the same "small keyword lookup, not an LLM call" style also used by the frontend's `lib/weatherIcon.ts`; anything unrecognized (including `None`) becomes an all-day event rather than a guessed time. Timed events get a fixed 2-hour default duration (items carry no explicit length). **Frontend gating, per explicit product decision**: the export control is hidden entirely, not disabled, until a trip has a resolved `start_date` — no fallback-to-today, no error state shown to the end user. **Updated for the Next.js migration, 2026-08-26** (originally built against the Streamlit UI, ported during Phase A with the same gating rule preserved). **Superseded in the UI the same day, after Phase D**: the dedicated `.ics` download button (`ExportButton.tsx`) was removed in favor of a single "Export Plan" action that pushes straight to Google Calendar (`CalendarPushButton.tsx`, see the Auth decision row's Phase D follow-up) — the backend endpoint (`GET /trips/{trip_id}/calendar.ics`) and its Route Handler proxy (`app/api/trips/[tripId]/calendar/route.ts`) are untouched and still work if hit directly, nothing in the UI just links to them anymore. `TripResponse.start_date` was added to `schemas.py` and threaded through all three places a `TripResponse` is built from a real `Trip` row (`generate_trip`, `get_trip`, `conversations.py::get_conversation`) specifically so the frontend has this to gate export on without guessing — that gating rule (hidden entirely, not disabled, until `start_date` resolves) carried over unchanged to `CalendarPushButton`. |
 
 ## Architecture principles
@@ -379,6 +398,10 @@ tradeoffs from the decision log above, not arbitrary sequencing.
 
 ```bash
 # Backend tests (in-memory SQLite, no live MySQL/GEMINI_API_KEY needed)
+# requirements-dev.txt layers pytest/httpx on top of requirements.txt --
+# the production image only ever installs the latter, see decision log's
+# "Codebase cleanup pass" row.
+cd backend && pip install -r requirements.txt -r requirements-dev.txt
 cd backend && pytest -v
 
 # Single test file / single test
@@ -408,6 +431,13 @@ cd backend && alembic revision --autogenerate -m "description"
 cp .env.example .env
 docker compose up --build
 ```
+
+On Windows, the system `python` is not `backend/.venv` — running `pytest`/
+`ruff` directly (outside Docker/the activated venv) can silently resolve to
+a different Python that's missing this project's dependencies (confirmed
+live: a bare `ModuleNotFoundError: No module named 'jose'` during the
+2026-08-26 cleanup pass). Use `backend/.venv/Scripts/python.exe -m pytest`
+etc. explicitly, or activate the venv first.
 
 Env vars (`.env`, see `.env.example`): `DATABASE_URL` (MySQL), `GEMINI_API_KEY`
 (free tier, no card — aistudio.google.com/apikey), `GEMINI_MODEL`
@@ -456,7 +486,10 @@ backend/app/
   schemas.py                Pydantic request/response models (TripRequest, TripResponse, etc.)
   routers/trips.py         /trips/generate, GET /trips/{id}, GET /trips/{id}/calendar.ics, POST /trips/{id}/push-to-calendar -- all require auth + ownership
   routers/conversations.py  Chat history endpoints -- all require auth + ownership as of Phase C
-  routers/auth.py            POST /auth/google-calendar-token, GET /auth/google-calendar-status (Phase D)
+  routers/auth.py            POST /auth/google-calendar-token, GET /auth/google-calendar-status (Phase D) -- no current UI caller, kept as a capability, see decision log's cleanup-pass row
+backend/requirements.txt   Runtime deps only -- what the Docker image actually installs
+backend/requirements-dev.txt  Adds pytest/httpx on top, for local dev + CI (see decision log's cleanup-pass row)
+backend/.dockerignore      Keeps .venv/tests/caches out of the build context
 backend/alembic/          Schema migrations (added Phase B) -- see decision log for the create_all()-vs-migrations split
 backend/tests/            pytest, in-memory SQLite, Gemini calls mocked; conftest.py overrides get_current_user for every test; test_ownership_isolation.py (Phase C), test_google_calendar.py + test_calendar_push_router.py (Phase D)
 frontend/src/
