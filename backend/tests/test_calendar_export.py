@@ -49,7 +49,7 @@ def _mock_item(day_number=1, time_of_day="morning", activity="Zilker Park", note
     return item
 
 
-# ---------- unit tests: calendar_export.build_trip_calendar / _event_start_time ----------
+# ---------- unit tests: calendar_export.build_trip_calendar / resolve_event_time ----------
 
 def test_day_date_is_start_date_plus_day_number_minus_one():
     item = _mock_item(day_number=3, time_of_day=None)
@@ -60,23 +60,23 @@ def test_day_date_is_start_date_plus_day_number_minus_one():
 
 
 def test_literal_24h_time_is_recognized():
-    assert calendar_export._event_start_time("14:00") == (14, 0)
+    assert calendar_export.resolve_event_time("14:00") == (14, 0)
 
 
 def test_literal_12h_time_is_recognized():
-    assert calendar_export._event_start_time("2pm") == (14, 0)
-    assert calendar_export._event_start_time("2:30pm") == (14, 30)
-    assert calendar_export._event_start_time("9am") == (9, 0)
+    assert calendar_export.resolve_event_time("2pm") == (14, 0)
+    assert calendar_export.resolve_event_time("2:30pm") == (14, 30)
+    assert calendar_export.resolve_event_time("9am") == (9, 0)
 
 
-@pytest.mark.parametrize("text,expected", calendar_export._TIME_KEYWORDS)
+@pytest.mark.parametrize("text,expected", calendar_export.TIME_KEYWORDS)
 def test_keyword_times_map_to_expected_hours(text, expected):
-    assert calendar_export._event_start_time(text) == expected
+    assert calendar_export.resolve_event_time(text) == expected
 
 
 def test_more_specific_keyword_wins_over_substring():
-    assert calendar_export._event_start_time("late morning") == (11, 0)
-    assert calendar_export._event_start_time("morning") == (9, 0)
+    assert calendar_export.resolve_event_time("late morning") == (11, 0)
+    assert calendar_export.resolve_event_time("morning") == (9, 0)
 
 
 def test_unrecognized_time_of_day_produces_all_day_event():

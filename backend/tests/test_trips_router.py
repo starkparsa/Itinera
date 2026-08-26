@@ -2,6 +2,7 @@ from datetime import date
 from unittest.mock import patch
 
 import pytest
+from conftest import TEST_GOOGLE_SUB
 from fastapi.testclient import TestClient
 
 from app import date_resolver, models
@@ -366,13 +367,19 @@ def test_question_on_demand_fetch_uses_existing_trip_destination_as_hint():
     # to check.
     db = SessionLocal()
     try:
-        user = models.User(id=1, email="placeholder-1@example.com")
+        # google_sub must match conftest.py's auth override, which looks up
+        # (and would otherwise create a *different* row for) "the current
+        # user" by this same google_sub -- otherwise this conversation
+        # belongs to a user the authenticated request isn't recognized as,
+        # and the ownership check below 404s before gather_trip_context is
+        # ever reached.
+        user = models.User(email="placeholder-1@example.com", google_sub=TEST_GOOGLE_SUB)
         db.add(user)
         db.flush()
-        conversation = models.Conversation(user_id=1, title="Test")
+        conversation = models.Conversation(user_id=user.id, title="Test")
         db.add(conversation)
         db.flush()
-        trip = models.Trip(user_id=1, conversation_id=conversation.id, destination="Austin", prompt="weekend in Austin")
+        trip = models.Trip(user_id=user.id, conversation_id=conversation.id, destination="Austin", prompt="weekend in Austin")
         db.add(trip)
         db.commit()
         conv_id = conversation.id

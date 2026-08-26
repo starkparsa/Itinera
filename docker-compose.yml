@@ -27,6 +27,13 @@ services:
       DATABASE_URL: mysql+pymysql://travel_user:travel_pass@mysql:3306/travel_planner
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.6-flash}
+      AUTH_BACKEND_SECRET: ${AUTH_BACKEND_SECRET}
+      # Needed to refresh a user's Calendar access token (Phase D) --
+      # google_calendar.py builds a real google-auth Credentials object
+      # with these, same OAuth client as the frontend's login flow.
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY}
     ports:
       - "8000:8000"
 
@@ -37,8 +44,16 @@ services:
       - backend
     environment:
       BACKEND_URL: http://backend:8000
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_URL: ${AUTH_URL:-http://localhost:3000}
+      # Same value as the backend's AUTH_BACKEND_SECRET above -- one shared
+      # secret, one env var name, read from the same root .env by both
+      # services (see CLAUDE.md decision log, "Auth" row).
+      AUTH_BACKEND_SECRET: ${AUTH_BACKEND_SECRET}
     ports:
-      - "8501:8501"
+      - "3000:3000"
 
 volumes:
   mysql_data:

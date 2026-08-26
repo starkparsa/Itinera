@@ -4,11 +4,14 @@ sqlalchemy==2.0.35
 pymysql==1.1.1
 cryptography==43.0.1
 pydantic==2.13.4
-requests==2.32.3
+requests==2.34.2
 python-dotenv==1.0.1
 python-dateutil==2.9.0.post0
 google-genai==2.19.0
 openai==3.3.1
 icalendar==7.3.0
+python-jose[cryptography]==3.5.0
+alembic==1.19.1
+google-api-python-client==2.199.0
 pytest==8.3.3
 httpx==0.28.1

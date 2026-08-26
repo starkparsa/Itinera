@@ -31,7 +31,7 @@ DEFAULT_EVENT_DURATION = timedelta(hours=2)  # items carry no explicit duration
 # streamlit_app.py::_weather_icon. Checked in this order (most specific
 # first) so "late morning" resolves to 11:00 rather than being caught by
 # the plainer "morning" check first.
-_TIME_KEYWORDS = [
+TIME_KEYWORDS = [
     ("late morning", (11, 0)),
     ("early morning", (6, 0)),
     ("morning", (9, 0)),
@@ -48,11 +48,13 @@ _TIME_24H_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\b")
 _TIME_12H_RE = re.compile(r"\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*([ap])\.?m\.?\b", re.IGNORECASE)
 
 
-def _event_start_time(time_of_day: str | None) -> tuple[int, int] | None:
+def resolve_event_time(time_of_day: str | None) -> tuple[int, int] | None:
     """Recognizes a concrete clock time from a freeform time_of_day string
     (e.g. "14:00", "2pm", "morning"). Returns (hour, minute) in 24h clock,
     or None if nothing recognizable is there -- in which case the caller
-    should emit an all-day event rather than guess a time."""
+    should emit an all-day event rather than guess a time. Public (not
+    module-private) because google_calendar.py (Phase D) reuses this exact
+    logic for live Calendar pushes -- one time-resolution rule, not two."""
     if not time_of_day:
         return None
     text = time_of_day.strip().lower()
@@ -69,7 +71,7 @@ def _event_start_time(time_of_day: str | None) -> tuple[int, int] | None:
             hour += 12
         return hour, minute
 
-    for keyword, hour_minute in _TIME_KEYWORDS:
+    for keyword, hour_minute in TIME_KEYWORDS:
         if keyword in text:
             return hour_minute
 
@@ -108,7 +110,7 @@ def build_trip_calendar(
         if item.notes:
             event.add("description", item.notes)
 
-        start_time = _event_start_time(item.time_of_day)
+        start_time = resolve_event_time(item.time_of_day)
         if start_time is not None:
             hour, minute = start_time
             dtstart = datetime.combine(day_date, time(hour, minute))

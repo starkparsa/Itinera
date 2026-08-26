@@ -1,12 +1,25 @@
-FROM python:3.12-slim
+# Multi-stage build using Next.js's standalone output (next.config.ts) --
+# keeps the runtime image small, only the traced production dependencies
+# are copied in, not the full node_modules from the build stage.
 
+FROM node:22-slim AS deps
 WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+FROM node:22-slim AS builder
+WORKDIR /app
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npm run build
 
-COPY streamlit_app.py .
+FROM node:22-slim AS runner
+WORKDIR /app
+ENV NODE_ENV=production
 
-EXPOSE 8501
+COPY --from=builder /app/public ./public
+COPY --from=builder /app/.next/standalone ./
+COPY --from=builder /app/.next/static ./.next/static
 
-CMD ["streamlit", "run", "streamlit_app.py", "--server.address=0.0.0.0", "--server.port=8501"]
+EXPOSE 3000
+CMD ["node", "server.js"]

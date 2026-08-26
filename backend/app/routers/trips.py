@@ -2,17 +2,20 @@ import logging
 from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Response
+from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 
 from .. import (
     agent_service,
     calendar_export,
     date_resolver,
+    google_calendar,
     llm_service,
     models,
     schemas,
     weather_service,
 )
+from ..auth import get_current_user
 from ..database import get_db
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -64,27 +67,28 @@ def _summarize_itinerary(destination: str, items: list[models.ItineraryItem]) ->
 
 
 @router.post("/generate", response_model=schemas.TripResponse)
-def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
-    # No auth system yet -- ensure the placeholder user this request points
-    # at actually exists, otherwise inserts below fail their foreign key
-    # constraint. Once real auth is added, this block goes away.
-    user = db.query(models.User).filter(models.User.id == request.user_id).first()
-    if not user:
-        user = models.User(id=request.user_id, email=f"placeholder-{request.user_id}@example.com")
-        db.add(user)
-        db.flush()
-
+def generate_trip(
+    request: schemas.TripRequest,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Real auth as of Phase B (see CLAUDE.md decision log, "Auth" row) --
+    # get_current_user verifies the caller's JWT and guarantees a real,
+    # already-persisted User, so the old placeholder-auto-create block
+    # (which trusted a client-supplied user_id) is gone. Ownership checks on
+    # *other* endpoints (get_trip, calendar export, conversations) are
+    # still pending -- Phase C.
     if request.conversation_id:
         conversation = (
             db.query(models.Conversation)
-            .filter(models.Conversation.id == request.conversation_id, models.Conversation.user_id == request.user_id)
+            .filter(models.Conversation.id == request.conversation_id, models.Conversation.user_id == user.id)
             .first()
         )
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
         title = request.prompt[:60] + ("..." if len(request.prompt) > 60 else "")
-        conversation = models.Conversation(user_id=request.user_id, title=title)
+        conversation = models.Conversation(user_id=user.id, title=title)
         db.add(conversation)
         db.flush()
 
@@ -237,7 +241,7 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
             start_date = previous_trip.start_date
 
     trip = models.Trip(
-        user_id=request.user_id,
+        user_id=user.id,
         conversation_id=conversation.id,
         destination=result.get("destination", "Unknown"),
         prompt=request.prompt,
@@ -291,8 +295,11 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/{trip_id}", response_model=schemas.TripResponse)
-def get_trip(trip_id: int, db: Session = Depends(get_db)):
-    trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
+def get_trip(trip_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Ownership check as of Phase C (see CLAUDE.md decision log, "Auth"
+    # row) -- 404, not 403, on a cross-user id so this doesn't even confirm
+    # the id exists to someone who doesn't own it.
+    trip = db.query(models.Trip).filter(models.Trip.id == trip_id, models.Trip.user_id == user.id).first()
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
 
@@ -310,13 +317,14 @@ def get_trip(trip_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{trip_id}/calendar.ics")
-def export_trip_calendar(trip_id: int, db: Session = Depends(get_db)):
+def export_trip_calendar(trip_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Downloadable .ics calendar for a trip (build-order item 3, CLAUDE.md --
     .ics only, PDF out of scope for now). This is a defensive check for
     direct API callers -- the frontend itself never surfaces an export
     button until a trip has a resolved start_date, so a real user should
     never hit the 400 below."""
-    trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
+    # Ownership check as of Phase C -- see get_trip above, same reasoning.
+    trip = db.query(models.Trip).filter(models.Trip.id == trip_id, models.Trip.user_id == user.id).first()
     if not trip:
         raise HTTPException(status_code=404, detail="Trip not found")
     if not trip.start_date:
@@ -329,3 +337,30 @@ def export_trip_calendar(trip_id: int, db: Session = Depends(get_db)):
         media_type="text/calendar",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/{trip_id}/push-to-calendar")
+def push_trip_to_calendar(trip_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Pushes a trip's itinerary as real events onto the user's Google
+    Calendar (build-order item 5, Phase D -- see CLAUDE.md decision log,
+    "Auth" row, and google_calendar.py for why this goes through
+    googleapiclient directly rather than Gemini/MCP). Same ownership check
+    as the other trip endpoints (Phase C)."""
+    trip = db.query(models.Trip).filter(models.Trip.id == trip_id, models.Trip.user_id == user.id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if not trip.start_date:
+        raise HTTPException(status_code=400, detail="Trip has no resolved start date; cannot push to calendar.")
+
+    try:
+        result = google_calendar.push_trip_to_calendar(db, user, trip)
+    except google_calendar.CalendarNotConnectedError:
+        # 428 Precondition Required -- distinct from a real failure, so the
+        # frontend can prompt the user to connect Calendar access instead
+        # of showing a generic error.
+        raise HTTPException(status_code=428, detail="Google Calendar is not connected for this account.")
+    except HttpError as exc:
+        logger.exception("Calendar push failed for trip %s", trip_id)
+        raise HTTPException(status_code=502, detail=f"Google Calendar API error: {exc.reason}")
+
+    return result

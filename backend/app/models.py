@@ -11,6 +11,12 @@ class User(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
+    # Google's stable subject identifier (the OIDC "sub" claim) -- the real
+    # join key for auth (see backend/app/auth.py), not email, which isn't
+    # guaranteed stable across a Google account's lifetime. Nullable because
+    # pre-auth placeholder users (see CLAUDE.md decision log, "Auth" row)
+    # have none.
+    google_sub = Column(String(255), unique=True, index=True, nullable=True)
     display_name = Column(String(255))
     created_at = Column(DateTime, default=datetime.utcnow)
 
@@ -95,3 +101,28 @@ class ItineraryItem(Base):
     notes = Column(Text)
 
     trip = relationship("Trip", back_populates="items")
+
+
+class GoogleCalendarCredential(Base):
+    """One row per user who has granted the Calendar OAuth scope (Phase D,
+    see CLAUDE.md decision log, "Auth" row) -- separate from login, which
+    only ever needs the base openid/email/profile scopes. Tokens are
+    encrypted at rest (google_calendar.py, via `cryptography.fernet` and
+    TOKEN_ENCRYPTION_KEY) -- a plaintext refresh token in the DB would be a
+    real credential leak if the DB were ever compromised.
+    """
+    __tablename__ = "google_calendar_credentials"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+    encrypted_access_token = Column(Text, nullable=False)
+    # Google only issues a refresh token on the *first* consent unless the
+    # OAuth request forces prompt=consent every time (which Auth.js is
+    # configured to do here specifically so this is never left null after a
+    # real grant -- see frontend/src/auth.ts).
+    encrypted_refresh_token = Column(Text, nullable=False)
+    access_token_expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("User")

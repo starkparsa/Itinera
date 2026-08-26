@@ -14,7 +14,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, engine
-from .routers import conversations, trips
+from .routers import auth, conversations, trips
 
 # Retry logic to wait for database to be ready
 max_retries = 10
@@ -22,6 +22,13 @@ retry_delay = 2  # seconds
 
 for attempt in range(max_retries):
     try:
+        # Only ever creates missing *tables* -- harmless no-op against a DB
+        # that already has them (real dev/prod MySQL). Schema *changes* to
+        # existing tables (e.g. the google_sub column, see auth.py) go
+        # through Alembic (backend/alembic/) instead, run manually
+        # ("alembic upgrade head") -- this call staying here is what lets a
+        # fresh SQLite test DB or a brand-new MySQL instance still work with
+        # zero setup.
         Base.metadata.create_all(bind=engine)
         break
     except Exception:
@@ -43,6 +50,7 @@ app.add_middleware(
 
 app.include_router(trips.router)
 app.include_router(conversations.router)
+app.include_router(auth.router)
 
 
 @app.get("/health")

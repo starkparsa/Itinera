@@ -36,6 +36,29 @@ def test_geocode_network_failure_returns_none():
         assert weather_service.geocode("Reykjavik") is None
 
 
+def test_geocode_timezone_success():
+    response = Mock()
+    response.json.return_value = {
+        "results": [{"latitude": 25.77427, "longitude": -80.19366, "timezone": "America/New_York"}],
+    }
+
+    with patch("app.weather_service.requests.get", return_value=response):
+        assert weather_service.geocode_timezone("Miami") == "America/New_York"
+
+
+def test_geocode_timezone_no_match_returns_none():
+    response = Mock()
+    response.json.return_value = {"results": []}
+
+    with patch("app.weather_service.requests.get", return_value=response):
+        assert weather_service.geocode_timezone("Nowhereville") is None
+
+
+def test_geocode_timezone_network_failure_returns_none():
+    with patch("app.weather_service.requests.get", side_effect=ConnectionError("no route to host")):
+        assert weather_service.geocode_timezone("Miami") is None
+
+
 def test_get_daily_forecast_success_maps_wmo_code_to_text():
     response = Mock()
     response.json.return_value = {

@@ -49,9 +49,11 @@ def _celsius_to_fahrenheit(celsius: float) -> float:
     return round(celsius * 9 / 5 + 32, 1)
 
 
-def geocode(destination: str) -> tuple[float, float] | None:
-    """Resolves a free-text destination to (lat, lon) via Open-Meteo's free
-    geocoding endpoint. None on no match or any failure."""
+def _geocode_result(destination: str) -> dict | None:
+    """Raw first result from Open-Meteo's free geocoding search, or None on
+    no match/failure. Shared by geocode() (lat/lon) and geocode_timezone()
+    (IANA timezone name) -- one HTTP call shape, not two independent ones
+    that could drift apart."""
     try:
         resp = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
@@ -62,9 +64,31 @@ def geocode(destination: str) -> tuple[float, float] | None:
         return None
 
     results = resp.get("results") or []
-    if not results:
+    return results[0] if results else None
+
+
+def geocode(destination: str) -> tuple[float, float] | None:
+    """Resolves a free-text destination to (lat, lon) via Open-Meteo's free
+    geocoding endpoint. None on no match or any failure."""
+    result = _geocode_result(destination)
+    if not result:
         return None
-    return results[0]["latitude"], results[0]["longitude"]
+    return result["latitude"], result["longitude"]
+
+
+def geocode_timezone(destination: str) -> str | None:
+    """IANA timezone name for a destination (e.g. "America/New_York"), from
+    the same free geocoding lookup geocode() uses -- Open-Meteo's search
+    results already include a "timezone" field, so this costs no extra API
+    beyond one more geocoding call. Needed because Google Calendar's REST
+    API (unlike RFC 5545 .ics files -- see calendar_export.py's deliberate
+    floating-time design) rejects a timed event with no timezone at all;
+    confirmed live via a real "Missing time zone definition for start time"
+    error pushing a trip with no timeZone set. None on no match/failure --
+    callers should fall back to a neutral default (google_calendar.py falls
+    back to UTC) rather than guessing a specific wrong zone."""
+    result = _geocode_result(destination)
+    return result.get("timezone") if result else None
 
 
 def get_daily_forecast(lat: float, lon: float, start: date, num_days: int) -> list[dict]:

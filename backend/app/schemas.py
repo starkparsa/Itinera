@@ -5,9 +5,13 @@ from pydantic import BaseModel
 
 class TripRequest(BaseModel):
     prompt: str
-    user_id: int = 1  # placeholder until auth is added
     days: int | None = None  # explicit trip length; if omitted, the LLM infers it from the prompt
     conversation_id: int | None = None  # continue an existing chat; omit to start a new one
+    # No user_id field -- as of Phase C (see CLAUDE.md decision log, "Auth"
+    # row), the user is always derived from a verified JWT
+    # (auth.get_current_user), never from a client-supplied field. A field
+    # here would just be a second, untrustworthy source of truth for
+    # something auth already provides correctly.
 
 
 class ItineraryItemOut(BaseModel):

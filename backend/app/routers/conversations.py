@@ -2,20 +2,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from .. import models, schemas, weather_service
+from ..auth import get_current_user
 from ..database import get_db
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
 
-# Matches the placeholder user pattern used in trips.py -- no auth yet, so
-# every conversation currently belongs to this single default user.
-DEFAULT_USER_ID = 1
-
 
 @router.get("", response_model=list[schemas.ConversationSummary])
-def list_conversations(user_id: int = DEFAULT_USER_ID, db: Session = Depends(get_db)):
+def list_conversations(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    # Real ownership scoping as of Phase C (see CLAUDE.md decision log,
+    # "Auth" row) -- previously trusted a client-supplied `user_id` query
+    # param (DEFAULT_USER_ID = 1), exactly as untrustworthy as the old
+    # TripRequest.user_id field was. Always the authenticated caller's own
+    # conversations now, never anyone else's by passing a different id.
     conversations = (
         db.query(models.Conversation)
-        .filter(models.Conversation.user_id == user_id)
+        .filter(models.Conversation.user_id == user.id)
         .order_by(models.Conversation.created_at.desc())
         .all()
     )
@@ -23,8 +25,16 @@ def list_conversations(user_id: int = DEFAULT_USER_ID, db: Session = Depends(get
 
 
 @router.get("/{conversation_id}", response_model=schemas.ConversationDetail)
-def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
-    conversation = db.query(models.Conversation).filter(models.Conversation.id == conversation_id).first()
+def get_conversation(
+    conversation_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    # Ownership check as of Phase C -- 404, not 403, on a cross-user id so
+    # this doesn't even confirm the id exists to someone who doesn't own it.
+    conversation = (
+        db.query(models.Conversation)
+        .filter(models.Conversation.id == conversation_id, models.Conversation.user_id == user.id)
+        .first()
+    )
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
@@ -66,8 +76,16 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
 
 
 @router.delete("/{conversation_id}")
-def delete_conversation(conversation_id: int, db: Session = Depends(get_db)):
-    conversation = db.query(models.Conversation).filter(models.Conversation.id == conversation_id).first()
+def delete_conversation(
+    conversation_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    # Ownership check as of Phase C -- see get_conversation above, same
+    # reasoning.
+    conversation = (
+        db.query(models.Conversation)
+        .filter(models.Conversation.id == conversation_id, models.Conversation.user_id == user.id)
+        .first()
+    )
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
