@@ -43,6 +43,7 @@ def get_conversation(conversation_id: int, db: Session = Depends(get_db)):
                 itinerary=[schemas.ItineraryItemOut.model_validate(i) for i in trip.items],
                 conversation_id=conversation.id,
                 weather=[schemas.DayWeatherOut(**w) for w in weather_out],
+                start_date=trip.start_date,
             )
         messages_out.append(
             schemas.MessageOut(

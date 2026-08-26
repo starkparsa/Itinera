@@ -1,10 +1,18 @@
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
-from .. import agent_service, date_resolver, llm_service, models, schemas, weather_service
+from .. import (
+    agent_service,
+    calendar_export,
+    date_resolver,
+    llm_service,
+    models,
+    schemas,
+    weather_service,
+)
 from ..database import get_db
 
 router = APIRouter(prefix="/trips", tags=["trips"])
@@ -141,6 +149,23 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
         # the common case, not a fresh fetch every time.
         weather_context = ""
         if latest_trip:
+            # The generating prompt may never have named a date ("build me a
+            # trip to Austin"), leaving start_date unresolved -- but the
+            # question itself often does ("...this weekend"). Bug found live:
+            # asking a weather question with a date phrase in the *question*
+            # got "I don't have current weather data" even though the date
+            # was sitting right there in the text, because this branch only
+            # ever read the trip's already-resolved start_date. Try resolving
+            # one from the question text too (same deterministic
+            # date_resolver used at generation time -- principle #6), and
+            # persist it onto the trip so this unlocks weather (and calendar
+            # export) for the rest of the conversation too, not just this
+            # one answer (principle #5).
+            if latest_trip.start_date is None:
+                resolved_start_date = date_resolver.resolve_trip_start_date(request.prompt, date.today())
+                if resolved_start_date:
+                    latest_trip.start_date = resolved_start_date
+
             weather_data = weather_service.get_or_refresh_trip_weather(latest_trip, latest_trip.items)
             if weather_data:
                 weather_context = weather_service.summarize_for_prompt(latest_trip.destination, weather_data)
@@ -261,6 +286,7 @@ def generate_trip(request: schemas.TripRequest, db: Session = Depends(get_db)):
         agent_context=result.get("agent_context") if was_freshly_gathered else None,
         conversation_id=conversation.id,
         weather=[schemas.DayWeatherOut(**w) for w in weather_out],
+        start_date=trip.start_date,
     )
 
 
@@ -279,4 +305,27 @@ def get_trip(trip_id: int, db: Session = Depends(get_db)):
         itinerary=[schemas.ItineraryItemOut.model_validate(i) for i in trip.items],
         conversation_id=trip.conversation_id,
         weather=[schemas.DayWeatherOut(**w) for w in weather_out],
+        start_date=trip.start_date,
+    )
+
+
+@router.get("/{trip_id}/calendar.ics")
+def export_trip_calendar(trip_id: int, db: Session = Depends(get_db)):
+    """Downloadable .ics calendar for a trip (build-order item 3, CLAUDE.md --
+    .ics only, PDF out of scope for now). This is a defensive check for
+    direct API callers -- the frontend itself never surfaces an export
+    button until a trip has a resolved start_date, so a real user should
+    never hit the 400 below."""
+    trip = db.query(models.Trip).filter(models.Trip.id == trip_id).first()
+    if not trip:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if not trip.start_date:
+        raise HTTPException(status_code=400, detail="Trip has no resolved start date; cannot export a calendar.")
+
+    ics_bytes = calendar_export.build_trip_calendar(trip.id, trip.destination, trip.start_date, trip.items)
+    filename = calendar_export.ics_filename(trip.destination)
+    return Response(
+        content=ics_bytes,
+        media_type="text/calendar",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )

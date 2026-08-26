@@ -4,7 +4,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from app import models
+from app import date_resolver, models
 from app.database import Base, SessionLocal, engine
 from app.main import app
 
@@ -562,3 +562,66 @@ def test_question_with_no_trip_has_no_weather_context():
 
     mock_weather_fetch.assert_not_called()  # no trip in this conversation to fetch weather for
     assert mock_answer.call_args.kwargs["agent_context"] == ""
+
+
+def test_question_resolves_start_date_from_the_question_itself_when_trip_has_none():
+    # Regression test for the exact reported bug: a trip generated from a
+    # prompt with no date phrase ("build me a 5 day trip to austin") has no
+    # start_date, so a follow-up weather question got "I don't have current
+    # weather data" even though the question itself named one ("this
+    # weekend") -- the date was sitting right there in the text, but this
+    # branch previously only ever read the trip's already-resolved
+    # start_date, never the question's.
+    fake_weather = [
+        {"day_number": 1, "date": "2026-08-29", "temp_min": 20.0, "temp_max": 30.0, "temp_min_f": 68.0, "temp_max_f": 86.0, "condition": "Clear sky"},
+    ]
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        first = client.post("/trips/generate", json={"prompt": "build me a 5 day trip to austin"})
+    trip_id = first.json()["trip_id"]
+    conv_id = first.json()["conversation_id"]
+    assert first.json()["start_date"] is None  # sanity-check the premise
+
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather) as mock_weather_fetch,
+        patch("app.llm_service.answer_question", return_value="Sunny and warm.") as mock_answer,
+    ):
+        client.post(
+            "/trips/generate",
+            json={
+                "prompt": "what do the temperatures look like if i want to go there this weekend",
+                "conversation_id": conv_id,
+            },
+        )
+
+    mock_weather_fetch.assert_called_once()  # weather was actually attempted, not skipped
+    assert "86" in mock_answer.call_args.kwargs["agent_context"]
+
+    # The resolved date is persisted onto the trip, not just used for this
+    # one answer -- so later turns (and calendar export) benefit too.
+    updated_trip = client.get(f"/trips/{trip_id}").json()
+    expected_date = date_resolver.resolve_trip_start_date("this weekend", date.today())
+    assert updated_trip["start_date"] == expected_date.isoformat()
+
+
+def test_question_does_not_override_an_already_resolved_start_date():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        first = client.post("/trips/generate", json={"prompt": "4 days in Austin starting 2026-08-26"})
+    trip_id = first.json()["trip_id"]
+    conv_id = first.json()["conversation_id"]
+    assert first.json()["start_date"] == "2026-08-26"
+
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]),
+        patch("app.llm_service.answer_question", return_value="Sure."),
+    ):
+        client.post(
+            "/trips/generate",
+            json={"prompt": "what about next weekend instead?", "conversation_id": conv_id},
+        )
+
+    updated_trip = client.get(f"/trips/{trip_id}").json()
+    assert updated_trip["start_date"] == "2026-08-26"  # unchanged -- the original resolved date wins

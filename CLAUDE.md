@@ -39,13 +39,15 @@ the mismatch rather than silently editing one to match the other.
   (`new_trip` / `edit_trip` / `question` / `off_topic`), a small agent
   tool-calling loop (`agent_service.py` + `tools.py`) and conversation-scoped
   agent-findings caching (`Conversation.agent_context`) —
-  **re-enabled** (`agent_service.AGENT_TOOL_CALLING_ENABLED = True`) as of
-  2026-08-25: weather (OpenWeather) wasn't working reliably in practice and
-  was removed outright and stays removed; currency conversion (Frankfurter)
-  was paused alongside it but is now back on and verified live (see decision
-  log) — `gather_trip_context()` actually runs the loop again instead of
-  short-circuiting to `""`. The flag remains a kill switch if currency turns
-  out to have the same reliability problem weather did.
+  **paused again** (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`) as
+  of 2026-08-26. Weather (OpenWeather) was removed outright on 2026-08-25
+  because it wasn't working reliably in practice, and stays removed.
+  Currency conversion (Frankfurter) was re-enabled the same day and verified
+  live working correctly, but is paused again as of 2026-08-26 for a
+  different reason — a product decision that it isn't needed, not a
+  reliability problem (see decision log) — via the same kill switch flag,
+  so `gather_trip_context()` short-circuits to `""` exactly as it did during
+  its earlier pause.
 - **Frontend**: Streamlit chat UI (`frontend/streamlit_app.py`). Deliberately
   minimal — no trip-length field or similar form controls; trip parameters
   come from the prompt text (see decision log, this was a deliberate
@@ -66,6 +68,75 @@ the mismatch rather than silently editing one to match the other.
   every table already has `user_id` threaded through so this is cheap to
   retrofit later.
 
+## Architecture: how a request actually flows
+
+Everything (new trip, edit, follow-up question, off-topic message) goes
+through the single `POST /trips/generate` handler in
+[`routers/trips.py`](backend/app/routers/trips.py) — there's no separate
+chat/message endpoint. Reading that file top to bottom is the fastest way
+to understand the app; the branches below are its actual control flow, not
+an aspirational design:
+
+1. **Resolve the conversation.** Look up `conversation_id` if given,
+   otherwise create a new `Conversation` (title = truncated prompt). Build
+   `conversation_context` — a short summarized string of the last few turns
+   (`_build_conversation_context`), used for classification/generation, as
+   opposed to `_build_chat_messages`, which builds real role/content pairs
+   for the Q&A path only.
+2. **Classify** (`llm_service.classify_intent`) into `new_trip` / `edit_trip`
+   / `question` / `off_topic` **before anything else runs** (principle #1).
+   This one Gemini call is the fork point for everything downstream:
+   - `off_topic` → a fixed, non-LLM decline string, message pair saved, done.
+   - `question` → `llm_service.answer_question`, grounded in real chat
+     history plus two independently-gathered context strings: the cached
+     agent findings (`agent_service.gather_trip_context` — currently a
+     no-op, always `""`, while `AGENT_TOOL_CALLING_ENABLED = False`, see
+     decision log; when it was on, fetched fresh only if
+     `conversation.agent_context is None`, i.e. once per conversation) and
+     the conversation's latest `Trip`'s real forecast
+     (`weather_service.get_or_refresh_trip_weather` +
+     `summarize_for_prompt`, cache-checked on *every* question turn since
+     it's a cheap TTL cache read, not a Gemini call). If that trip has no
+     resolved `start_date` yet, `date_resolver.resolve_trip_start_date` is
+     tried against the *question's own text* first (e.g. "this weekend")
+     and persisted onto the trip if it resolves — added 2026-08-26 after a
+     live bug where a question naming its own date still got "I don't have
+     weather data" because only the generating prompt was ever checked (see
+     decision log). This is the only row that mutates a `Trip` outside the
+     `new_trip`/`edit_trip` branch; no `ItineraryItem` rows are touched.
+   - `new_trip` / `edit_trip` → `llm_service.generate_itinerary`, which
+     internally calls `_infer_trip_meta` (destination + day count) and then
+     `_generate_chunk` once per `CHUNK_SIZE_DAYS`-day window (chunked
+     generation, see "How long trips are generated" history in
+     `docs/sessions/`), reusing `conversation.agent_context` if already set
+     instead of re-running the agent loop on every edit. The route then
+     resolves a real `start_date` via `date_resolver.resolve_trip_start_date`
+     (falling back to the conversation's previous `Trip.start_date` on a
+     turn with no date phrase), creates the `Trip` + `ItineraryItem` rows,
+     fetches weather for it, and stores a rich itinerary summary
+     (`_summarize_itinerary`) as the assistant's `Message` — not a one-liner
+     — so later turns have real detail to reference.
+3. Every branch ends by appending a `user` and `assistant` `Message` row to
+   the conversation and committing — this is the entire mechanism behind
+   "the assistant remembers the conversation": there's no separate memory
+   store, just these rows re-read and re-summarized on the next turn.
+
+**Data model** (`models.py`): `User 1—* Conversation 1—* Message`, and
+`Conversation 1—* Trip 1—* ItineraryItem`. A `Message` optionally points at
+the `Trip` it produced (`trip_id`). `Trip.conversation_id` is
+`ON DELETE SET NULL`, not cascade — deleting a chat thread unlinks its
+trips rather than deleting them (MySQL enforces the FK; SQLite in tests
+doesn't, which is why this only ever surfaced against a real database).
+`Conversation.agent_context`, `Trip.start_date`, and `Trip.weather_json`/
+`weather_fetched_at` are the three pieces of cross-turn state everything
+above reads and writes.
+
+**Frontend** (`streamlit_app.py`) is a thin client: it never calls Gemini,
+Groq, Open-Meteo, or Frankfurter directly — every one of those lives behind
+`BACKEND_URL`. It POSTs to `/trips/generate` and lists/loads history via
+`routers/conversations.py`'s endpoints, keeping `conversation_id` in
+Streamlit session state.
+
 ## Key decisions (with rationale — don't re-litigate without new information)
 
 | Decision | Rationale |
@@ -74,12 +145,13 @@ the mismatch rather than silently editing one to match the other.
 | Database: MySQL → **Postgres on Neon** | pgvector lives in the same DB instance for the later cross-trip preference-memory feature — no separate vector service to run or pay for. Neon has no idle-pause gotcha (unlike Supabase's free tier). Trade-off accepted knowingly: Neon doesn't bundle free Auth the way Supabase would have, so auth is a fully separate build. |
 | Auth: built **last** | Schema already supports it (`user_id` everywhere). When it happens: **Google OAuth** specifically — Calendar's MCP server needs a Google Cloud project + OAuth consent anyway (see Calendar row), so the login flow should cover identity + Calendar scope together. Maps MCP now also needs the same Google Cloud project for billing (see Maps row), though its exact auth mechanism (OAuth vs. a plain API key) isn't confirmed yet — if it turns out to be API-key-only, Maps doesn't need to be bundled into the user-facing OAuth flow itself, just the shared Cloud project/billing setup. Confirm before finalizing the OAuth build-order step. |
 | Trip length: inferred from the prompt, no UI field | Explicitly rejected a "Trip length" slider/number-input in the Streamlit sidebar — say it in the message instead (e.g. "a week in Lisbon"). Don't re-add a form control for this without asking; it was tried and deliberately removed. |
-| Weather (OpenWeather): **removed**; agent tool-calling step **re-enabled**, currency only | Weather wasn't working reliably in practice for real answers even after the fabrication/on-demand-fetch fix (root cause not fully diagnosed — the API key was present and valid-looking, so this wasn't simply a missing-key issue) and stays removed; re-diagnose from scratch (or reconsider the source — e.g. Open-Meteo, no key required, remains the pick regardless of the Maps-stack decision) before ever re-adding it. Currency conversion was paused alongside weather at the time rather than leaving a half-working step running, but has now been flipped back on (`agent_service.AGENT_TOOL_CALLING_ENABLED = True`, 2026-08-25) and verified live: a real Frankfurter call (500 USD → 60,624 ISK) was correctly picked up by the model, folded into a grounded summary with matching numbers, and — separately — a no-budget prompt correctly triggered no tool call at all rather than inventing one. `AGENT_TOOL_CALLING_ENABLED` stays as a kill switch if currency ever shows the same unreliability weather did. **Resolved, 2026-08-25 — weather is back, real-time, per-day, via Open-Meteo, and it's neither an MCP server nor a Gemini tool at all.** Evaluated community Open-Meteo MCP servers vs. building one ourselves vs. a plain `tools.py`-shaped function (per principle #8's decision rules) — landed on a fourth option once it became clear weather-to-*display* is never a judgment call the model makes (unlike currency, which the model opts into). It's a plain deterministic backend service (`date_resolver.py` + `weather_service.py`), called directly by `routers/trips.py`/`routers/conversations.py` on every trip, not registered in `tools.py`'s `TOOL_SCHEMAS`/routed through `agent_service.py` at all — so MCP's reason for existing (giving an LLM discoverable, callable tools) doesn't apply here, and the feature's marginal LLM cost is zero (no extra Gemini call, no extra tokens). Needed a new prerequisite that didn't exist at all: `Trip.start_date`, resolved from the prompt in real Python (`date_resolver.py`, regex-extracted date substrings + `dateutil`, never a whole-prompt fuzzy parse — that was tried first and confirmed live to misfire, e.g. "September 3rd" inside "...starting September 3rd" got polluted by an unrelated "5" elsewhere in the prompt into 2003-09-05) per principle #6. Verified live: real geocoding + a real Reykjavik forecast (7–11°C, overcast/light drizzle) came back correctly for a resolved date. Cached per-trip (`Trip.weather_json`/`weather_fetched_at`, 3-hour TTL) to stay well inside Open-Meteo's free 10,000/day cap regardless of how many times a trip is reloaded. **Fahrenheit added, 2026-08-25**: `weather_service._celsius_to_fahrenheit` computes both units with real Python arithmetic at fetch time (never left for the LLM to convert, same discipline as principle #6) — `DayWeatherOut` carries `temp_min_f`/`temp_max_f` alongside the existing Celsius fields, and the Streamlit display shows both ("High 11°C / 52°F"). **Threaded into conversational Q&A too, 2026-08-25** (see the bug/correctness-pass entry below for why): `routers/trips.py`'s question branch now looks up the conversation's latest trip's real forecast on every question turn and folds it into `answer_question`'s grounding via `weather_service.summarize_for_prompt` — `answer_question`'s system prompt was updated to allow stating the real Celsius/Fahrenheit figures exactly as given (not to invent a conversion when only one unit was provided, which is a different thing). |
+| Weather (OpenWeather): **removed**; agent tool-calling step **re-enabled**, currency only | Weather wasn't working reliably in practice for real answers even after the fabrication/on-demand-fetch fix (root cause not fully diagnosed — the API key was present and valid-looking, so this wasn't simply a missing-key issue) and stays removed; re-diagnose from scratch (or reconsider the source — e.g. Open-Meteo, no key required, remains the pick regardless of the Maps-stack decision) before ever re-adding it. Currency conversion was paused alongside weather at the time rather than leaving a half-working step running, but has now been flipped back on (`agent_service.AGENT_TOOL_CALLING_ENABLED = True`, 2026-08-25) and verified live: a real Frankfurter call (500 USD → 60,624 ISK) was correctly picked up by the model, folded into a grounded summary with matching numbers, and — separately — a no-budget prompt correctly triggered no tool call at all rather than inventing one. `AGENT_TOOL_CALLING_ENABLED` stays as a kill switch if currency ever shows the same unreliability weather did. **Paused again, 2026-08-26 — for a different reason than weather's removal.** Currency was working correctly (the 2026-08-25 verification above stands); it's turned off now purely because of a product decision that currency conversion isn't needed, not a reliability finding. Same kill switch flag, flipped the other way (`AGENT_TOOL_CALLING_ENABLED = False`) — `gather_trip_context()` short-circuits to `""` again, no other code touched. A follow-up audit for the bug below's divergence pattern (generation-only logic missing from the Q&A path) also flagged that this tool-calling step's `Conversation.agent_context` gate caches "found nothing" per-conversation forever, so a later question that plainly needs a fresh currency figure would never get one — now moot with currency paused, but worth remembering if it's ever re-enabled. **Resolved, 2026-08-25 — weather is back, real-time, per-day, via Open-Meteo, and it's neither an MCP server nor a Gemini tool at all.** Evaluated community Open-Meteo MCP servers vs. building one ourselves vs. a plain `tools.py`-shaped function (per principle #8's decision rules) — landed on a fourth option once it became clear weather-to-*display* is never a judgment call the model makes (unlike currency, which the model opts into). It's a plain deterministic backend service (`date_resolver.py` + `weather_service.py`), called directly by `routers/trips.py`/`routers/conversations.py` on every trip, not registered in `tools.py`'s `TOOL_SCHEMAS`/routed through `agent_service.py` at all — so MCP's reason for existing (giving an LLM discoverable, callable tools) doesn't apply here, and the feature's marginal LLM cost is zero (no extra Gemini call, no extra tokens). Needed a new prerequisite that didn't exist at all: `Trip.start_date`, resolved from the prompt in real Python (`date_resolver.py`, regex-extracted date substrings + `dateutil`, never a whole-prompt fuzzy parse — that was tried first and confirmed live to misfire, e.g. "September 3rd" inside "...starting September 3rd" got polluted by an unrelated "5" elsewhere in the prompt into 2003-09-05) per principle #6. Verified live: real geocoding + a real Reykjavik forecast (7–11°C, overcast/light drizzle) came back correctly for a resolved date. Cached per-trip (`Trip.weather_json`/`weather_fetched_at`, 3-hour TTL) to stay well inside Open-Meteo's free 10,000/day cap regardless of how many times a trip is reloaded. **Fahrenheit added, 2026-08-25**: `weather_service._celsius_to_fahrenheit` computes both units with real Python arithmetic at fetch time (never left for the LLM to convert, same discipline as principle #6) — `DayWeatherOut` carries `temp_min_f`/`temp_max_f` alongside the existing Celsius fields, and the Streamlit display shows both ("High 11°C / 52°F"). **Threaded into conversational Q&A too, 2026-08-25** (see the bug/correctness-pass entry below for why): `routers/trips.py`'s question branch now looks up the conversation's latest trip's real forecast on every question turn and folds it into `answer_question`'s grounding via `weather_service.summarize_for_prompt` — `answer_question`'s system prompt was updated to allow stating the real Celsius/Fahrenheit figures exactly as given (not to invent a conversion when only one unit was provided, which is a different thing). **Known open gap, found in the same 2026-08-26 audit**: weather always geocodes `trip.destination`, never a different city named in a follow-up question ("what's the weather in Reykjavik this weekend?" against an Austin trip still answers for Austin) — left open, since unlike the date-resolution bug above there's no existing deterministic extractor to reuse; closing it needs either a new lightweight extractor or a fresh LLM call. |
 | Flights: no live pricing API for MVP | No workable free flight-pricing API exists as of Aug 2026 — Amadeus self-service, the obvious free option, was fully decommissioned July 17 2026. Treat flight cost as an LLM-reasoned rough estimate, clearly labeled as such, until there's budget for a paid API (~$10-20/mo — Duffel, AeroDataBox) or a better free option surfaces. Re-check the landscape before building against a live flights integration. |
 | Hotels: search/compare only, not booking | Real reservations need PCI-compliant payment flows and hotel partner agreements — out of scope for a free-tier indie MVP. Deep-link out to Booking.com/Google Hotels rather than booking in-app. |
 | Maps: OSM-based stack → **reversed, Aug 2026 — switching to Google's official Maps MCP server** | Originally picked to avoid a Google Cloud billing account (Maps Platform needs one even at $0 spend). Reversed after Google shipped a fully-managed, officially supported Maps MCP server in 2026 (same wave as the Calendar MCP server below) that per Google's announcement bundles weather-forecast grounding alongside places/routing — potentially covering both the weather and Maps items on the future-tools list with one integration. Knowingly re-accepts the billing-account requirement the OSM pivot existed to avoid; judged worth it for an officially maintained server instead of hand-rolling and maintaining a 5-service OSM client (Nominatim/Overpass/OpenRouteService/Open-Meteo/Wikipedia) with its own reliability caveats (Nominatim's 1 req/sec cap, Overpass's no-SLA). **Unverified as of this decision** — Google's announcement didn't disclose Maps MCP pricing, free-tier limits, or exact auth flow (OAuth vs. API key); confirm all three before writing any code against it. The previously-drafted OSM-based Maps/routing plan (deep per-item coordinates + legs, energy/pacing signal, grounded importance notes) is superseded — re-derive the design against Maps MCP's actual tool surface once the above is confirmed, don't assume the old design transfers as-is. |
 | Calendar: hand-rolled `googleapiclient` calls → **Google's official Calendar MCP server** (`calendarmcp.googleapis.com`) | Google shipped a fully-managed, officially supported remote Calendar MCP server in 2026 (OAuth 2.0, 8 tools: list calendars, retrieve events, check availability, create/update/delete events) — same prerequisite this project already needed anyway (a Google Cloud project + OAuth consent screen for the planned Google login), so adopting it costs nothing extra in setup and replaces what would've been hand-written `googleapiclient` calls with a maintained server. Still bundled with Google OAuth login exactly as originally planned (build order item 5) — unchanged by this decision, just the Calendar half is now MCP instead of a direct API client. |
 | Reliability: **Groq added as an automatic fallback** when Gemini's quota is exhausted, 2026-08-25 | Direct response to the `gemini-3.6-flash` 20-requests/day wall above — a live demo can't be allowed to 502 mid-presentation. Groq's free tier (30 RPM / 6,000 TPM / **14,400 requests/day**, no card, no expiry) is ~700x that cap. Scoped to `llm_service.py`'s core paths only (`_call_gemini`/`_call_gemini_chat`, so every caller — intent classification, meta inference, chunk generation, Q&A — gets it automatically) and gated strictly on `_is_rate_limited` (HTTP 429 specifically) so a real bug (bad schema, invalid key, Google's servers down) still fails exactly as before rather than being masked by "well, Groq answered." Deliberately **not** wired into `agent_service.py`'s currency tool-calling step — that already degrades gracefully to `""` on any failure, so it's lower-stakes and out of scope. New `groq_service.py`, using the `openai` SDK pointed at Groq's OpenAI-compatible endpoint (principle #3: reuse an existing wrapper, don't hand-roll one) — model is `llama-3.3-70b-versatile`, deliberately **not Gemma 4** despite Gemma also being servable via Groq (see the row above: real problems found live). Anthropic Claude and OpenAI were evaluated and ruled out for this — neither has a persistent free API tier in 2026 (both give a one-time ~$5 trial credit, then pay-as-you-go), which doesn't sustain this project's $0 budget; revisit if that constraint ever changes. Groq's structured-output strict mode requires every schema property to be listed as required, which doesn't match this app's schemas (e.g. optional `notes` fields) — used in best-effort (`strict: false`) mode plus manual `model_validate_json` instead of fighting that mismatch. Not yet live-verified end-to-end (no `GROQ_API_KEY` was available to test with this session) — verified via mocked tests only; live-verify before relying on this for an actual presentation. |
+| Itinerary export: **.ics only, built 2026-08-26** — PDF deferred | Build-order item 3. New `calendar_export.py` (pure formatting, no LLM, no network call) builds one `VEVENT` per `ItineraryItem` via the `icalendar` library (pinned `==7.3.0`, the current stable release verified on PyPI at build time — pure Python, no transitive network-calling deps). Each event's real date is `trip.start_date + (day_number - 1)`, plain Python arithmetic (principle #6's discipline, even with no LLM anywhere near this feature). Exposed as `GET /trips/{trip_id}/calendar.ics` in `routers/trips.py`, returning `404` for an unknown trip and `400` when `trip.start_date` is `None` (a defensive check for direct API callers — the UI never surfaces an export control in that state at all, see below). **Deliberately floating local time, no `TZID`**: no reliable per-destination timezone is available at this layer without a second geocode call (`weather_service`'s Open-Meteo request resolves one internally via `timezone=auto`, but that value never surfaces past that module), and floating time is valid, correct RFC 5545 behavior for "9am in Lisbon" regardless of the importing calendar app's own timezone — revisit only if a real user complaint surfaces, not speculatively. `time_of_day` (freeform text — "morning", "14:00", "flexible", or `None`) is resolved to a real clock time via a small regex-plus-keyword heuristic (literal 24h/12h times first, then a fixed keyword table — "late morning" checked before the plainer "morning" so more specific phrasing wins), the same "small keyword lookup, not an LLM call" style already used by `streamlit_app.py::_weather_icon`; anything unrecognized (including `None`) becomes an all-day event rather than a guessed time. Timed events get a fixed 2-hour default duration (items carry no explicit length). **Frontend gating, per explicit product decision**: the export control is hidden entirely, not disabled, until a trip has a resolved `start_date` — no fallback-to-today, no error state shown to the end user. It appears in two places in `streamlit_app.py`, both reusing one `_get_ics_bytes()` session-cached fetch: inline at the bottom of `render_trip()` right under the freshly generated itinerary, and as a persistent top-of-chat control (`_latest_exportable_trip()` scans the loaded conversation's messages newest-first for the latest trip with both a `trip_id` and a `start_date`). `TripResponse.start_date` was added to `schemas.py` and threaded through all three places a `TripResponse` is built from a real `Trip` row (`generate_trip`, `get_trip`, `conversations.py::get_conversation`) specifically so the frontend has this to gate on without guessing. |
 
 ## Architecture principles
 
@@ -206,13 +278,42 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    summary correctly saying "Reykjavik". A destination typo the model
    *doesn't* catch remains a latent, unconfirmed risk -- geocoding has no
    fuzzy-match fallback -- but isn't worth solving speculatively without a
-   real case.
+   real case. **Third round, 2026-08-26** -- same visible symptom
+   ("I don't have weather data") as the two rounds above, but a genuinely
+   different bug from either: a trip generated with no date phrase at all
+   ("build me a 5 day trip to austin") correctly has `start_date = None`,
+   and a follow-up question that *itself* named a date ("what do the
+   temperatures look like ... this weekend") still got the no-data reply,
+   because `routers/trips.py`'s `question` branch never called
+   `date_resolver.resolve_trip_start_date` on anything, ever -- it only
+   ever read the trip's already-resolved `start_date`, which generation
+   left `None`. Unlike round one (data existed, wasn't passed through) or
+   round two (the resolver's regex didn't recognize a phrasing), this was a
+   code path that had never had date-resolution logic in it at all, so no
+   amount of regex coverage in `date_resolver.py` could have helped. Fixed
+   by trying `date_resolver.resolve_trip_start_date(request.prompt, ...)`
+   on the question's own text when `latest_trip.start_date is None`, and
+   persisting the resolved date onto the trip (so it also unlocks weather
+   for later turns and the `.ics` export button, not just this one
+   answer -- principle #5). See
+   [`docs/sessions/2026-08-26-qa-date-bug-and-currency-pause.md`](docs/sessions/2026-08-26-qa-date-bug-and-currency-pause.md)
+   for the full write-up and a follow-up audit for the same divergence
+   pattern elsewhere: it found one more real instance (weather always
+   geocodes `trip.destination`, never a different city named in a
+   follow-up question -- left open, no existing deterministic extractor to
+   reuse the way `date_resolver.py` was here) and one instance that's now
+   moot (currency's cache-once-per-conversation gate has the same shape,
+   but currency itself is paused as of the same day, see decision log).
 2. Gemini swap (structured output + native tool calling) — **done** (see
    decision log for the concrete `gemini-3.6-flash`/`thinking_level`/
    `role="user"` corrections found only by actually building it). The agent
-   tool-calling step is **re-enabled** (currency only — weather stays
-   removed, see decision log), verified live 2026-08-25.
+   tool-calling step (currency only — weather stays removed) was
+   re-enabled and verified live 2026-08-25, then **paused again
+   2026-08-26** — a product decision that currency isn't needed, not a
+   reliability finding — see decision log.
 3. Itinerary export (.ics / PDF) — zero external dependencies, no quota risk.
+   **.ics — done, 2026-08-26** (see decision log); PDF not built, deferred
+   indefinitely rather than pulled into this round.
 4. Maps/routing integration (OSM-based: Nominatim + Overpass +
    OpenRouteService + Open-Meteo + Wikipedia — see decision log) — real
    coordinates, distances, travel time, place importance, and a per-day
@@ -288,8 +389,9 @@ backend/app/
   tools.py                 Tool implementations + schemas (currency via Frankfurter; weather removed)
   date_resolver.py          Real-Python date extraction from the prompt (no LLM) -- see decision log
   weather_service.py        Open-Meteo geocode + per-day forecast, not a Gemini tool -- see decision log
+  calendar_export.py        Builds a trip's .ics file (icalendar) -- pure formatting, no LLM/network call, see decision log
   schemas.py                Pydantic request/response models (TripRequest, TripResponse, etc.)
-  routers/trips.py         /trips/generate — the main request path, ties everything together
+  routers/trips.py         /trips/generate — the main request path, ties everything together; also GET /trips/{id}/calendar.ics
   routers/conversations.py  Chat history endpoints
 backend/tests/            pytest, in-memory SQLite, Gemini calls mocked
 frontend/streamlit_app.py  Chat UI

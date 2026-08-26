@@ -24,4 +24,6 @@ rather than repeating its rationale.
 
 | Date | Summary | Notes |
 |---|---|---|
+| [2026-08-26](2026-08-26-qa-date-bug-and-currency-pause.md) | Third weather/Q&A grounding bug fixed (question text's own date phrase never resolved); audit for the same pattern elsewhere; currency conversion paused again (product decision, not reliability) | Weather destination-override left open as a known gap — no existing extractor to reuse. |
+| [2026-08-26](2026-08-26-ics-calendar-export.md) | .ics calendar export for generated itineraries (build-order item 3) | PDF export still deferred. Export control hidden entirely in the UI until a trip has a resolved start date. Not live-verified against a running stack (would cost real Gemini quota) — verified via the automated test suite only. |
 | [2026-08-25](2026-08-25-weather-feature-and-llm-reliability.md) | Real per-day weather (Open-Meteo), re-enabled the currency agent step, adopted MCP for future tools, escaped Gemini's 20-req/day free-tier wall with a model swap + Groq fallback | Two live bugs found and fixed post-ship: Q&A fabricating temperatures, and a missed "N days from now" date phrasing. Gemma 4 evaluated and rejected as a Gemini replacement (real structured-output + instruction-following bugs found live). |

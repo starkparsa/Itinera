@@ -10,15 +10,16 @@ budget converts to X local currency") that then gets folded into the
 itinerary prompts as plain text -- the itinerary writer never has to make
 tool-calling decisions itself, only the agent step does.
 
-RE-ENABLED (AGENT_TOOL_CALLING_ENABLED = True) as of this session: the
-weather tool this loop used to also call (OpenWeather, in tools.py) wasn't
-working reliably in practice, so it was removed outright; currency
-conversion was paused alongside it too rather than leaving a half-working
-agent step running, and is now turned back on by itself -- being verified
-live before further build-order work proceeds. gather_trip_context() now
-actually runs the loop again instead of short-circuiting to "". Flip
-AGENT_TOOL_CALLING_ENABLED back to False as a kill switch if currency proves
-unreliable too (same as weather did).
+PAUSED AGAIN (AGENT_TOOL_CALLING_ENABLED = False) as of 2026-08-26 -- but
+for a different reason than weather's removal. Weather (OpenWeather, in
+tools.py) was removed outright because it wasn't working reliably in
+practice. Currency was re-enabled on 2026-08-25, verified live, and worked
+correctly -- it's paused now purely because of a product decision that
+currency conversion isn't needed, not because anything broke. See
+CLAUDE.md's decision log. gather_trip_context() short-circuits to "" while
+paused, same mechanism as before -- no other code path needed to change to
+flip this back off. Flip AGENT_TOOL_CALLING_ENABLED back to True to bring it
+back if that decision changes.
 
 Migrated to Gemini's function-calling shape (google.genai.types) alongside
 llm_service.py before this was re-enabled, so the mechanics didn't need
@@ -30,7 +31,7 @@ from . import llm_service, tools
 
 MAX_TOOL_ROUNDS = 4
 
-AGENT_TOOL_CALLING_ENABLED = True
+AGENT_TOOL_CALLING_ENABLED = False
 
 AGENT_SYSTEM_PROMPT = """You are a travel planning assistant with access to \
 a tool for currency conversion. Given a trip request, call the tool only if \

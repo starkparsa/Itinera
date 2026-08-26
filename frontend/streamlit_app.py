@@ -58,6 +58,32 @@ def _weather_icon(condition: str) -> str:
     return "🌤️"
 
 
+def _get_ics_bytes(trip_id: int) -> bytes | None:
+    """Fetches a trip's .ics export once and caches it in session_state --
+    Streamlit reruns the whole script on every interaction (typing, sidebar
+    clicks), and this avoids refetching on every unrelated rerun."""
+    cache = st.session_state.setdefault("ics_cache", {})
+    if trip_id not in cache:
+        try:
+            res = requests.get(f"{BACKEND_URL}/trips/{trip_id}/calendar.ics", timeout=15)
+            res.raise_for_status()
+            cache[trip_id] = res.content
+        except requests.exceptions.RequestException:
+            return None
+    return cache[trip_id]
+
+
+def _latest_exportable_trip() -> dict | None:
+    """Newest trip in the active conversation with a resolved start_date --
+    export only becomes available once one exists (see CLAUDE.md decision
+    log), so this returns None (button stays hidden entirely) otherwise."""
+    for msg in reversed(st.session_state.messages):
+        trip = msg.get("trip")
+        if trip and trip.get("start_date") and trip.get("trip_id"):
+            return trip
+    return None
+
+
 def render_trip(trip: dict):
     if trip.get("agent_context"):
         st.success(f"🔎 **Agent findings:** {trip['agent_context']}")
@@ -87,6 +113,21 @@ def render_trip(trip: dict):
                 st.markdown(f"- {label}")
                 if item.get("notes"):
                     st.caption(item["notes"])
+
+    # Export is only offered once a real start date was resolved -- hidden
+    # entirely otherwise, never a disabled button or a guessed date (see
+    # CLAUDE.md decision log).
+    if trip.get("start_date") and trip.get("trip_id"):
+        st.markdown("---")
+        ics_bytes = _get_ics_bytes(trip["trip_id"])
+        if ics_bytes:
+            st.download_button(
+                "📅 Add this itinerary to your calendar",
+                data=ics_bytes,
+                file_name=f"trip-{trip['trip_id']}.ics",
+                mime="text/calendar",
+                key=f"ics_download_inline_{trip['trip_id']}",
+            )
 
 
 refresh_conversation_list()
@@ -128,7 +169,24 @@ with st.sidebar:
         st.caption("No chats yet — start one below.")
 
 # ---------- main chat area ----------
-st.title("🧭 AI Travel Planner")
+title_col, export_col = st.columns([4, 1])
+with title_col:
+    st.title("🧭 AI Travel Planner")
+
+_latest_trip = _latest_exportable_trip()
+if _latest_trip:
+    with export_col:
+        st.write("")  # nudge the button down to roughly align with the title
+        ics_bytes = _get_ics_bytes(_latest_trip["trip_id"])
+        if ics_bytes:
+            st.download_button(
+                "📅 Export itinerary",
+                data=ics_bytes,
+                file_name=f"trip-{_latest_trip['trip_id']}.ics",
+                mime="text/calendar",
+                key="ics_download_top",
+                use_container_width=True,
+            )
 
 if not st.session_state.messages:
     st.caption("Describe a trip to start planning. Follow-ups in the same chat (e.g. \"make it a week instead\") reference what you asked before.")

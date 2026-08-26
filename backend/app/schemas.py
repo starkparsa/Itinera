@@ -45,6 +45,11 @@ class TripResponse(BaseModel):
     # only when a start date was resolvable -- empty, never fabricated, is
     # the fallback (see date_resolver.py / weather_service.py).
     weather: list[DayWeatherOut] = []
+    # Resolved trip start date, or None if the prompt never named one (see
+    # date_resolver.py). The frontend uses this, not a guess, to decide
+    # whether to show a calendar-export button at all -- see
+    # calendar_export.py.
+    start_date: date | None = None
 
 
 class MessageOut(BaseModel):
