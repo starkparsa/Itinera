@@ -50,7 +50,7 @@ def test_get_trip_404s_for_a_different_user():
     user_a = _make_user("user-a")
     user_b = _make_user("user-b")
 
-    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         created = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
@@ -66,7 +66,7 @@ def test_calendar_export_404s_for_a_different_user():
     user_a = _make_user("user-a")
     user_b = _make_user("user-b")
 
-    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         created = client.post("/trips/generate", json={"prompt": "weekend in Austin starting 2026-09-01"})
@@ -82,7 +82,7 @@ def test_get_conversation_404s_for_a_different_user():
     user_a = _make_user("user-a")
     user_b = _make_user("user-b")
 
-    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         created = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
@@ -98,7 +98,7 @@ def test_delete_conversation_404s_for_a_different_user_and_leaves_it_intact():
     user_a = _make_user("user-a")
     user_b = _make_user("user-b")
 
-    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         created = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
@@ -116,12 +116,12 @@ def test_list_conversations_only_shows_the_callers_own():
     user_a = _make_user("user-a")
     user_b = _make_user("user-b")
 
-    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         client.post("/trips/generate", json={"prompt": "weekend in Austin"})
 
-    with _act_as(user_b), patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with _act_as(user_b), patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         client.post("/trips/generate", json={"prompt": "weekend in Miami"})
@@ -142,7 +142,7 @@ def test_trip_request_body_no_longer_accepts_a_user_id_field():
     user_a = _make_user("user-a")
     user_b = _make_user("user-b")
 
-    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with _act_as(user_a), patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         # Attempting to impersonate user_b via the request body.

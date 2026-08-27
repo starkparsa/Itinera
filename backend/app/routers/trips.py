@@ -99,7 +99,7 @@ def generate_trip(
     # is also what actually restricts the assistant to travel topics --
     # off-topic requests never reach the LLM's itinerary/agent machinery at
     # all, they get a fixed, non-LLM-generated decline.
-    intent = llm_service.classify_intent(request.prompt, conversation_context)
+    intent, tour_guide_requested = llm_service.classify_intent(request.prompt, conversation_context)
 
     if intent == "off_topic":
         db.add(models.Message(conversation_id=conversation.id, role="user", content=request.prompt))
@@ -188,6 +188,11 @@ def generate_trip(
         # never block an answer to the user's question.
         reply_text = agent_service.answer_question_with_tools(
             request.prompt, chat_messages, agent_context=combined_context,
+            # Pass the mode as it stood ENTERING this turn -- the
+            # triggering "be my tour guide" turn itself already gets a
+            # detailed reply via QA_TOOL_SYSTEM_PROMPT's own per-turn
+            # instruction, this flag only needs to cover turns after that.
+            tour_guide_mode=conversation.tour_guide_mode,
         )
 
         try:
@@ -202,6 +207,12 @@ def generate_trip(
         if conversation.agent_context is None:
             conversation.agent_context = fresh_agent_context
 
+        # This turn explicitly asked the assistant to become a tour guide
+        # -- stays on for later turns until an edit_trip/new_trip turn
+        # clears it (see the branch below).
+        if tour_guide_requested:
+            conversation.tour_guide_mode = True
+
         db.add(models.Message(conversation_id=conversation.id, role="user", content=request.prompt))
         db.add(models.Message(conversation_id=conversation.id, role="assistant", content=reply_text))
         db.commit()
@@ -211,6 +222,34 @@ def generate_trip(
     # currently still regenerates the whole thing (with conversation_context
     # carrying the requested change) rather than surgically editing specific
     # days -- true diff-based editing is a bigger feature for another time.
+    #
+    # Explicitly talking about planning again turns persistent tour-guide
+    # mode back off -- unconditional, regardless of tour_guide_requested
+    # (INTENT_INSTRUCTIONS tells the model that combination shouldn't
+    # happen, but "off" wins on a planning turn either way, so there's no
+    # ambiguous state even if the model doesn't perfectly obey that).
+    conversation.tour_guide_mode = False
+    #
+    # Looked up once here and reused for both the day-count fallback (below,
+    # passed into generate_itinerary) and the start_date fallback (further
+    # down) -- one query, two consumers, rather than duplicating it.
+    previous_trip = (
+        db.query(models.Trip)
+        .filter(models.Trip.conversation_id == conversation.id)
+        .order_by(models.Trip.id.desc())
+        .first()
+    )
+    # Regression fix: a follow-up with no day-count language at all (e.g.
+    # "I want to experience the artsy miami" after a real 5-day trip was
+    # already generated) was silently coming back a different length,
+    # because total_days was re-guessed from scratch on every call with no
+    # anchor to what was already established -- see
+    # llm_service._infer_trip_meta's docstring for the fix. max(day_number)
+    # over the previous trip's saved items, not a second query.
+    previous_total_days = None
+    if previous_trip and previous_trip.items:
+        previous_total_days = max(item.day_number for item in previous_trip.items)
+
     try:
         result = llm_service.generate_itinerary(
             request.prompt,
@@ -222,6 +261,7 @@ def generate_trip(
             # generated a trip yet; once set (even to "" for "found
             # nothing"), it's cached for the conversation's lifetime.
             cached_agent_context=conversation.agent_context,
+            previous_total_days=previous_total_days,
         )
     except Exception as exc:
         logger.exception("Itinerary generation failed for conversation %s", conversation.id)
@@ -242,18 +282,12 @@ def generate_trip(
     # Real calendar start date, resolved in Python (never LLM arithmetic --
     # principle #6). If this turn's prompt doesn't say a date (e.g. an
     # edit_trip turn like "make it longer"), fall back to whatever the
-    # previous trip in this conversation resolved, the same reuse pattern
-    # already used for the agent_context cache and the Q&A destination hint.
+    # previous trip in this conversation resolved (looked up once, above,
+    # and reused here), the same reuse pattern already used for the
+    # agent_context cache and the Q&A destination hint.
     start_date = date_resolver.resolve_trip_start_date(request.prompt, date.today())
-    if start_date is None:
-        previous_trip = (
-            db.query(models.Trip)
-            .filter(models.Trip.conversation_id == conversation.id)
-            .order_by(models.Trip.id.desc())
-            .first()
-        )
-        if previous_trip:
-            start_date = previous_trip.start_date
+    if start_date is None and previous_trip:
+        start_date = previous_trip.start_date
 
     trip = models.Trip(
         user_id=user.id,

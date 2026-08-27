@@ -119,7 +119,11 @@ classification step (`classify_intent` in `llm_service.py`) that runs
   same as before. Note: `edit_trip` currently still regenerates the whole
   itinerary (with conversation context describing the requested change)
   rather than surgically editing specific days -- true diff-based editing
-  is a bigger feature for later.
+  is a bigger feature for later. A prompt with no day-count language (e.g.
+  "I want to experience the artsy side of it" after a 5-day trip was
+  already generated) preserves the previously-established trip length as a
+  soft default rather than re-guessing it from scratch -- it's still fully
+  changeable by saying so ("make it a full week instead").
 - **`question`** -- answered conversationally via real chat-formatted
   history (not the squashed summary string), without touching the
   itinerary generator at all.
@@ -128,6 +132,10 @@ classification step (`classify_intent` in `llm_service.py`) that runs
   (coding help, general trivia, prompt-injection attempts) never reach the
   agent or itinerary machinery, and the decline text itself can't be
   manipulated since it's not model-generated.
+
+The same classification call also detects when a message explicitly asks
+the assistant to act as a **tour guide** (e.g. "be my tour guide", "take me
+through this place") -- see "Tour-guide mode" below for what that turns on.
 
 This closes the latency gap for anything that isn't a genuine trip request
 (no agent loop, no chunked generation for a question or a decline), and the
@@ -166,40 +174,61 @@ generation:
 - Switching chats in the sidebar reloads that conversation's full message
   history, including past itineraries, from MySQL.
 
+## Weather
+
+Real per-day forecasts (Open-Meteo, free, no key) are fetched directly for
+every trip with a resolved `start_date` -- **not** through the agentic
+tool-calling loop below at all. "Does this trip get a forecast" is never a
+judgment call the model makes, so `weather_service.py` is called straight
+from the routers on every trip/reload instead, at zero extra LLM cost.
+Shown in the UI per day, and folded into Q&A answers on every question turn
+so a follow-up like "what should I pack?" is grounded in the real numbers
+instead of an invented one. Cached per-trip with a 3-hour TTL.
+
 ## Agentic tool-calling
 
-**Currently paused** (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`).
-There used to be a small agent loop (`agent_service.py`) before writing the
-itinerary, where the model itself decided whether to call one of two
-free, no-API-key tools:
-- **Weather**, via OpenWeather — removed outright after proving unreliable
-  in practice (see CLAUDE.md's decision log).
-- **Currency conversion** (`tools.py`, via Frankfurter/ECB rates) — the
-  tool/schema are still in place, but paused alongside weather rather than
-  leaving a half-working agent step running.
+Two **separate** tool-calling loops in `agent_service.py`, each with its
+own on/off flag and its own tool schema -- deliberately not one shared
+loop, since they have different caching needs (see below):
 
-While paused, `gather_trip_context()` returns "" immediately with no
-network calls, so generation behaves exactly as if the agent step found
-nothing useful. When it was running: the model chose whether either tool
-was actually useful for a given trip (not hardcoded), findings got folded
-into the itinerary prompts as context and shown in the UI under "Agent
-findings," and the step was best-effort — if the model didn't use tools
-well, or a tool API was unreachable, generation proceeded normally without
-it. Flip `AGENT_TOOL_CALLING_ENABLED` back to `True` (and re-add a weather
-tool, if wanted) to bring this back.
+- **Currency conversion** (`tools.py`, via Frankfurter/ECB rates) —
+  **currently paused** (`agent_service.AGENT_TOOL_CALLING_ENABLED = False`,
+  a product decision, not a reliability problem — the tool/schema are still
+  in place). Runs once per conversation, up front, before itinerary
+  generation; its finding is cached on `Conversation.agent_context` and
+  reused on every later edit turn rather than re-running.
+- **Place context** (`tools.py`'s `get_place_context`, via Wikipedia — free,
+  no key) — **on by default**
+  (`agent_service.QA_TOOL_CALLING_ENABLED = True`). Reachable only from
+  conversational `question`-intent turns, and run **fresh on every such
+  turn** (never cached across turns, unlike currency) since a different
+  place can be asked about each time. Defaults to a brief 1-3 sentence
+  overview; only gives a fuller, multi-paragraph answer when the user's own
+  words ask for more (e.g. "give me the full history", "be my tour guide").
 
-When enabled, findings are cached on the conversation
-(`Conversation.agent_context`) after the first turn and reused on every
-later turn (edits, follow-ups) in the same chat, rather than re-running the
-tool-calling loop -- and its Gemini round-trip -- on every single message.
+While a loop is paused, its function returns `""` immediately with no
+network call, so generation/Q&A behaves exactly as if nothing useful was
+found. Both are best-effort: if a tool API is unreachable, the turn
+proceeds normally without it rather than failing.
 
 **Note:** Gemini's native function calling (`response.function_calls`,
-`types.FunctionDeclaration`) replaced the old hand-rolled Ollama tool loop
-in this migration, even while paused -- see `agent_service.py`. Function
-calling reliability is a known, documented caveat for Gemini too (not
-unique to local models), particularly in long conversations under the
-default `function_calling_config.mode="AUTO"` -- worth keeping in mind if
-this step gets re-enabled and starts behaving oddly.
+`types.FunctionDeclaration`) replaced the old hand-rolled Ollama tool loop.
+Function calling reliability is a known, documented caveat for Gemini too
+(not unique to local models), particularly in long conversations under the
+default `function_calling_config.mode="AUTO"` — worth keeping in mind if a
+paused loop gets re-enabled and starts behaving oddly.
+
+## Tour-guide mode
+
+Once you explicitly ask the assistant to act as a tour guide ("be my tour
+guide", "take me through this place"), later follow-up questions in the
+same conversation keep getting that fuller, narrative-guide style by
+default too — even ones that don't repeat the phrasing — until you
+explicitly go back to planning/editing the itinerary (at which point it
+turns back off). This is real, persisted state
+(`Conversation.tour_guide_mode`), not just a per-message model judgment:
+the same `classify_intent` call that already routes each message also
+detects the trigger phrase, at no extra LLM cost.
 
 ## Troubleshooting
 

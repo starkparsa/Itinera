@@ -87,6 +87,16 @@ If a tool result contains an "error" field, that specific information is \
 unavailable -- say so briefly rather than inventing a plausible-sounding \
 fact to fill the gap.
 
+This applies just as much when the tool call succeeds: only name a \
+specific business, restaurant, museum, gallery, or street address if it \
+came from the tool's result or was already mentioned earlier in this \
+conversation. Never invent a specific venue name or address to make a \
+"tour guide"-style answer sound more detailed -- describe the kind of \
+experience instead (e.g. "grab a plate of Haitian food at a local spot" \
+rather than naming a restaurant you don't actually have data on). A \
+guided-sounding answer built from real, general facts is correct; one \
+padded with invented specifics is not.
+
 Answer directly and conversationally once you have what you need."""
 
 
@@ -204,7 +214,9 @@ def gather_trip_context(prompt: str, destination: str | None = None) -> str:
     return _run_tool_loop(contents, AGENT_SYSTEM_PROMPT, tools.CURRENCY_TOOL_SCHEMAS)
 
 
-def answer_question_with_tools(prompt: str, chat_messages: list[dict], agent_context: str = "") -> str:
+def answer_question_with_tools(
+    prompt: str, chat_messages: list[dict], agent_context: str = "", tour_guide_mode: bool = False,
+) -> str:
     """Runs the place-context tool-calling loop for a conversational
     follow-up question and returns a plain-text answer, or "" if the step
     is disabled, fails for any reason, or MAX_TOOL_ROUNDS is exceeded.
@@ -230,11 +242,35 @@ def answer_question_with_tools(prompt: str, chat_messages: list[dict], agent_con
     through here too so this loop doesn't lose access to real data (and
     doesn't re-ask a tool for something already known) just because it
     takes a different code path.
+
+    tour_guide_mode: True when this conversation is already in persistent
+    tour-guide mode from an earlier turn (Conversation.tour_guide_mode,
+    set by routers/trips.py when a PAST turn's classify_intent returned
+    tour_guide_requested=True). Distinct from QA_TOOL_SYSTEM_PROMPT's
+    existing per-turn "be my tour guide" instruction, which only covers
+    THIS turn's own wording -- this flag keeps the fuller, narrative style
+    going on later turns that don't repeat that phrasing. The triggering
+    turn itself doesn't need this True yet (QA_TOOL_SYSTEM_PROMPT already
+    handles it), so callers should pass the conversation's state as it
+    stood *entering* this turn, not including any update this turn makes.
     """
     if not QA_TOOL_CALLING_ENABLED:
         return ""
 
     system_instruction = QA_TOOL_SYSTEM_PROMPT
+    if tour_guide_mode:
+        system_instruction += (
+            "\n\nYou are continuing an ongoing tour-guide-style conversation "
+            "-- the user explicitly asked you to be their tour guide earlier "
+            "in this chat, and that request still stands even though this "
+            "specific message may not repeat it. Keep answering in that "
+            "fuller, narrative tour-guide style by default for this turn: "
+            "call get_place_context with detail=\"detailed\" (not \"brief\") "
+            "for any newly-named place, and give the fuller, multi-paragraph "
+            "answer described above for detail=\"detailed\" mode -- unless "
+            "this specific message's own words clearly ask for something "
+            "short instead."
+        )
     if agent_context:
         system_instruction += (
             f"\n\nReal data gathered earlier for this trip (for your reference "

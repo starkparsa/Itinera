@@ -31,7 +31,7 @@ def mock_intent_classification():
     # Every existing test here exercises the itinerary pipeline directly, so
     # default classification to "new_trip" (the original, pre-routing
     # behavior) unless a test overrides this to exercise routing itself.
-    with patch("app.llm_service.classify_intent", return_value="new_trip"):
+    with patch("app.llm_service.classify_intent", return_value=("new_trip", False)):
         yield
 
 
@@ -84,6 +84,7 @@ def test_generate_trip_forwards_requested_days_to_llm_service():
 
     mock_generate.assert_called_once_with(
         "a month in Japan", requested_days=30, conversation_context="", cached_agent_context=None,
+        previous_total_days=None,
     )
 
 
@@ -250,7 +251,7 @@ def test_delete_conversation_with_a_generated_trip_does_not_500():
 
 def test_off_topic_message_never_calls_generate_itinerary():
     with (
-        patch("app.llm_service.classify_intent", return_value="off_topic"),
+        patch("app.llm_service.classify_intent", return_value=("off_topic", False)),
         patch("app.llm_service.generate_itinerary") as mock_generate,
     ):
         response = client.post("/trips/generate", json={"prompt": "write me a python script"})
@@ -263,7 +264,7 @@ def test_off_topic_message_never_calls_generate_itinerary():
 
 
 def test_off_topic_reply_is_saved_to_conversation():
-    with patch("app.llm_service.classify_intent", return_value="off_topic"):
+    with patch("app.llm_service.classify_intent", return_value=("off_topic", False)):
         response = client.post("/trips/generate", json={"prompt": "help me debug my code"})
 
     conv_id = response.json()["conversation_id"]
@@ -274,7 +275,7 @@ def test_off_topic_reply_is_saved_to_conversation():
 
 def test_question_message_calls_answer_question_not_generate_itinerary():
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.llm_service.answer_question", return_value="It'll likely be warm and sunny.") as mock_answer,
         patch("app.llm_service.generate_itinerary") as mock_generate,
@@ -294,7 +295,7 @@ def test_question_uses_place_context_tool_answer_when_available():
     # entirely -- the inverse of the conftest.py default (which returns ""
     # and falls through) used by every other question test in this file.
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch(
             "app.routers.trips.agent_service.answer_question_with_tools",
@@ -315,7 +316,7 @@ def test_question_falls_back_to_plain_answer_when_tool_loop_returns_nothing():
     # question test via conftest.py's autouse override) -- spelled out
     # explicitly here as the direct counterpart to the test above.
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.routers.trips.agent_service.answer_question_with_tools", return_value="") as mock_qa_tools,
         patch("app.llm_service.answer_question", return_value="A generic answer.") as mock_answer,
@@ -328,13 +329,73 @@ def test_question_falls_back_to_plain_answer_when_tool_loop_returns_nothing():
     mock_answer.assert_called_once()
 
 
+def test_tour_guide_mode_persists_across_question_turns_and_clears_on_edit_trip():
+    # Turn 1: the user explicitly triggers tour-guide mode. classify_intent
+    # reports tour_guide_requested=True for THIS turn -- the mode isn't on
+    # yet when answer_question_with_tools is called (it only needs to cover
+    # LATER turns, this one already gets a detailed reply via
+    # QA_TOOL_SYSTEM_PROMPT's own per-turn instruction), but it must be
+    # persisted onto the conversation afterward.
+    with (
+        patch("app.llm_service.classify_intent", return_value=("question", True)),
+        patch(
+            "app.routers.trips.agent_service.answer_question_with_tools",
+            return_value="Sure, let's go!",
+        ) as mock_qa,
+    ):
+        response = client.post("/trips/generate", json={"prompt": "be my tour guide"})
+
+    conv_id = response.json()["conversation_id"]
+    assert mock_qa.call_args.kwargs["tour_guide_mode"] is False  # not yet on entering this turn
+
+    db = SessionLocal()
+    try:
+        conversation = db.query(models.Conversation).filter(models.Conversation.id == conv_id).first()
+        assert conversation.tour_guide_mode is True
+    finally:
+        db.close()
+
+    # Turn 2: a vague follow-up that does NOT re-trigger tour_guide_requested
+    # -- the persisted mode from turn 1 should still be passed through.
+    with (
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
+        patch(
+            "app.routers.trips.agent_service.answer_question_with_tools",
+            return_value="More detail...",
+        ) as mock_qa2,
+    ):
+        client.post(
+            "/trips/generate",
+            json={"prompt": "what else is nearby?", "conversation_id": conv_id},
+        )
+
+    assert mock_qa2.call_args.kwargs["tour_guide_mode"] is True
+
+    # Turn 3: explicitly back to planning -- mode clears.
+    with (
+        patch("app.llm_service.classify_intent", return_value=("edit_trip", False)),
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+    ):
+        client.post(
+            "/trips/generate",
+            json={"prompt": "actually let's do a proper 3-day itinerary", "conversation_id": conv_id},
+        )
+
+    db = SessionLocal()
+    try:
+        conversation = db.query(models.Conversation).filter(models.Conversation.id == conv_id).first()
+        assert conversation.tour_guide_mode is False
+    finally:
+        db.close()
+
+
 def test_question_receives_real_chat_history_not_squashed_string():
     with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
         first = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
     conv_id = first.json()["conversation_id"]
 
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.llm_service.answer_question", return_value="Sure thing.") as mock_answer,
     ):
         client.post("/trips/generate", json={"prompt": "why Zilker Park?", "conversation_id": conv_id})
@@ -356,7 +417,7 @@ def test_question_receives_the_conversations_cached_agent_findings():
     conv_id = first.json()["conversation_id"]
 
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.llm_service.answer_question", return_value="It'll be hot.") as mock_answer,
     ):
         client.post("/trips/generate", json={"prompt": "what's the temperature there?", "conversation_id": conv_id})
@@ -366,7 +427,7 @@ def test_question_receives_the_conversations_cached_agent_findings():
 
 def test_question_answer_failure_returns_502_not_500():
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.llm_service.answer_question", side_effect=RuntimeError("ollama unreachable")),
     ):
@@ -383,7 +444,7 @@ def test_question_triggers_on_demand_fetch_when_nothing_cached_yet():
     # first question in a fresh conversation should try a real, scoped
     # fetch before answering.
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch(
             "app.routers.trips.agent_service.gather_trip_context",
             return_value="Austin: highs of 32C, dry.",
@@ -402,7 +463,7 @@ def test_question_on_demand_finding_is_cached_and_not_refetched():
     # it found nothing), it must not fire again on every later question --
     # same cache-once contract as itinerary generation's agent_context.
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch(
             "app.routers.trips.agent_service.gather_trip_context",
             return_value="Austin: highs of 32C, dry.",
@@ -413,7 +474,7 @@ def test_question_on_demand_finding_is_cached_and_not_refetched():
     conv_id = first.json()["conversation_id"]
 
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context") as mock_fetch_again,
         patch("app.llm_service.answer_question", return_value="Still hot.") as mock_answer,
     ):
@@ -450,7 +511,7 @@ def test_question_on_demand_fetch_uses_existing_trip_destination_as_hint():
         db.close()
 
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value="") as mock_fetch,
         patch("app.llm_service.answer_question", return_value="Not sure."),
     ):
@@ -511,6 +572,35 @@ def test_weather_falls_back_to_previous_trips_start_date_on_a_followup():
     assert second_trip_arg.start_date == date(2026, 8, 30)
 
 
+def test_day_count_falls_back_to_previous_trips_length_on_a_followup():
+    # Regression test for the exact reported bug: "Plan a 5 day trip to
+    # Miami" produced a real 5-day itinerary, then "I want to experience
+    # the artsy miami" (no day-count language at all) silently produced a
+    # 3-day itinerary instead of keeping 5 days -- because total_days was
+    # re-guessed from scratch on every call with nothing anchoring it to
+    # what was already established. This proves the router now looks up
+    # the previous trip's day count and passes it through, same reuse
+    # pattern as start_date above.
+    five_day_itinerary = {
+        "destination": "Miami",
+        "days": [
+            {"day_number": i, "items": [{"time_of_day": "morning", "activity": f"Day {i} activity"}]}
+            for i in range(1, 6)
+        ],
+    }
+    with patch("app.llm_service.generate_itinerary", return_value=five_day_itinerary):
+        first = client.post("/trips/generate", json={"prompt": "Plan a 5 day trip to Miami"})
+    conv_id = first.json()["conversation_id"]
+
+    with patch("app.llm_service.generate_itinerary", return_value=five_day_itinerary) as mock_generate:
+        client.post(
+            "/trips/generate",
+            json={"prompt": "I want to experience the artsy miami", "conversation_id": conv_id},
+        )
+
+    assert mock_generate.call_args.kwargs["previous_total_days"] == 5
+
+
 def test_get_trip_by_id_includes_weather():
     fake_weather = [
         {"day_number": 1, "date": "2026-08-30", "temp_min": 14.0, "temp_max": 22.5, "temp_min_f": 57.2, "temp_max_f": 72.5, "condition": "Clear sky"},
@@ -566,7 +656,7 @@ def test_question_about_weather_is_grounded_in_the_real_forecast():
     conv_id = first.json()["conversation_id"]
 
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
         patch("app.llm_service.answer_question", return_value="Light, breathable clothing given the heat.") as mock_answer,
@@ -599,7 +689,7 @@ def test_question_weather_grounding_refreshes_every_turn_unlike_currency():
 
     # First question -- Conversation.agent_context transitions from None to "".
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
         patch("app.llm_service.answer_question", return_value="It'll be hot."),
@@ -609,7 +699,7 @@ def test_question_weather_grounding_refreshes_every_turn_unlike_currency():
     # Second question -- Conversation.agent_context is now "" (cached), but
     # weather grounding must still be fetched and included.
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context") as mock_currency_fetch,
         patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather) as mock_weather_fetch,
         patch("app.llm_service.answer_question", return_value="Still hot.") as mock_answer,
@@ -623,7 +713,7 @@ def test_question_weather_grounding_refreshes_every_turn_unlike_currency():
 
 def test_question_with_no_trip_has_no_weather_context():
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.routers.trips.weather_service.get_or_refresh_trip_weather") as mock_weather_fetch,
         patch("app.llm_service.answer_question", return_value="I'm not sure yet.") as mock_answer,
@@ -652,7 +742,7 @@ def test_question_resolves_start_date_from_the_question_itself_when_trip_has_non
     assert first.json()["start_date"] is None  # sanity-check the premise
 
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather) as mock_weather_fetch,
         patch("app.llm_service.answer_question", return_value="Sunny and warm.") as mock_answer,
@@ -683,7 +773,7 @@ def test_question_does_not_override_an_already_resolved_start_date():
     assert first.json()["start_date"] == "2026-08-26"
 
     with (
-        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]),
         patch("app.llm_service.answer_question", return_value="Sure."),

@@ -35,7 +35,7 @@ def setup_function():
 
 @pytest.fixture(autouse=True)
 def mock_intent_classification():
-    with patch("app.llm_service.classify_intent", return_value="new_trip"):
+    with patch("app.llm_service.classify_intent", return_value=("new_trip", False)):
         yield
 
 

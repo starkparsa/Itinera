@@ -274,6 +274,33 @@ def test_qa_tools_folds_agent_context_into_system_instruction():
     assert "104-108F" in system_instruction
 
 
+def test_qa_tools_folds_tour_guide_mode_note_into_system_instruction():
+    response = _mock_tool_response(text="Sure.")
+
+    with (
+        patch("app.agent_service.QA_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
+    ):
+        agent_service.answer_question_with_tools("what else is nearby?", [], tour_guide_mode=True)
+
+    system_instruction = mock_call.call_args.args[1]
+    assert "continuing an ongoing tour-guide" in system_instruction
+    assert 'detail="detailed"' in system_instruction
+
+
+def test_qa_tools_omits_tour_guide_mode_note_by_default():
+    response = _mock_tool_response(text="Sure.")
+
+    with (
+        patch("app.agent_service.QA_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
+    ):
+        agent_service.answer_question_with_tools("what else is nearby?", [])
+
+    system_instruction = mock_call.call_args.args[1]
+    assert "continuing an ongoing tour-guide" not in system_instruction
+
+
 def test_qa_tools_network_failure_fails_quietly():
     with (
         patch("app.agent_service.QA_TOOL_CALLING_ENABLED", True),
@@ -288,3 +315,17 @@ def test_qa_system_prompt_instructs_brief_default_and_against_inventing():
     assert "brief" in agent_service.QA_TOOL_SYSTEM_PROMPT.lower()
     assert "error" in agent_service.QA_TOOL_SYSTEM_PROMPT.lower()
     assert "invent" in agent_service.QA_TOOL_SYSTEM_PROMPT.lower()
+
+
+def test_qa_system_prompt_instructs_against_inventing_specific_venues_in_detailed_mode():
+    # Regression test: live-verified that a successful (non-error) tool
+    # call in detail="detailed" mode could still get padded with invented-
+    # sounding specific business names/addresses not present in the tool
+    # result or conversation history (e.g. a fake-sounding "Chef Creole" /
+    # "Little Haiti Museum" / exact street numbers for a "be my tour guide"
+    # answer) -- the original anti-fabrication instruction only covered the
+    # tool-returned-an-error case, not "the tool succeeded but I'm padding
+    # the answer with plausible-sounding extras anyway". See docs/sessions/.
+    prompt_lower = agent_service.QA_TOOL_SYSTEM_PROMPT.lower()
+    assert "venue" in prompt_lower or "specific business" in prompt_lower
+    assert "address" in prompt_lower

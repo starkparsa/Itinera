@@ -231,6 +231,49 @@ def test_agent_context_is_surfaced_in_result_and_prompt():
     assert "near-freezing" in captured_prompts[1]
 
 
+def test_previous_total_days_is_folded_into_the_meta_prompt_as_a_soft_fact():
+    # Regression test: a follow-up with no day-count language at all ("I
+    # want to experience the artsy miami") after a real 5-day trip was
+    # already generated was silently coming back a different length,
+    # because total_days was re-guessed from scratch every call with no
+    # anchor to what was already established. previous_total_days grounds
+    # the meta prompt in that real fact -- as a soft instruction the model
+    # can still override if the new request itself asks for a different
+    # length, not a hard value like requested_days.
+    meta = TripMeta(destination="Miami", total_days=5)
+    chunk = _chunk([(i, "explore") for i in range(1, 6)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary("I want to experience the artsy miami", previous_total_days=5)
+
+    meta_prompt = captured_prompts[0]
+    assert "5-day itinerary" in meta_prompt
+    assert "unless" in meta_prompt
+
+
+def test_previous_total_days_omitted_when_none_leaves_meta_prompt_unchanged():
+    # A brand-new conversation (no prior trip) must still get the plain
+    # META_INSTRUCTIONS heuristics untouched -- no "already has a" fact
+    # should be injected when there's nothing to preserve.
+    meta = TripMeta(destination="Kyoto", total_days=3)
+    chunk = _chunk([(i, "sightsee") for i in range(1, 4)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary("3 days in Kyoto")
+
+    assert "already has a" not in captured_prompts[0]
+
+
 def test_describe_gemini_error_missing_api_key():
     exc = ValueError("No API key was provided. Please pass a valid API key.")
     assert "GEMINI_API_KEY" in llm_service._describe_gemini_error(exc)
@@ -305,19 +348,36 @@ def test_cached_agent_context_skips_the_agent_step_entirely():
 
 # ---------- intent classification ----------
 
+def test_intent_instructions_disambiguate_tour_guide_phrasing_from_edit_trip():
+    # Regression test: "be my tour guide"/"take me through this place" was
+    # being misclassified as edit_trip (regenerating a whole new itinerary)
+    # instead of question (the Wikipedia-grounded Q&A path) -- see
+    # docs/sessions/ for the live bug report. INTENT_INSTRUCTIONS had zero
+    # few-shot examples to disambiguate narrative/tour-guide phrasing from
+    # an actual itinerary-modification request. This guards the examples
+    # that fix it against being trimmed away later -- it cannot prove real
+    # classification behavior, since classify_intent's other tests all mock
+    # the Gemini response; that needs a live-verification pass instead.
+    assert "be my tour guide" in llm_service.INTENT_INSTRUCTIONS
+    assert "take me through this place" in llm_service.INTENT_INSTRUCTIONS
+    assert "swap day 2" in llm_service.INTENT_INSTRUCTIONS  # edit_trip contrast example still present
+
+
 def test_classify_intent_new_trip():
     with patch("app.llm_service._call_gemini", return_value=IntentResult(intent="new_trip")):
-        assert llm_service.classify_intent("plan me a trip to Peru", "") == "new_trip"
+        assert llm_service.classify_intent("plan me a trip to Peru", "") == ("new_trip", False)
 
 
 def test_classify_intent_off_topic():
     with patch("app.llm_service._call_gemini", return_value=IntentResult(intent="off_topic")):
-        assert llm_service.classify_intent("write me a sorting algorithm", "") == "off_topic"
+        assert llm_service.classify_intent("write me a sorting algorithm", "") == ("off_topic", False)
 
 
 def test_classify_intent_question():
     with patch("app.llm_service._call_gemini", return_value=IntentResult(intent="question")):
-        assert llm_service.classify_intent("what's the weather like there?", "trip to Kyoto discussed") == "question"
+        assert llm_service.classify_intent(
+            "what's the weather like there?", "trip to Kyoto discussed",
+        ) == ("question", False)
 
 
 def test_classify_intent_schema_mismatch_falls_back_to_new_trip():
@@ -325,12 +385,40 @@ def test_classify_intent_schema_mismatch_falls_back_to_new_trip():
     # in the first place -- the failure mode now is _call_gemini raising
     # when the model's output doesn't validate at all.
     with patch("app.llm_service._call_gemini", side_effect=RuntimeError("schema mismatch")):
-        assert llm_service.classify_intent("plan a trip", "") == "new_trip"
+        assert llm_service.classify_intent("plan a trip", "") == ("new_trip", False)
 
 
 def test_classify_intent_failure_fails_open_to_new_trip():
     with patch("app.llm_service._call_gemini", side_effect=ConnectionError("unreachable")):
-        assert llm_service.classify_intent("plan a trip", "") == "new_trip"
+        assert llm_service.classify_intent("plan a trip", "") == ("new_trip", False)
+
+
+def test_classify_intent_extracts_tour_guide_requested():
+    with patch(
+        "app.llm_service._call_gemini",
+        return_value=IntentResult(intent="question", tour_guide_requested=True),
+    ):
+        assert llm_service.classify_intent(
+            "can you be my tour guide and take me through this place", "",
+        ) == ("question", True)
+
+
+def test_classify_intent_failure_fails_open_tour_guide_requested_false():
+    # Same fail-open case as test_classify_intent_failure_fails_open_to_new_trip,
+    # asserted specifically on the tour_guide_requested slot -- a classifier
+    # failure must never leave a stale True lingering, it should read as a
+    # normal fresh new_trip turn.
+    with patch("app.llm_service._call_gemini", side_effect=ConnectionError("unreachable")):
+        intent, tour_guide_requested = llm_service.classify_intent("plan a trip", "")
+
+    assert intent == "new_trip"
+    assert tour_guide_requested is False
+
+
+def test_intent_instructions_constrains_tour_guide_requested_to_question_intent():
+    # Regression guard: the instruction that keeps tour_guide_requested from
+    # coincidentally firing True alongside edit_trip/new_trip.
+    assert "tour_guide_requested can only be true when intent is" in llm_service.INTENT_INSTRUCTIONS
 
 
 # ---------- conversational Q&A path ----------

@@ -21,7 +21,7 @@ def setup_function():
 
 
 def _generate_a_trip(prompt="weekend in Austin starting 2026-09-01"):
-    with patch("app.llm_service.classify_intent", return_value="new_trip"), patch(
+    with patch("app.llm_service.classify_intent", return_value=("new_trip", False)), patch(
         "app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY,
     ):
         response = client.post("/trips/generate", json={"prompt": prompt})

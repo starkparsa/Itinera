@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -36,6 +36,13 @@ class Conversation(Base):
     # since it was weather+currency before and may be more than currency
     # again later.
     agent_context = Column(Text, nullable=True)
+    # True once the user has explicitly asked the assistant to act as a
+    # tour guide (classify_intent's tour_guide_requested) -- stays True
+    # across later question turns, even ones that don't repeat that
+    # phrasing, until the next new_trip/edit_trip-classified turn flips it
+    # back to False. See routers/trips.py's question and
+    # new_trip/edit_trip branches.
+    tour_guide_mode = Column(Boolean, nullable=False, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="conversations")
