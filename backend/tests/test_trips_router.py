@@ -35,6 +35,29 @@ def mock_intent_classification():
         yield
 
 
+@pytest.fixture(autouse=True)
+def mock_qa_tools_by_default():
+    # Every question-path test written before the place-context tool loop
+    # (agent_service.answer_question_with_tools) expects
+    # llm_service.answer_question to be the only LLM call on that path.
+    # Without a default here, those tests would hit answer_question_with_tools
+    # for real -- which, since a live GEMINI_API_KEY often sits in the local
+    # .env main.py loads, means a real network call to Gemini during a test
+    # run, not just a broken test. Default it to "" (the router's existing
+    # fallback path), matching the "fails quietly" contract
+    # answer_question_with_tools already documents. Tests that specifically
+    # want to exercise the tool loop override this explicitly, same pattern
+    # already used for gather_trip_context and mock_intent_classification
+    # above.
+    #
+    # Deliberately scoped to THIS file only (not conftest.py) -- agent_service
+    # and app.routers.trips.agent_service are the same module object, so a
+    # global autouse patch here would also clobber
+    # test_agent_service.py's own direct tests of the real function.
+    with patch("app.routers.trips.agent_service.answer_question_with_tools", return_value=""):
+        yield
+
+
 def test_generate_trip_creates_placeholder_user_and_saves_trip():
     with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
         response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
@@ -262,6 +285,46 @@ def test_question_message_calls_answer_question_not_generate_itinerary():
     assert response.json()["reply"] == "It'll likely be warm and sunny."
     assert response.json()["trip_id"] is None
     mock_generate.assert_not_called()
+    mock_answer.assert_called_once()
+
+
+def test_question_uses_place_context_tool_answer_when_available():
+    # When the place-context tool loop produces a real answer, it's used
+    # directly and the plain llm_service.answer_question path is skipped
+    # entirely -- the inverse of the conftest.py default (which returns ""
+    # and falls through) used by every other question test in this file.
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch(
+            "app.routers.trips.agent_service.answer_question_with_tools",
+            return_value="The Louvre is a famous museum in Paris.",
+        ) as mock_qa_tools,
+        patch("app.llm_service.answer_question") as mock_answer,
+    ):
+        response = client.post("/trips/generate", json={"prompt": "tell me about the Louvre"})
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "The Louvre is a famous museum in Paris."
+    mock_qa_tools.assert_called_once()
+    mock_answer.assert_not_called()
+
+
+def test_question_falls_back_to_plain_answer_when_tool_loop_returns_nothing():
+    # The default/common case (also exercised implicitly by every other
+    # question test via conftest.py's autouse override) -- spelled out
+    # explicitly here as the direct counterpart to the test above.
+    with (
+        patch("app.llm_service.classify_intent", return_value="question"),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.agent_service.answer_question_with_tools", return_value="") as mock_qa_tools,
+        patch("app.llm_service.answer_question", return_value="A generic answer.") as mock_answer,
+    ):
+        response = client.post("/trips/generate", json={"prompt": "how much does that cost?"})
+
+    assert response.status_code == 200
+    assert response.json()["reply"] == "A generic answer."
+    mock_qa_tools.assert_called_once()
     mock_answer.assert_called_once()
 
 

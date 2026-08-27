@@ -176,10 +176,25 @@ def generate_trip(
 
         combined_context = " ".join(part for part in (effective_agent_context, weather_context) if part)
 
+        # Try the place-context tool-calling loop first -- run fresh on
+        # every question turn, never cached across turns (see
+        # agent_service.answer_question_with_tools's docstring for why:
+        # unlike the currency agent step above, a different place can be
+        # asked about on every turn, so caching the first answer forever
+        # would silently reuse it for every later question). It already
+        # fails quietly (returns "" when QA_TOOL_CALLING_ENABLED is off or
+        # on any internal error), so an empty result here just means "fall
+        # back to the plain Q&A path" -- a Wikipedia/Gemini hiccup must
+        # never block an answer to the user's question.
+        reply_text = agent_service.answer_question_with_tools(
+            request.prompt, chat_messages, agent_context=combined_context,
+        )
+
         try:
-            reply_text = llm_service.answer_question(
-                request.prompt, chat_messages, agent_context=combined_context,
-            )
+            if not reply_text:
+                reply_text = llm_service.answer_question(
+                    request.prompt, chat_messages, agent_context=combined_context,
+                )
         except Exception as exc:
             logger.exception("Q&A request failed for conversation %s", conversation.id)
             raise HTTPException(status_code=502, detail=f"LLM failed to answer: {exc}")

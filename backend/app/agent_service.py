@@ -1,28 +1,43 @@
-"""A genuine agentic tool-calling loop: the model itself decides whether it
-needs to call a tool (currently just currency conversion) based on the trip
-request, we execute whatever it asks for, and feed results back until it's
-done.
+"""Two genuine agentic tool-calling loops: the model itself decides whether
+it needs to call a tool based on what it's given, we execute whatever it
+asks for, and feed results back until it's done.
 
 This is deliberately kept separate from llm_service.py's itinerary
-generation, which stays a reliable, deterministic chunked pipeline. This
-agent step runs once, up front, to gather optional context (e.g. "your
-budget converts to X local currency") that then gets folded into the
-itinerary prompts as plain text -- the itinerary writer never has to make
-tool-calling decisions itself, only the agent step does.
+generation, which stays a reliable, deterministic chunked pipeline.
 
-PAUSED AGAIN (AGENT_TOOL_CALLING_ENABLED = False) as of 2026-08-26 -- but
-for a different reason than weather's removal. Weather (OpenWeather, in
+gather_trip_context() (currency conversion) runs once, up front, to gather
+optional context (e.g. "your budget converts to X local currency") that
+then gets folded into the itinerary prompts as plain text.
+
+answer_question_with_tools() (place-context via Wikipedia) runs fresh on
+every conversational question turn instead. The two loops are kept
+DELIBERATELY SEPARATE -- not one shared loop/flag -- for a real correctness
+reason, not just tidiness: gather_trip_context's caller
+(routers/trips.py) caches its result once per conversation forever
+(`Conversation.agent_context is None` gate), which is correct for currency
+(one fact, true for the whole trip) but would be wrong for place-context
+questions (a different place can be asked about on every turn -- caching
+the first answer forever would silently reuse it for every later question).
+Each loop is also given only its own tool's schema
+(tools.CURRENCY_TOOL_SCHEMAS / tools.QA_TOOL_SCHEMAS, not the combined
+tools.TOOL_SCHEMAS) so flipping one loop's kill switch never makes the
+other loop's tool reachable as a side effect.
+
+AGENT_TOOL_CALLING_ENABLED (currency) is PAUSED (False) as of 2026-08-26 --
+but for a different reason than weather's removal. Weather (OpenWeather, in
 tools.py) was removed outright because it wasn't working reliably in
 practice. Currency was re-enabled on 2026-08-25, verified live, and worked
 correctly -- it's paused now purely because of a product decision that
 currency conversion isn't needed, not because anything broke. See
 CLAUDE.md's decision log. gather_trip_context() short-circuits to "" while
-paused, same mechanism as before -- no other code path needed to change to
-flip this back off. Flip AGENT_TOOL_CALLING_ENABLED back to True to bring it
-back if that decision changes.
+paused, same mechanism as before. Flip AGENT_TOOL_CALLING_ENABLED back to
+True to bring it back if that decision changes.
+
+QA_TOOL_CALLING_ENABLED (place-context) defaults to True -- it's a new,
+independent feature, not something that was ever paused.
 
 Migrated to Gemini's function-calling shape (google.genai.types) alongside
-llm_service.py before this was re-enabled, so the mechanics didn't need
+llm_service.py before currency was re-enabled, so the mechanics didn't need
 migrating again once it was.
 """
 from google.genai import types
@@ -32,6 +47,8 @@ from . import llm_service, tools
 MAX_TOOL_ROUNDS = 4
 
 AGENT_TOOL_CALLING_ENABLED = False
+
+QA_TOOL_CALLING_ENABLED = True
 
 AGENT_SYSTEM_PROMPT = """You are a travel planning assistant with access to \
 a tool for currency conversion. Given a trip request, call the tool only if \
@@ -47,14 +64,46 @@ unavailable -- do not invent a plausible-sounding number or fact to fill \
 the gap. Leave that fact out of your summary (or say briefly that it \
 wasn't available) rather than guessing."""
 
+QA_TOOL_SYSTEM_PROMPT = """You are a travel planning assistant answering a \
+follow-up question in an ongoing conversation. You have a tool, \
+get_place_context, that looks up real information about a named place \
+(landmark, neighborhood, city) from Wikipedia. Call it when the question \
+names or clearly implies a specific place and you'd otherwise be guessing \
+about it -- don't call it for things already covered by the conversation \
+history or the real data given to you below.
 
-def _call_gemini_with_tools(contents: list, system_instruction: str) -> types.GenerateContentResponse:
+Default to detail="brief" -- only pass detail="detailed" when the user's \
+own words ask for more (e.g. "tell me the full history", "give me more \
+detail", "be my tour guide"). A brief overview is the right amount of \
+information for normal trip-planning questions; a full history is not.
+
+Match your reply's length to the detail level you used, not your own \
+general knowledge of the place: after a detail="brief" call, answer in \
+2-4 sentences using mainly what the tool gave you -- do not pad it out \
+with extra facts, dates, or trivia you happen to know. Save the fuller, \
+multi-paragraph answer for when you actually used detail="detailed".
+
+If a tool result contains an "error" field, that specific information is \
+unavailable -- say so briefly rather than inventing a plausible-sounding \
+fact to fill the gap.
+
+Answer directly and conversationally once you have what you need."""
+
+
+def _call_gemini_with_tools(
+    contents: list, system_instruction: str, tool_schema: types.Tool
+) -> types.GenerateContentResponse:
     """Thin wrapper so tests patch one call site:
     app.agent_service._call_gemini_with_tools. Returns the raw SDK response
     object (unlike llm_service._call_gemini, which unwraps to plain text/a
     parsed model) because the manual tool-loop below needs to branch on
     response.function_calls and replay response.candidates[0].content back
     into the conversation, not just read the text.
+
+    tool_schema: the caller's own tool_schema only (tools.CURRENCY_TOOL_SCHEMAS
+    or tools.QA_TOOL_SCHEMAS) -- never tools.TOOL_SCHEMAS, which combines
+    every tool this module knows about and would let one loop reach the
+    other loop's tool.
 
     thinking_level stays MINIMAL for the same reason as llm_service.py:
     verified live, it avoids a reasoning model burning the output-token
@@ -68,39 +117,25 @@ def _call_gemini_with_tools(contents: list, system_instruction: str) -> types.Ge
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
-            tools=[tools.TOOL_SCHEMAS],
+            tools=[tool_schema],
             thinking_config=llm_service._THINKING_CONFIG,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
 
 
-def gather_trip_context(prompt: str, destination: str | None = None) -> str:
-    """Runs the tool-calling loop and returns a short plain-text summary to
-    fold into itinerary generation, or "" if nothing useful was found, the
-    loop fails for any reason, or the agent step is currently paused (see
-    AGENT_TOOL_CALLING_ENABLED above).
-
-    Tool use here is a nice-to-have, not a hard dependency -- if the model
-    doesn't support tool calling well, or a tool API is unreachable, this
-    fails quietly and itinerary generation proceeds exactly as it did before
-    this feature existed.
-
-    destination: optional, folded into the user message so the model isn't
-    left guessing which city to check. Needed when this is called from a
-    bare follow-up question (e.g. "what does the temperature look like?")
-    that doesn't name a place on its own -- the original trip-generation
-    prompt usually does, so callers with that context can omit this.
+def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.Tool) -> str:
+    """The manual tool-calling round trip shared by gather_trip_context and
+    answer_question_with_tools -- the mechanics (thinking_level, role="user"
+    for function responses, MAX_TOOL_ROUNDS, quiet failure) are identical
+    between the two; only which tool is exposed, what system prompt is
+    used, and how the caller treats the result (cached once vs. run fresh
+    every turn) differ. See this module's docstring for why those two
+    loops stay separate rather than sharing one flag/schema.
     """
-    if not AGENT_TOOL_CALLING_ENABLED:
-        return ""
-
-    user_content = f"Trip destination: {destination}\n\n{prompt}" if destination else prompt
-    contents = [types.Content(role="user", parts=[types.Part(text=user_content)])]
-
     try:
         for _ in range(MAX_TOOL_ROUNDS):
-            response = _call_gemini_with_tools(contents, system_instruction=AGENT_SYSTEM_PROMPT)
+            response = _call_gemini_with_tools(contents, system_instruction, tool_schema)
             calls = response.function_calls or []
 
             if not calls:
@@ -136,3 +171,80 @@ def gather_trip_context(prompt: str, destination: str | None = None) -> str:
         return ""  # hit MAX_TOOL_ROUNDS without a final answer -- bail out quietly
     except Exception:
         return ""
+
+
+def gather_trip_context(prompt: str, destination: str | None = None) -> str:
+    """Runs the currency tool-calling loop and returns a short plain-text
+    summary to fold into itinerary generation, or "" if nothing useful was
+    found, the loop fails for any reason, or the agent step is currently
+    paused (see AGENT_TOOL_CALLING_ENABLED above).
+
+    Tool use here is a nice-to-have, not a hard dependency -- if the model
+    doesn't support tool calling well, or a tool API is unreachable, this
+    fails quietly and itinerary generation proceeds exactly as it did before
+    this feature existed.
+
+    destination: optional, folded into the user message so the model isn't
+    left guessing which city to check. Needed when this is called from a
+    bare follow-up question (e.g. "what does the temperature look like?")
+    that doesn't name a place on its own -- the original trip-generation
+    prompt usually does, so callers with that context can omit this.
+
+    Caching note for callers: this function does no caching itself.
+    routers/trips.py caches its result once per Conversation forever, which
+    is correct here because currency is one fact true for the whole trip --
+    do NOT apply that same caching pattern to answer_question_with_tools
+    below, see its docstring.
+    """
+    if not AGENT_TOOL_CALLING_ENABLED:
+        return ""
+
+    user_content = f"Trip destination: {destination}\n\n{prompt}" if destination else prompt
+    contents = [types.Content(role="user", parts=[types.Part(text=user_content)])]
+    return _run_tool_loop(contents, AGENT_SYSTEM_PROMPT, tools.CURRENCY_TOOL_SCHEMAS)
+
+
+def answer_question_with_tools(prompt: str, chat_messages: list[dict], agent_context: str = "") -> str:
+    """Runs the place-context tool-calling loop for a conversational
+    follow-up question and returns a plain-text answer, or "" if the step
+    is disabled, fails for any reason, or MAX_TOOL_ROUNDS is exceeded.
+
+    Callers MUST run this fresh on every question-intent turn -- do NOT
+    wrap it in a once-per-conversation cache the way routers/trips.py
+    caches gather_trip_context's result. That pattern is correct for
+    currency (one fact, true for the whole trip) but wrong here: a
+    different place can be asked about on every turn, and caching the
+    first answer forever would silently reuse it for every later question
+    in the same conversation. "" should be treated by the caller as "fall
+    back to llm_service.answer_question", the same "fails quietly, never
+    blocks the turn" contract gather_trip_context already has.
+
+    chat_messages: real chat-formatted history (list of {"role","content"}
+    dicts, this app's stored-message shape), same input llm_service.
+    answer_question already takes -- needed so the model has conversational
+    continuity (e.g. "what about its history?" referring back to a place
+    named a few turns earlier).
+
+    agent_context: the same combined currency+weather grounding string
+    routers/trips.py already builds for llm_service.answer_question, passed
+    through here too so this loop doesn't lose access to real data (and
+    doesn't re-ask a tool for something already known) just because it
+    takes a different code path.
+    """
+    if not QA_TOOL_CALLING_ENABLED:
+        return ""
+
+    system_instruction = QA_TOOL_SYSTEM_PROMPT
+    if agent_context:
+        system_instruction += (
+            f"\n\nReal data gathered earlier for this trip (for your reference "
+            f"only): {agent_context}\n"
+        )
+
+    contents = [
+        types.Content(role=("model" if m["role"] == "assistant" else "user"), parts=[types.Part(text=m["content"])])
+        for m in chat_messages
+    ]
+    contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
+
+    return _run_tool_loop(contents, system_instruction, tools.QA_TOOL_SCHEMAS)
