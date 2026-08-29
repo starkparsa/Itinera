@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, type KeyboardEvent } from "react";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
 
 export default function ChatInput({ disabled, onSubmit }: { disabled: boolean; onSubmit: (prompt: string) => void }) {
   const [value, setValue] = useState("");
@@ -20,8 +22,8 @@ export default function ChatInput({ disabled, onSubmit }: { disabled: boolean; o
   }
 
   return (
-    <div className="chat-input">
-      <textarea
+    <div className="flex gap-2 border-t pt-4">
+      <Textarea
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
@@ -29,9 +31,9 @@ export default function ChatInput({ disabled, onSubmit }: { disabled: boolean; o
         disabled={disabled}
         rows={2}
       />
-      <button onClick={submit} disabled={disabled || !value.trim()}>
+      <Button onClick={submit} disabled={disabled || !value.trim()} size="lg" className="px-5">
         Send
-      </button>
+      </Button>
     </div>
   );
 }

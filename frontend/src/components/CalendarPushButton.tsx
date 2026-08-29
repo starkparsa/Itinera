@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { TripResponse } from "@/lib/types";
 import { pushTripToCalendar } from "@/lib/backend";
 import { connectGoogleCalendarAction } from "@/lib/authActions";
+import { Button } from "@/components/ui/button";
 
 // Same gating rule the old .ics ExportButton used -- hidden entirely, not
 // disabled, until a trip has a resolved start_date (the backend refuses to
@@ -39,11 +40,13 @@ export default function CalendarPushButton({ trip }: { trip: TripResponse }) {
   }
 
   return (
-    <div className="calendar-push">
-      <button className="calendar-push-button" onClick={handleClick} disabled={status === "pushing"}>
+    <div className="flex flex-col gap-1">
+      <Button variant="outline" size="sm" onClick={handleClick} disabled={status === "pushing"}>
         {status === "pushing" ? "Exporting…" : "📤 Export Plan"}
-      </button>
-      {message && <p className={`calendar-push__message calendar-push__message--${status}`}>{message}</p>}
+      </Button>
+      {message && (
+        <p className={`text-xs ${status === "error" ? "text-destructive" : "text-muted-foreground"}`}>{message}</p>
+      )}
     </div>
   );
 }

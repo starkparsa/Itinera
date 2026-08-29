@@ -1,30 +1,93 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Palette: teal ("ocean/exploration") replaces both the old bespoke
+ * --accent (#ff4b4b, a leftover from the pre-Next.js Streamlit app -- its
+ * default theme color, never intentionally chosen for this product) and
+ * shadcn's default grayscale --primary. Only --primary/--ring/--sidebar-*
+ * are overridden below; everything else keeps shadcn's neutral defaults,
+ * which is what gives the surrounding chrome (cards, borders, muted text)
+ * a calm, non-clashing backdrop for the one accent color to stand out
+ * against. Values are Tailwind's own teal-600/400/500 oklch stops, not
+ * hand-picked, so they're already tuned for contrast at this lightness.
+ */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --panel: #f7f7f9;
-  --border: #e2e2e6;
-  --accent: #ff4b4b;
-  --accent-text: #ffffff;
-  --success-bg: #e6f4ea;
-  --success-text: #1e4620;
-  --info-bg: #e8f0fe;
-  --info-text: #174ea6;
-  --error-bg: #fdecea;
-  --error-text: #611a15;
+  /*
+   * Wires the Geist font next/font already loads in layout.tsx (as
+   * `--font-geist-sans`) into Tailwind's `font-sans` utility via the
+   * `@theme inline` block below -- previously declared but never actually
+   * set, so `font-sans` silently fell back to Tailwind's default stack and
+   * the loaded font went unused.
+   */
+  --font-sans: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.511 0.096 186.391); /* teal-700 */
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.704 0.14 182.503); /* teal-500 */
+  --radius: 0.625rem;
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.511 0.096 186.391);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.704 0.14 182.503);
 }
 
+/*
+ * Auto dark mode by OS preference -- no toggle, no next-themes dependency,
+ * matching the app's original zero-JS-theming behavior. (shadcn's `init`
+ * generates a `.dark` class-based block by default, for a JS theme
+ * switcher this app doesn't have; those values are reused here under a
+ * media query instead of a class, so they actually take effect.)
+ */
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0e1117;
-    --foreground: #fafafa;
-    --panel: #161b22;
-    --border: #2d333b;
-    --success-bg: #14311c;
-    --success-text: #b7f0c4;
-    --info-bg: #12283f;
-    --info-text: #bcd6f7;
-    --error-bg: #3a1414;
-    --error-text: #f7bcbc;
+    --background: oklch(0.145 0 0);
+    --foreground: oklch(0.985 0 0);
+    --card: oklch(0.205 0 0);
+    --card-foreground: oklch(0.985 0 0);
+    --popover: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.985 0 0);
+    --primary: oklch(0.777 0.152 181.912); /* teal-400, lighter so it pops on dark bg */
+    --primary-foreground: oklch(0.145 0 0);
+    --secondary: oklch(0.269 0 0);
+    --secondary-foreground: oklch(0.985 0 0);
+    --muted: oklch(0.269 0 0);
+    --muted-foreground: oklch(0.708 0 0);
+    --accent: oklch(0.269 0 0);
+    --accent-foreground: oklch(0.985 0 0);
+    --destructive: oklch(0.704 0.191 22.216);
+    --border: oklch(1 0 0 / 10%);
+    --input: oklch(1 0 0 / 15%);
+    --ring: oklch(0.704 0.14 182.503); /* teal-500 */
+    --sidebar: oklch(0.205 0 0);
+    --sidebar-foreground: oklch(0.985 0 0);
+    --sidebar-primary: oklch(0.777 0.152 181.912);
+    --sidebar-primary-foreground: oklch(0.145 0 0);
+    --sidebar-accent: oklch(0.269 0 0);
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+    --sidebar-border: oklch(1 0 0 / 10%);
+    --sidebar-ring: oklch(0.704 0.14 182.503);
   }
   html {
     color-scheme: dark;
@@ -39,9 +102,6 @@ body {
 
 body {
   min-height: 100vh;
-  color: var(--foreground);
-  background: var(--background);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -59,345 +119,52 @@ button {
   cursor: pointer;
 }
 
-/* ---------- layout ---------- */
-
-.app-layout {
-  display: flex;
-  min-height: 100vh;
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-.sidebar {
-  width: 260px;
-  flex-shrink: 0;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
-  padding: 1rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.sidebar h3 {
-  font-size: 1rem;
-}
-
-.new-chat-button {
-  background: var(--accent);
-  color: var(--accent-text);
-  border: none;
-  border-radius: 6px;
-  padding: 0.5rem;
-  font-weight: 600;
-}
-
-.sidebar__label {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  opacity: 0.6;
-  margin-top: 0.5rem;
-}
-
-.sidebar__empty {
-  font-size: 0.85rem;
-  opacity: 0.7;
-}
-
-.conversation-list {
-  list-style: none;
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  overflow-y: auto;
-}
-
-.conversation-list li {
-  display: flex;
-  align-items: center;
-  gap: 0.25rem;
-}
-
-.conversation-title {
-  flex: 1;
-  text-align: left;
-  background: transparent;
-  border: none;
-  padding: 0.4rem 0.5rem;
-  border-radius: 6px;
-  color: inherit;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.conversation-title:hover {
-  background: var(--border);
-}
-
-.conversation--active .conversation-title {
-  background: var(--accent);
-  color: var(--accent-text);
-}
-
-.conversation-delete {
-  background: transparent;
-  border: none;
-  padding: 0.25rem;
-  opacity: 0.6;
-}
-
-.conversation-delete:hover {
-  opacity: 1;
-}
-
-.main-panel {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  padding: 1.5rem 2rem;
-  max-width: 900px;
-  margin: 0 auto;
-  width: 100%;
-}
-
-.main-panel__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-}
-
-.main-panel__header-actions {
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-  flex-shrink: 0;
-}
-
-.empty-hint {
-  opacity: 0.7;
-  margin: 1rem 0;
-}
-
-.message-list {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 1rem;
-  margin: 1rem 0;
-}
-
-.chat-message {
-  display: flex;
-}
-
-.chat-message--user {
-  justify-content: flex-end;
-}
-
-.chat-message__bubble {
-  max-width: 80%;
-  background: var(--panel);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 0.75rem 1rem;
-}
-
-.chat-message--user .chat-message__bubble {
-  background: var(--accent);
-  color: var(--accent-text);
-}
-
-.chat-message__bubble--thinking {
-  opacity: 0.7;
-  font-style: italic;
-}
-
-.chat-input {
-  display: flex;
-  gap: 0.5rem;
-  border-top: 1px solid var(--border);
-  padding-top: 1rem;
-}
-
-.chat-input textarea {
-  flex: 1;
-  padding: 0.6rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--background);
-  color: inherit;
-  resize: vertical;
-  font-family: inherit;
-}
-
-.chat-input button {
-  background: var(--accent);
-  color: var(--accent-text);
-  border: none;
-  border-radius: 8px;
-  padding: 0 1.25rem;
-  font-weight: 600;
-}
-
-.chat-input button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* ---------- trip view ---------- */
-
-.trip-view {
-  margin-top: 0.5rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.5rem;
-}
-
-.day-card {
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 0.5rem 0.75rem;
-  background: var(--background);
-}
-
-.day-card summary {
-  cursor: pointer;
-  font-weight: 600;
-}
-
-.day-weather {
-  font-size: 0.85rem;
-  opacity: 0.8;
-  margin: 0.35rem 0;
-}
-
-.day-card ul {
-  list-style: disc;
-  padding-left: 1.25rem;
-  margin-top: 0.4rem;
-  display: flex;
-  flex-direction: column;
-  gap: 0.35rem;
-}
-
-.item-notes {
-  font-size: 0.8rem;
-  opacity: 0.7;
-}
-
-.banner {
-  border-radius: 8px;
-  padding: 0.6rem 0.9rem;
-  font-size: 0.9rem;
-}
-
-.banner--success {
-  background: var(--success-bg);
-  color: var(--success-text);
-}
-
-.banner--info {
-  background: var(--info-bg);
-  color: var(--info-text);
-}
-
-.banner--error {
-  background: var(--error-bg);
-  color: var(--error-text);
-  margin-bottom: 0.5rem;
-}
-
-
-.trip-actions {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: 0.5rem;
-}
-
-.calendar-push {
-  display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-
-.calendar-push-button {
-  border-radius: 8px;
-  padding: 0.4rem 0.9rem;
-  font-weight: 600;
-  font-size: 0.85rem;
-  border: 1px solid var(--border);
-  background: var(--panel);
-  color: inherit;
-}
-
-.calendar-push-button:hover {
-  background: var(--border);
-}
-
-.calendar-push-button:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.calendar-push__message {
-  font-size: 0.78rem;
-  opacity: 0.85;
-}
-
-.calendar-push__message--error {
-  color: var(--error-text);
-}
-
-/* ---------- auth ---------- */
-
-.login-page {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  min-height: 100vh;
-  text-align: center;
-  padding: 2rem;
-}
-
-.google-signin-button {
-  background: var(--accent);
-  color: var(--accent-text);
-  border: none;
-  border-radius: 8px;
-  padding: 0.75rem 1.5rem;
-  font-weight: 600;
-  font-size: 1rem;
-}
-
-.sidebar__footer {
-  margin-top: auto;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--border);
-  display: flex;
-  flex-direction: column;
-  gap: 0.4rem;
-}
-
-.sidebar__user-email {
-  font-size: 0.8rem;
-  opacity: 0.7;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sign-out-button {
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 0.35rem;
-  font-size: 0.8rem;
-  color: inherit;
-}
-
-.sign-out-button:hover {
-  background: var(--border);
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
 }
