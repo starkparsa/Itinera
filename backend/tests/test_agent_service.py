@@ -329,3 +329,83 @@ def test_qa_system_prompt_instructs_against_inventing_specific_venues_in_detaile
     prompt_lower = agent_service.QA_TOOL_SYSTEM_PROMPT.lower()
     assert "venue" in prompt_lower or "specific business" in prompt_lower
     assert "address" in prompt_lower
+
+
+# --- gather_place_context_for_itinerary (place-context, itinerary planning) ---
+
+
+def test_planning_context_short_circuits_to_empty_when_disabled():
+    with (
+        patch("app.agent_service.PLANNING_TOOL_CALLING_ENABLED", False),
+        patch("app.agent_service._call_gemini_with_tools") as mock_call,
+    ):
+        result = agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
+
+    assert result == ""
+    mock_call.assert_not_called()
+
+
+def test_planning_context_only_exposes_place_context_schema():
+    # Mirrors test_gather_trip_context_only_exposes_currency_schema and
+    # test_qa_tools_only_exposes_place_context_schema -- all three loops
+    # must never see a tool they don't own.
+    response = _mock_tool_response(text="Lisbon is Portugal's hilly, coastal capital.")
+
+    with (
+        patch("app.agent_service.PLANNING_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
+    ):
+        agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
+
+    tool_schema = mock_call.call_args.args[2]
+    names = [d.name for d in tool_schema.function_declarations]
+    assert names == ["get_place_context"]
+
+
+def test_planning_context_uses_its_own_system_prompt_not_qa_or_currency():
+    response = _mock_tool_response(text="Lisbon is Portugal's hilly, coastal capital.")
+
+    with (
+        patch("app.agent_service.PLANNING_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
+    ):
+        agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
+
+    system_instruction = mock_call.call_args.args[1]
+    assert system_instruction == agent_service.PLANNING_TOOL_SYSTEM_PROMPT
+    assert system_instruction != agent_service.QA_TOOL_SYSTEM_PROMPT
+    assert system_instruction != agent_service.AGENT_SYSTEM_PROMPT
+
+
+def test_planning_context_sends_the_raw_prompt_with_no_destination_wrapping():
+    # Unlike gather_trip_context, this never receives a separate destination
+    # arg (generate_itinerary calls it concurrently with destination
+    # inference, before a destination is known) -- the model reads it
+    # straight out of the prompt text itself.
+    response = _mock_tool_response(text="no context needed")
+
+    with (
+        patch("app.agent_service.PLANNING_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
+    ):
+        agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
+
+    sent_contents = mock_call.call_args.args[0]
+    assert sent_contents[0].parts[0].text == "5 days in Lisbon"
+
+
+def test_planning_context_network_failure_fails_quietly():
+    with (
+        patch("app.agent_service.PLANNING_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", side_effect=ConnectionError("no route to host")),
+    ):
+        result = agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
+
+    assert result == ""
+
+
+def test_planning_system_prompt_instructs_brief_default_and_against_inventing():
+    prompt_lower = agent_service.PLANNING_TOOL_SYSTEM_PROMPT.lower()
+    assert "brief" in prompt_lower
+    assert "error" in prompt_lower
+    assert "invent" in prompt_lower

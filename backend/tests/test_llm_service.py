@@ -16,9 +16,14 @@ from app.llm_service import (
 @pytest.fixture(autouse=True)
 def mock_agent_context():
     # Every test in this file exercises the itinerary pipeline in isolation.
-    # Without this, generate_itinerary's call to agent_service.gather_trip_context
-    # would make a real network call to Gemini during tests.
-    with patch("app.llm_service.agent_service.gather_trip_context", return_value=""):
+    # Without this, generate_itinerary's calls to
+    # agent_service.gather_trip_context and
+    # agent_service.gather_place_context_for_itinerary would make real
+    # network calls to Gemini during tests.
+    with (
+        patch("app.llm_service.agent_service.gather_trip_context", return_value=""),
+        patch("app.llm_service.agent_service.gather_place_context_for_itinerary", return_value=""),
+    ):
         yield
 
 
@@ -336,6 +341,7 @@ def test_cached_agent_context_skips_the_agent_step_entirely():
 
     with (
         patch("app.llm_service.agent_service.gather_trip_context") as mock_gather,
+        patch("app.llm_service.agent_service.gather_place_context_for_itinerary") as mock_place,
         patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
     ):
         result = llm_service.generate_itinerary(
@@ -343,7 +349,28 @@ def test_cached_agent_context_skips_the_agent_step_entirely():
         )
 
     mock_gather.assert_not_called()  # the whole point of caching -- no network round-trip
+    mock_place.assert_not_called()  # same -- place-context is cached alongside currency
     assert result["agent_context"] == "Already known: expect snow."
+
+
+def test_currency_and_place_context_are_combined_when_both_return_findings():
+    meta = TripMeta(destination="Lisbon", total_days=2)
+    chunk = _chunk([(i, "explore") for i in range(1, 3)])
+
+    with (
+        patch("app.llm_service.agent_service.gather_trip_context", return_value="500 USD is about 460 EUR."),
+        patch(
+            "app.llm_service.agent_service.gather_place_context_for_itinerary",
+            return_value="Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints.",
+        ),
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        result = llm_service.generate_itinerary("2 days in Lisbon, budget 500 USD")
+
+    assert result["agent_context"] == (
+        "500 USD is about 460 EUR. "
+        "Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints."
+    )
 
 
 # ---------- intent classification ----------

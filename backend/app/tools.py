@@ -5,9 +5,12 @@ Currency conversion uses the free, no-key Frankfurter API. A weather tool
 in practice; see CLAUDE.md's decision log. convert_currency isn't actively
 reachable right now either -- it's still gated behind agent_service.py's
 AGENT_TOOL_CALLING_ENABLED, paused as a product decision (see that
-module's docstring). get_place_context is a separate tool reached through
-a different, always-on loop (agent_service.answer_question_with_tools) --
-see that function's docstring for why the two use separate loops/flags.
+module's docstring). get_place_context is reached through TWO separate,
+always-on loops (agent_service.answer_question_with_tools for
+conversational Q&A/tour-guide use, and
+agent_service.gather_place_context_for_itinerary for itinerary-planning
+background) -- see agent_service.py's module docstring for why three
+loops stay separate rather than sharing one flag/schema.
 
 TOOL_SCHEMAS is in Gemini's function-calling shape (google.genai.types) as
 of the Gemini migration -- previously Ollama's dict-list shape.
@@ -19,7 +22,12 @@ from .clients import wikipedia_client
 
 _BRIEF_CHAR_CAP = 320  # enforced even if Wikipedia's own extract runs long,
                         # so "brief" stays genuinely brief regardless of topic
-_DETAILED_CHAR_CAP = 2000  # bounded even in "detailed" mode -- never unbounded
+_DETAILED_CHAR_CAP = 6000  # raised from 2000, 2026-08-29, for real tour-guide
+                            # depth -- most landmark-level Wikipedia extracts
+                            # fit whole under this; still bounded, not
+                            # unbounded, so a genuinely huge article (a whole
+                            # country, a major city) doesn't blow the prompt
+                            # budget on one tool call
 
 
 def convert_currency(amount: float, from_currency: str, to_currency: str) -> dict:
@@ -96,13 +104,18 @@ def get_place_context(place_name: str, near: str | None = None, detail: str = "b
 # passed to GenerateContentConfig(tools=[...]) in agent_service.py.
 #
 # Split into per-loop schemas, not just one merged list: agent_service.py
-# runs two SEPARATE tool-calling loops (gather_trip_context for currency,
-# answer_question_with_tools for place-context) with different caching
-# semantics and different kill switches (AGENT_TOOL_CALLING_ENABLED vs.
-# QA_TOOL_CALLING_ENABLED). If both tools were advertised to both loops via
-# one shared schema, flipping QA_TOOL_CALLING_ENABLED on would silently
-# make convert_currency reachable again too, defeating its own pause. Each
-# loop must only ever see the schema for the tool(s) it owns.
+# runs THREE separate tool-calling loops (gather_trip_context for currency,
+# answer_question_with_tools for conversational place-context,
+# gather_place_context_for_itinerary for itinerary-planning place-context)
+# with different caching semantics and different kill switches
+# (AGENT_TOOL_CALLING_ENABLED / QA_TOOL_CALLING_ENABLED /
+# PLANNING_TOOL_CALLING_ENABLED). If every tool were advertised to every
+# loop via one shared schema, flipping one loop's flag on would silently
+# make another loop's tool reachable too, defeating its own pause/isolation.
+# Each loop must only ever see the schema for the tool(s) it owns -- the
+# two place-context loops happen to share the same underlying
+# FunctionDeclaration object (get_place_context itself doesn't differ),
+# they just each get their own types.Tool wrapper and their own flag.
 _CONVERT_CURRENCY_DECLARATION = types.FunctionDeclaration(
     name="convert_currency",
     description="Convert an amount of money from one currency to another using current exchange rates.",
@@ -146,6 +159,12 @@ CURRENCY_TOOL_SCHEMAS = types.Tool(function_declarations=[_CONVERT_CURRENCY_DECL
 
 # Used by agent_service.answer_question_with_tools (place-context only).
 QA_TOOL_SCHEMAS = types.Tool(function_declarations=[_GET_PLACE_CONTEXT_DECLARATION])
+
+# Used by agent_service.gather_place_context_for_itinerary (place-context
+# only, itinerary-planning use rather than conversational Q&A -- own
+# types.Tool wrapper so it can be independently kill-switched via
+# PLANNING_TOOL_CALLING_ENABLED without touching QA_TOOL_CALLING_ENABLED).
+PLANNING_TOOL_SCHEMAS = types.Tool(function_declarations=[_GET_PLACE_CONTEXT_DECLARATION])
 
 # Everything this module can do, for tests/introspection -- never pass this
 # combined list into a live GenerateContentConfig(tools=[...]) call, or a

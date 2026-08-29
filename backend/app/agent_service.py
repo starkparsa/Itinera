@@ -1,6 +1,6 @@
-"""Two genuine agentic tool-calling loops: the model itself decides whether
-it needs to call a tool based on what it's given, we execute whatever it
-asks for, and feed results back until it's done.
+"""Three genuine agentic tool-calling loops: the model itself decides
+whether it needs to call a tool based on what it's given, we execute
+whatever it asks for, and feed results back until it's done.
 
 This is deliberately kept separate from llm_service.py's itinerary
 generation, which stays a reliable, deterministic chunked pipeline.
@@ -9,19 +9,31 @@ gather_trip_context() (currency conversion) runs once, up front, to gather
 optional context (e.g. "your budget converts to X local currency") that
 then gets folded into the itinerary prompts as plain text.
 
+gather_place_context_for_itinerary() (place-context via Wikipedia,
+2026-08-29) also runs once, up front, alongside gather_trip_context --
+looking up real background (history, character of the area) for the
+trip's destination and any specific places named in the request, folded
+into the same itinerary-prompt text. Added so itinerary generation itself
+gets real grounded place context, not just conversational Q&A -- see
+CLAUDE.md's decision log ("Place context" row) for why this was originally
+scoped as Q&A-only and what changed.
+
 answer_question_with_tools() (place-context via Wikipedia) runs fresh on
-every conversational question turn instead. The two loops are kept
-DELIBERATELY SEPARATE -- not one shared loop/flag -- for a real correctness
-reason, not just tidiness: gather_trip_context's caller
-(routers/trips.py) caches its result once per conversation forever
-(`Conversation.agent_context is None` gate), which is correct for currency
-(one fact, true for the whole trip) but would be wrong for place-context
+every conversational question turn instead. This loop and
+gather_place_context_for_itinerary() call the exact same underlying tool
+(get_place_context) but are kept as separate loops/flags/schema wrappers
+for the same caching reason gather_trip_context is separate from both:
+routers/trips.py caches whatever generate_itinerary() returns as
+"agent_context" once per conversation forever (`Conversation.agent_context
+is None` gate), which is correct for a trip's background facts (true for
+the whole trip) but would be wrong for conversational place-context
 questions (a different place can be asked about on every turn -- caching
-the first answer forever would silently reuse it for every later question).
-Each loop is also given only its own tool's schema
-(tools.CURRENCY_TOOL_SCHEMAS / tools.QA_TOOL_SCHEMAS, not the combined
-tools.TOOL_SCHEMAS) so flipping one loop's kill switch never makes the
-other loop's tool reachable as a side effect.
+the first answer forever would silently reuse it for every later
+question). Each loop is also given only its own tool's schema
+(tools.CURRENCY_TOOL_SCHEMAS / tools.QA_TOOL_SCHEMAS /
+tools.PLANNING_TOOL_SCHEMAS, not the combined tools.TOOL_SCHEMAS) so
+flipping one loop's kill switch never makes another loop's tool reachable
+as a side effect.
 
 AGENT_TOOL_CALLING_ENABLED (currency) is PAUSED (False) as of 2026-08-26 --
 but for a different reason than weather's removal. Weather (OpenWeather, in
@@ -33,8 +45,9 @@ CLAUDE.md's decision log. gather_trip_context() short-circuits to "" while
 paused, same mechanism as before. Flip AGENT_TOOL_CALLING_ENABLED back to
 True to bring it back if that decision changes.
 
-QA_TOOL_CALLING_ENABLED (place-context) defaults to True -- it's a new,
-independent feature, not something that was ever paused.
+QA_TOOL_CALLING_ENABLED (conversational place-context) and
+PLANNING_TOOL_CALLING_ENABLED (itinerary-planning place-context) both
+default to True -- neither is something that was ever paused.
 
 Migrated to Gemini's function-calling shape (google.genai.types) alongside
 llm_service.py before currency was re-enabled, so the mechanics didn't need
@@ -49,6 +62,8 @@ MAX_TOOL_ROUNDS = 4
 AGENT_TOOL_CALLING_ENABLED = False
 
 QA_TOOL_CALLING_ENABLED = True
+
+PLANNING_TOOL_CALLING_ENABLED = True
 
 AGENT_SYSTEM_PROMPT = """You are a travel planning assistant with access to \
 a tool for currency conversion. Given a trip request, call the tool only if \
@@ -98,6 +113,29 @@ guided-sounding answer built from real, general facts is correct; one \
 padded with invented specifics is not.
 
 Answer directly and conversationally once you have what you need."""
+
+PLANNING_TOOL_SYSTEM_PROMPT = """You are helping plan a trip, before any \
+itinerary is written. You have a tool, get_place_context, that looks up \
+real background information about a named place (city, neighborhood, \
+landmark) from Wikipedia. Call it for the trip's destination, and for any \
+specific neighborhood, landmark, or district explicitly named in the \
+request, so the itinerary you're about to help write is grounded in real \
+facts -- history, character of the area, what it's actually known for. \
+Call it at most 2-3 times; look up the destination and, at most, one or \
+two other places the request specifically names -- do not look up every \
+possible point of interest, this is background grounding, not research.
+
+Default to detail="brief" for this -- itinerary generation needs a short, \
+useful fact base, not a full history. Reply with a short plain-text \
+summary, 2-5 sentences, of anything useful you found that should inform \
+the itinerary. Do not write the itinerary itself here, and do not adopt a \
+narrative or "tour guide" tone -- this summary is internal grounding for \
+another step, not a reply shown to the user.
+
+If a tool result contains an "error" field, that specific place's data is \
+unavailable -- do not invent a plausible-sounding fact to fill the gap. \
+Leave it out of your summary (or say briefly that it wasn't available) \
+rather than guessing."""
 
 
 def _call_gemini_with_tools(
@@ -212,6 +250,42 @@ def gather_trip_context(prompt: str, destination: str | None = None) -> str:
     user_content = f"Trip destination: {destination}\n\n{prompt}" if destination else prompt
     contents = [types.Content(role="user", parts=[types.Part(text=user_content)])]
     return _run_tool_loop(contents, AGENT_SYSTEM_PROMPT, tools.CURRENCY_TOOL_SCHEMAS)
+
+
+def gather_place_context_for_itinerary(prompt: str) -> str:
+    """Runs a place-context (Wikipedia) tool-calling loop over the raw trip
+    request and returns a short plain-text summary to fold into itinerary
+    generation, or "" if nothing useful was found, the loop fails for any
+    reason, or this step is currently disabled (see
+    PLANNING_TOOL_CALLING_ENABLED above).
+
+    Deliberately takes only `prompt`, the same shape as gather_trip_context
+    -- no destination parameter, even though llm_service.generate_itinerary
+    calls this concurrently with the destination-inference step and so
+    doesn't have a resolved destination to pass in yet. The model reads the
+    destination straight out of the raw prompt text itself, exactly like
+    gather_trip_context already does for its own first call -- there's no
+    need to block this on _infer_trip_meta finishing first.
+
+    Tool use here is a nice-to-have, not a hard dependency -- if the model
+    doesn't support tool calling well, or Wikipedia is unreachable, this
+    fails quietly and itinerary generation proceeds exactly as it did
+    before this feature existed.
+
+    Caching note for callers: this function does no caching itself. Like
+    gather_trip_context, its result is meant to be combined into the same
+    "agent_context" string llm_service.generate_itinerary returns, which
+    routers/trips.py caches once per Conversation forever -- correct here
+    because a trip's real-world background facts don't change turn to
+    turn, unlike answer_question_with_tools's per-question place lookups
+    (see this module's docstring for why that loop stays separate and
+    uncached).
+    """
+    if not PLANNING_TOOL_CALLING_ENABLED:
+        return ""
+
+    contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
+    return _run_tool_loop(contents, PLANNING_TOOL_SYSTEM_PROMPT, tools.PLANNING_TOOL_SCHEMAS)
 
 
 def answer_question_with_tools(

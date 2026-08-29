@@ -485,34 +485,46 @@ def generate_itinerary(
 
     cached_agent_context: pass a previously-returned "agent_context" string
     (even "" for "the agent step ran and found nothing useful") to reuse it
-    instead of re-running the weather/currency tool-calling loop. Findings
-    like weather or a currency conversion are properties of the trip, not of
-    one turn, so callers should gather this once per conversation and pass
-    it back on every later turn (edits, etc.) -- this also removes a full
-    model round-trip from every turn after the first. Leave as None (the
-    default) to run the agent step fresh, e.g. for a brand-new conversation
-    that hasn't gathered context yet.
+    instead of re-running the weather/currency/place-context tool-calling
+    loops. Findings like weather, a currency conversion, or a destination's
+    real background are properties of the trip, not of one turn, so callers
+    should gather this once per conversation and pass it back on every
+    later turn (edits, etc.) -- this also removes full model round-trips
+    from every turn after the first. Leave as None (the default) to run the
+    agent step fresh, e.g. for a brand-new conversation that hasn't
+    gathered context yet.
 
     previous_total_days: see _infer_trip_meta's docstring -- threaded
     straight through, unused here beyond that.
 
-    The agentic tool-calling step (agent_service.py) and the destination/
-    length inference call are independent of each other, so when the agent
-    step does need to run, it runs concurrently with inference rather than
-    back-to-back -- a real latency win since it removes one full model
-    round-trip's worth of wall-clock time from generation.
+    The agentic tool-calling steps (agent_service.py: currency conversion,
+    paused, and place-context via Wikipedia, added 2026-08-29) and the
+    destination/length inference call are all independent of each other,
+    so when the agent steps do need to run, they run concurrently with
+    inference rather than back-to-back -- a real latency win since it
+    removes full model round-trips' worth of wall-clock time from
+    generation. gather_place_context_for_itinerary doesn't need the
+    destination inference to finish first -- it reads the destination
+    straight out of the raw prompt itself, the same way gather_trip_context
+    already does.
     """
     if cached_agent_context is not None:
         trip_context = cached_agent_context
         destination, total_days = _infer_trip_meta(prompt, requested_days, conversation_context, previous_total_days)
     else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
-            agent_future = executor.submit(agent_service.gather_trip_context, prompt)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            currency_future = executor.submit(agent_service.gather_trip_context, prompt)
+            place_future = executor.submit(agent_service.gather_place_context_for_itinerary, prompt)
             meta_future = executor.submit(
                 _infer_trip_meta, prompt, requested_days, conversation_context, previous_total_days,
             )
-            trip_context = agent_future.result()
+            currency_context = currency_future.result()
+            place_context = place_future.result()
             destination, total_days = meta_future.result()
+        # Two independent findings, both optional -- join whichever are
+        # non-empty rather than assuming both ran/found something (either
+        # loop can be individually disabled, and both fail quietly to "").
+        trip_context = " ".join(part for part in (currency_context, place_context) if part)
 
     all_days: list[dict] = []
     covered_activities: list[str] = []
