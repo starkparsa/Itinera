@@ -95,7 +95,7 @@ def build_trip_calendar(
     produces a valid, empty VCALENDAR) -- the 400 for "can't export yet" is
     the caller's job (missing start_date), not this function's."""
     cal = Calendar()
-    cal.add("prodid", "-//AI Travel Planner//Itinerary Export//EN")
+    cal.add("prodid", "-//Itinera//Itinerary Export//EN")
     cal.add("version", "2.0")
 
     dtstamp = datetime.utcnow()
@@ -103,7 +103,7 @@ def build_trip_calendar(
     for item in items:
         day_date = start_date + timedelta(days=item.day_number - 1)
         event = Event()
-        event.add("uid", f"trip-{trip_id}-item-{item.id}@ai-travel-planner.local")
+        event.add("uid", f"trip-{trip_id}-item-{item.id}@itinera.local")
         event.add("dtstamp", dtstamp)
         event.add("summary", item.activity)
         event.add("location", destination)

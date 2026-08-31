@@ -17,7 +17,7 @@ import functools
 
 import requests
 
-USER_AGENT = "TravelPlanner/1.0 (https://github.com/starkparsa/Travel-Planner)"
+USER_AGENT = "Itinera/1.0 (https://github.com/starkparsa/Itinera)"
 _HEADERS = {"User-Agent": USER_AGENT}
 _TIMEOUT = 10
 

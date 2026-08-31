@@ -1,4 +1,4 @@
-# CLAUDE.md — AI Travel Planner
+# CLAUDE.md — Itinera
 
 This file is the project's north star. If a session's direction starts drifting
 from what's below — scope creep, a re-litigated decision, a "shortcut" that
@@ -14,7 +14,7 @@ an entry there at the end of a session with real, shippable changes.
 
 ## What this product is
 
-A chat-driven AI travel planner. Describe a trip in plain language, get a
+**Itinera** — a chat-driven AI travel planner. Describe a trip in plain language, get a
 day-by-day itinerary, refine it conversationally, and eventually export it
 (calendar file, live Google Calendar push). Full intended scope — not all of
 this exists yet, see "Current state":
