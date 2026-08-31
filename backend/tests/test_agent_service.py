@@ -131,6 +131,39 @@ def test_network_failure_fails_quietly_and_returns_empty_string():
     assert result == ""
 
 
+def test_network_failure_is_logged_not_silent(caplog):
+    # Regression test (2026-08-31 architecture review, Tier 2): the loop
+    # failing quietly to its *caller* (asserted above) used to also mean
+    # failing quietly in the logs, with zero signal that anything went
+    # wrong at all -- a real problem since these loops are on by default in
+    # production. loop_name identifies which of the three loops failed.
+    with (
+        patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", side_effect=ConnectionError("no route to host")),
+        caplog.at_level("ERROR", logger="app.agent_service"),
+    ):
+        agent_service.gather_trip_context("weekend in Denver")
+
+    assert any("currency" in r.message and "failed" in r.message for r in caplog.records)
+
+
+def test_max_tool_rounds_exhaustion_is_logged_not_silent(caplog):
+    # A loop that never converges (the model keeps calling tools instead of
+    # ever giving a final answer) is a different failure shape from an
+    # outright exception -- also worth its own log line, not just silence.
+    always_calls_a_tool = _mock_tool_response(function_calls=[_mock_function_call("convert_currency", {})])
+    with (
+        patch("app.agent_service.AGENT_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=always_calls_a_tool),
+        patch("app.tools.convert_currency", return_value={"converted": 100}),
+        caplog.at_level("WARNING", logger="app.agent_service"),
+    ):
+        result = agent_service.gather_trip_context("weekend in Denver")
+
+    assert result == ""
+    assert any("currency" in r.message and "MAX_TOOL_ROUNDS" in r.message for r in caplog.records)
+
+
 def test_system_prompt_instructs_against_inventing_data_for_failed_tools():
     # Regression test: a tool returning {"error": ...} was being fed back to
     # the model with no instruction to distinguish "tool failed" from "tool
