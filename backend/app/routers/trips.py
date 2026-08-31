@@ -125,10 +125,13 @@ def generate_trip(
         # Nothing gathered yet for this conversation at all -- try a real,
         # scoped fetch before answering rather than letting the model guess
         # (see CLAUDE.md principle #7). Gated on `is None` specifically (not
-        # just falsy) so this matches the exact same cache-once-per-
-        # conversation contract used for itinerary generation below
-        # (`was_freshly_gathered`) -- once attempted, even "" for "found
-        # nothing", it won't fire again on every later question.
+        # just falsy) so this branch's own currency gather won't re-fire on
+        # every later question turn, even once it's cached "" for "found
+        # nothing". Deliberately NOT the same contract itinerary generation
+        # uses below (`cached_agent_context`/`was_freshly_gathered` there
+        # are truthy-gated, not `is None`-gated) -- a "" cached here by a
+        # Q&A turn must NOT permanently block that loop's own place-context
+        # gathering; see the 2026-08-30 fix on both of those for why.
         fresh_agent_context = ""
         if conversation.agent_context is None:
             # A destination hint helps when the question itself doesn't name
@@ -186,6 +189,12 @@ def generate_trip(
         # on any internal error), so an empty result here just means "fall
         # back to the plain Q&A path" -- a Wikipedia/Gemini hiccup must
         # never block an answer to the user's question.
+        # Captured before conversation.tour_guide_mode is mutated below --
+        # true exactly on the turn that flips the mode from off to on, so
+        # the deterministic acknowledgment prefix (below) fires once, on
+        # activation, and never again on later turns that keep it on.
+        activating_tour_guide = tour_guide_requested and not conversation.tour_guide_mode
+
         reply_text = agent_service.answer_question_with_tools(
             request.prompt, chat_messages, agent_context=combined_context,
             # Pass the mode as it stood ENTERING this turn -- the
@@ -203,6 +212,14 @@ def generate_trip(
         except Exception as exc:
             logger.exception("Q&A request failed for conversation %s", conversation.id)
             raise HTTPException(status_code=502, detail=f"LLM failed to answer: {exc}")
+
+        # Deterministic, not LLM-worded -- exact required boilerplate is
+        # more reliable coming from Python than from trusting the model to
+        # phrase an acknowledgment verbatim every time (principle #6's
+        # discipline, extended from date arithmetic to fixed wording).
+        # Applies regardless of which path above produced reply_text.
+        if activating_tour_guide and not reply_text.startswith("Tour guide mode on."):
+            reply_text = f"Tour guide mode on. {reply_text}"
 
         if conversation.agent_context is None:
             conversation.agent_context = fresh_agent_context
@@ -255,11 +272,14 @@ def generate_trip(
             request.prompt,
             requested_days=request.days,
             conversation_context=conversation_context,
-            # Reuse weather/currency findings gathered earlier in this chat
-            # instead of re-running the agent step on every edit turn.
-            # conversation.agent_context is None only for a chat that hasn't
-            # generated a trip yet; once set (even to "" for "found
-            # nothing"), it's cached for the conversation's lifetime.
+            # Reuse currency/place-context findings gathered earlier in this
+            # chat instead of re-running the agent steps on every edit turn.
+            # A falsy value (None, or "" -- e.g. from a Q&A-first
+            # conversation's own cache-fill, see routers/trips.py's question
+            # branch) means "nothing useful cached yet, worth a fresh
+            # gather" here; only a real non-empty finding is treated as
+            # already-cached. (Fixed 2026-08-30 -- `is None` alone let a
+            # Q&A-cached "" permanently block place-context gathering.)
             cached_agent_context=conversation.agent_context,
             previous_total_days=previous_total_days,
         )
@@ -275,7 +295,14 @@ def generate_trip(
     # CLAUDE.md architecture principle #5: cached findings should serve the
     # whole conversation, but each consumer -- including this response --
     # needs to read/surface the cache appropriately, not just blindly.
-    was_freshly_gathered = conversation.agent_context is None
+    # Truthy, not `is not None` -- matches the same fix in
+    # generate_itinerary's cached_agent_context gate (llm_service.py):
+    # an empty string here can come from a Q&A-first conversation's own
+    # cache-fill, and treating that as "already gathered" would both skip
+    # re-persisting real findings this turn just gathered *and* keep the
+    # itinerary generator re-gathering from scratch on every future turn
+    # instead of caching once. Found by the 2026-08-30 code review.
+    was_freshly_gathered = not conversation.agent_context
     if was_freshly_gathered:
         conversation.agent_context = result.get("agent_context", "")
 

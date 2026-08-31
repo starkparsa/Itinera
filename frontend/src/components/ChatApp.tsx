@@ -32,6 +32,11 @@ export default function ChatApp({
   const [messages, setMessages] = useState<MessageOut[]>([]);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Drives the [data-tour-guide-mode] accent override in globals.css --
+  // set from whatever the backend last reported for this conversation, so
+  // it reverts automatically the moment a load reflects the mode turning
+  // back off (e.g. after an edit/new-trip turn, or switching chats).
+  const [tourGuideMode, setTourGuideMode] = useState(false);
 
   async function refreshConversationList() {
     setConversations(await listConversations());
@@ -45,12 +50,14 @@ export default function ChatApp({
     }
     setActiveConversationId(id);
     setMessages(detail.messages);
+    setTourGuideMode(detail.tour_guide_mode);
   }
 
   function startNewChat() {
     setActiveConversationId(null);
     setMessages([]);
     setError(null);
+    setTourGuideMode(false);
   }
 
   async function handleDelete(id: number) {
@@ -84,7 +91,10 @@ export default function ChatApp({
   const topExportTrip = latestExportableTrip(messages);
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
+    <div
+      className="flex min-h-screen flex-col md:flex-row"
+      data-tour-guide-mode={tourGuideMode ? "true" : undefined}
+    >
       <Sidebar
         conversations={conversations}
         activeConversationId={activeConversationId}

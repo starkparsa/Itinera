@@ -49,4 +49,5 @@ export interface ConversationDetail {
   title: string;
   created_at: string;
   messages: MessageOut[];
+  tour_guide_mode: boolean;
 }

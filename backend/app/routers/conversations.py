@@ -72,6 +72,7 @@ def get_conversation(
         title=conversation.title,
         created_at=conversation.created_at,
         messages=messages_out,
+        tour_guide_mode=conversation.tour_guide_mode,
     )
 
 

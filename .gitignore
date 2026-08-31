@@ -222,6 +222,12 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Local dev SQLite database -- was accidentally committed (with real, if
+# test, user data in it) in the "wiki updates" commit; untracked and added
+# here 2026-08-29 once found. Keep out of git going forward -- local dev
+# state, not something to ship in the repo.
+backend/_dev_site.db
+
 # graphify (knowledge-graph tool output) -- local analysis artifacts, not
 # meant to ship in the repo (extraction sidecars, cache/, cost tracking,
 # raw graph.json). Keep graph.html tracked so it can be shared/reviewed

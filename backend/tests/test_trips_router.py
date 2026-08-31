@@ -347,6 +347,10 @@ def test_tour_guide_mode_persists_across_question_turns_and_clears_on_edit_trip(
 
     conv_id = response.json()["conversation_id"]
     assert mock_qa.call_args.kwargs["tour_guide_mode"] is False  # not yet on entering this turn
+    # Deterministic, Python-added acknowledgment on the activating turn --
+    # see routers/trips.py's activating_tour_guide flag. Exact wording, not
+    # something the (mocked) LLM reply happened to contain.
+    assert response.json()["reply"] == "Tour guide mode on. Sure, let's go!"
 
     db = SessionLocal()
     try:
@@ -354,6 +358,11 @@ def test_tour_guide_mode_persists_across_question_turns_and_clears_on_edit_trip(
         assert conversation.tour_guide_mode is True
     finally:
         db.close()
+
+    # The frontend's only window into this state -- ConversationDetail,
+    # not TripResponse, since a question turn's Message has no trip
+    # attached at all (see schemas.py's ConversationDetail comment).
+    assert client.get(f"/conversations/{conv_id}").json()["tour_guide_mode"] is True
 
     # Turn 2: a vague follow-up that does NOT re-trigger tour_guide_requested
     # -- the persisted mode from turn 1 should still be passed through.
@@ -364,12 +373,15 @@ def test_tour_guide_mode_persists_across_question_turns_and_clears_on_edit_trip(
             return_value="More detail...",
         ) as mock_qa2,
     ):
-        client.post(
+        turn2 = client.post(
             "/trips/generate",
             json={"prompt": "what else is nearby?", "conversation_id": conv_id},
         )
 
     assert mock_qa2.call_args.kwargs["tour_guide_mode"] is True
+    # The acknowledgment is one-time, on activation only -- a later turn in
+    # an already-active conversation must not repeat it.
+    assert turn2.json()["reply"] == "More detail..."
 
     # Turn 3: explicitly back to planning -- mode clears.
     with (
@@ -387,6 +399,8 @@ def test_tour_guide_mode_persists_across_question_turns_and_clears_on_edit_trip(
         assert conversation.tour_guide_mode is False
     finally:
         db.close()
+
+    assert client.get(f"/conversations/{conv_id}").json()["tour_guide_mode"] is False
 
 
 def test_question_receives_real_chat_history_not_squashed_string():
@@ -423,6 +437,37 @@ def test_question_receives_the_conversations_cached_agent_findings():
         client.post("/trips/generate", json={"prompt": "what's the temperature there?", "conversation_id": conv_id})
 
     assert mock_answer.call_args.kwargs["agent_context"] == "Austin: highs of 30C, sunny."
+
+
+def test_empty_agent_context_from_a_qa_turn_does_not_block_later_persistence():
+    # Regression test (2026-08-30 code review): a conversation whose FIRST
+    # turn is a question caches Conversation.agent_context = "" (the
+    # currency loop is paused, so gather_trip_context always returns "").
+    # A later new_trip/edit_trip turn's `was_freshly_gathered = ... is
+    # None` check would then see agent_context as already-set (it's "",
+    # not None) and never persist real findings gathered on that later
+    # turn -- silently freezing the conversation's cache at "" forever.
+    with (
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.llm_service.answer_question", return_value="Sure."),
+    ):
+        first = client.post("/trips/generate", json={"prompt": "what's a good time to visit Lisbon?"})
+    conv_id = first.json()["conversation_id"]
+
+    result_with_context = {**FAKE_ITINERARY, "agent_context": "Lisbon is Portugal's coastal capital."}
+    with (
+        patch("app.llm_service.classify_intent", return_value=("new_trip", False)),
+        patch("app.llm_service.generate_itinerary", return_value=result_with_context),
+    ):
+        client.post("/trips/generate", json={"prompt": "3 days in Lisbon", "conversation_id": conv_id})
+
+    db = SessionLocal()
+    try:
+        conversation = db.query(models.Conversation).filter(models.Conversation.id == conv_id).first()
+        assert conversation.agent_context == "Lisbon is Portugal's coastal capital."
+    finally:
+        db.close()
 
 
 def test_question_answer_failure_returns_502_not_500():

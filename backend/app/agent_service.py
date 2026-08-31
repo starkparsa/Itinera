@@ -89,8 +89,16 @@ history or the real data given to you below.
 
 Default to detail="brief" -- only pass detail="detailed" when the user's \
 own words ask for more (e.g. "tell me the full history", "give me more \
-detail", "be my tour guide"). A brief overview is the right amount of \
-information for normal trip-planning questions; a full history is not.
+detail"). A brief overview is the right amount of information for normal \
+trip-planning questions; a full history is not. Being asked to "be my \
+tour guide" changes your voice/persona, not the detail level by itself.
+
+If this message asks you to be a tour guide (or similar) WITHOUT naming a \
+specific place, do not recap the whole itinerary day-by-day or narrate \
+every stop already listed in the conversation -- give a short, friendly \
+welcome instead (a sentence or two) and let the user ask about whichever \
+stop they want to hear about first. Only go into an actual place's \
+detail once they name one.
 
 Match your reply's length to the detail level you used, not your own \
 general knowledge of the place: after a detail="brief" call, answer in \
@@ -322,11 +330,19 @@ def answer_question_with_tools(
     set by routers/trips.py when a PAST turn's classify_intent returned
     tour_guide_requested=True). Distinct from QA_TOOL_SYSTEM_PROMPT's
     existing per-turn "be my tour guide" instruction, which only covers
-    THIS turn's own wording -- this flag keeps the fuller, narrative style
+    THIS turn's own wording -- this flag keeps the tour-guide *persona*
     going on later turns that don't repeat that phrasing. The triggering
     turn itself doesn't need this True yet (QA_TOOL_SYSTEM_PROMPT already
     handles it), so callers should pass the conversation's state as it
     stood *entering* this turn, not including any update this turn makes.
+
+    As of 2026-08-29 this does NOT force detail="detailed" on later turns
+    (a deliberate reversal of this flag's original 2026-08-27 behavior,
+    made once the fabrication risk that motivated forcing "detailed" was
+    fixed a different way -- see QA_TOOL_SYSTEM_PROMPT's own anti-invention
+    instruction) -- every turn, guide mode or not, now defaults to brief;
+    this flag only changes persona/voice and reinforces that default, it
+    doesn't override the per-turn escalate-only-if-asked logic below.
     """
     if not QA_TOOL_CALLING_ENABLED:
         return ""
@@ -337,13 +353,17 @@ def answer_question_with_tools(
             "\n\nYou are continuing an ongoing tour-guide-style conversation "
             "-- the user explicitly asked you to be their tour guide earlier "
             "in this chat, and that request still stands even though this "
-            "specific message may not repeat it. Keep answering in that "
-            "fuller, narrative tour-guide style by default for this turn: "
-            "call get_place_context with detail=\"detailed\" (not \"brief\") "
-            "for any newly-named place, and give the fuller, multi-paragraph "
-            "answer described above for detail=\"detailed\" mode -- unless "
-            "this specific message's own words clearly ask for something "
-            "short instead."
+            "specific message may not repeat it. Keep speaking in that "
+            "tour-guide voice. For each new question, default to a short, "
+            "focused summary of exactly what's being asked plus a brief bit "
+            "of relevant history -- call get_place_context with "
+            "detail=\"brief\" unless THIS message's own wording explicitly "
+            "asks to go deeper (e.g. \"tell me more\", \"go deeper\", \"the "
+            "full history\"), in which case use detail=\"detailed\" and give "
+            "the fuller answer for that turn only. Do not carry an earlier "
+            "message's request for more detail forward -- judge each new "
+            "question on its own wording, the same way you would if this "
+            "were the first question in the conversation."
         )
     if agent_context:
         system_instruction += (

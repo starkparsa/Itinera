@@ -285,7 +285,14 @@ def test_qa_tools_folds_tour_guide_mode_note_into_system_instruction():
 
     system_instruction = mock_call.call_args.args[1]
     assert "continuing an ongoing tour-guide" in system_instruction
-    assert 'detail="detailed"' in system_instruction
+    # 2026-08-29: persistent tour-guide mode no longer forces detail=
+    # "detailed" on every later turn (reversed once the fabrication risk
+    # that originally motivated it was fixed a different way -- see
+    # QA_TOOL_SYSTEM_PROMPT's own anti-invention instruction). It still
+    # keeps the persona going and reinforces brief-by-default-unless-asked.
+    assert 'detail="brief"' in system_instruction
+    assert "own wording explicitly" in system_instruction
+    assert "do not carry an earlier message's request for more detail forward" in system_instruction.lower()
 
 
 def test_qa_tools_omits_tour_guide_mode_note_by_default():
@@ -329,6 +336,25 @@ def test_qa_system_prompt_instructs_against_inventing_specific_venues_in_detaile
     prompt_lower = agent_service.QA_TOOL_SYSTEM_PROMPT.lower()
     assert "venue" in prompt_lower or "specific business" in prompt_lower
     assert "address" in prompt_lower
+
+
+def test_qa_system_prompt_does_not_treat_be_my_tour_guide_as_a_detail_trigger():
+    # Regression test: live-verified that on the activation turn, a bare
+    # "be my tour guide" (no specific place named) triggered a full
+    # day-by-day recap of the entire already-generated itinerary -- because
+    # "be my tour guide" was listed alongside "tell me the full history"/
+    # "give me more detail" as a detail="detailed" trigger phrase, so the
+    # model treated activating the persona as a request to dump everything
+    # it knew about the trip. Fixed by dropping it from that list (the
+    # phrase now only affects persona/voice, not detail level) and adding
+    # an explicit instruction to give a short welcome instead of a full
+    # itinerary recap when no specific place is named.
+    prompt = agent_service.QA_TOOL_SYSTEM_PROMPT
+    detail_trigger_examples = prompt.split('detail="detailed"')[1].split(").")[0]
+    assert "be my tour guide" not in detail_trigger_examples.lower()
+    prompt_lower = prompt.lower()
+    assert "short, friendly welcome" in prompt_lower or "friendly welcome" in prompt_lower
+    assert "without naming a specific place" in prompt_lower
 
 
 # --- gather_place_context_for_itinerary (place-context, itinerary planning) ---

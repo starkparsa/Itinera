@@ -1,6 +1,10 @@
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 sqlalchemy==2.0.35
+psycopg2-binary==2.9.12
+# pymysql: only still needed for the one-off Docker-MySQL -> Neon Postgres
+# data migration script (backend/scripts/migrate_to_neon.py) -- remove once
+# that migration is done and Docker MySQL is decommissioned, see CLAUDE.md.
 pymysql==1.1.1
 cryptography==43.0.1
 pydantic==2.13.4

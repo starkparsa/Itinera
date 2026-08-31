@@ -353,6 +353,33 @@ def test_cached_agent_context_skips_the_agent_step_entirely():
     assert result["agent_context"] == "Already known: expect snow."
 
 
+def test_empty_cached_agent_context_still_gathers_fresh():
+    # Regression test (2026-08-30 code review): a Q&A-first conversation
+    # caches Conversation.agent_context = "" (routers/trips.py's own
+    # cache-fill, to avoid re-running the paused currency loop on every
+    # question turn) -- an `is not None` gate here would treat that "" as
+    # a real cached value and permanently skip gather_place_context_for_
+    # itinerary for the rest of the conversation, even though the loop is
+    # enabled and has never actually run. An empty cached value must be
+    # treated the same as no cached value at all: worth a fresh gather.
+    meta = TripMeta(destination="Lisbon", total_days=2)
+    chunk = _chunk([(i, "explore") for i in range(1, 3)])
+
+    with (
+        patch("app.llm_service.agent_service.gather_trip_context", return_value="") as mock_gather,
+        patch(
+            "app.llm_service.agent_service.gather_place_context_for_itinerary",
+            return_value="Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints.",
+        ) as mock_place,
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        result = llm_service.generate_itinerary("2 days in Lisbon", cached_agent_context="")
+
+    mock_gather.assert_called_once()
+    mock_place.assert_called_once()
+    assert result["agent_context"] == "Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints."
+
+
 def test_currency_and_place_context_are_combined_when_both_return_findings():
     meta = TripMeta(destination="Lisbon", total_days=2)
     chunk = _chunk([(i, "explore") for i in range(1, 3)])

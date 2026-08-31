@@ -94,6 +94,37 @@
   }
 }
 
+/*
+ * Tour guide mode accent override -- ChatApp.tsx sets
+ * [data-tour-guide-mode="true"] on its root wrapper for as long as the
+ * active conversation's Conversation.tour_guide_mode is true (see
+ * CLAUDE.md's "Persistent tour-guide mode" decision row), and removes the
+ * attribute the moment a reload reflects it turning back off. Swaps the
+ * same four tokens the base palette above defines (nothing else) to an
+ * amber accent -- Tailwind's own amber-700/400 oklch stops, same
+ * tuned-not-hand-picked sourcing as the teal palette -- so every component
+ * already themed off --primary/--ring/--sidebar-primary/--sidebar-ring
+ * (buttons, the active sidebar item, the user's chat bubble, default
+ * badges) picks it up with no per-component changes.
+ */
+[data-tour-guide-mode="true"] {
+  --primary: oklch(0.555 0.163 48.998); /* amber-700 */
+  --ring: oklch(0.769 0.188 70.08); /* amber-500 */
+  --sidebar-primary: oklch(0.555 0.163 48.998);
+  --sidebar-ring: oklch(0.769 0.188 70.08);
+}
+
+@media (prefers-color-scheme: dark) {
+  [data-tour-guide-mode="true"] {
+    --primary: oklch(0.828 0.189 84.429); /* amber-400, lighter so it pops on dark bg */
+    --primary-foreground: oklch(0.145 0 0);
+    --ring: oklch(0.769 0.188 70.08); /* amber-500 */
+    --sidebar-primary: oklch(0.828 0.189 84.429);
+    --sidebar-primary-foreground: oklch(0.145 0 0);
+    --sidebar-ring: oklch(0.769 0.188 70.08);
+  }
+}
+
 html,
 body {
   max-width: 100vw;

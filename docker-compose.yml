@@ -1,7 +1,14 @@
 services:
+  # Local MySQL -- kept for reference/rollback only. Local dev and prod both
+  # point at Neon Postgres by default now (see CLAUDE.md's "Database: MySQL
+  # -> Postgres on Neon" decision row, completed 2026-08-29); `backend`
+  # below no longer depends on or reads from this service. Run
+  # `docker compose --profile legacy-mysql up mysql` if you specifically
+  # need it back for something.
   mysql:
     image: mysql:8.4
     restart: unless-stopped
+    profiles: ["legacy-mysql"]
     environment:
       MYSQL_ROOT_PASSWORD: rootpass
       MYSQL_DATABASE: travel_planner
@@ -20,13 +27,20 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
-    depends_on:
-      mysql:
-        condition: service_healthy
     environment:
-      DATABASE_URL: mysql+pymysql://travel_user:travel_pass@mysql:3306/travel_planner
+      # Neon Postgres connection string, from the root .env -- same var
+      # every other part of the app reads (database.py, alembic/env.py).
+      # No longer a hardcoded local `mysql` container reference.
+      DATABASE_URL: ${DATABASE_URL}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      # Was never forwarded here (pre-existing gap, found by the
+      # 2026-08-30 code review) -- .env's own GROQ_API_KEY only fuels this
+      # file's ${VAR} interpolation, it doesn't auto-populate the
+      # container's environment, so the documented Gemini->Groq fallback
+      # (see CLAUDE.md's Reliability decision row) was silently a no-op
+      # under `docker compose up` even when a user set the key.
+      GROQ_API_KEY: ${GROQ_API_KEY}
       AUTH_BACKEND_SECRET: ${AUTH_BACKEND_SECRET}
       # Needed to refresh a user's Calendar access token (Phase D) --
       # google_calendar.py builds a real google-auth Credentials object

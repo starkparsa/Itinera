@@ -81,3 +81,8 @@ class ConversationDetail(BaseModel):
     title: str
     created_at: datetime
     messages: list[MessageOut]
+    # Conversation-level state (see models.Conversation.tour_guide_mode) --
+    # exposed here, not on TripResponse, since a question-turn's assistant
+    # Message has no trip attached at all; this is the frontend's only way
+    # to know whether to show tour-guide-mode styling (see CLAUDE.md).
+    tour_guide_mode: bool

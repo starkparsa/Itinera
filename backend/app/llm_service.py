@@ -508,7 +508,15 @@ def generate_itinerary(
     straight out of the raw prompt itself, the same way gather_trip_context
     already does.
     """
-    if cached_agent_context is not None:
+    # Truthy, not `is not None` -- an empty string can land here from the
+    # Q&A branch's own cache-fill (routers/trips.py), which deliberately
+    # caches "" to avoid re-running the (paused) currency loop on every
+    # question turn. Treating that "" as a real cached value here would
+    # silently skip gather_place_context_for_itinerary forever for any
+    # conversation whose first turn was a question -- a real bug found by
+    # the 2026-08-30 code review, not something the "" caching was ever
+    # meant to imply for this loop specifically.
+    if cached_agent_context:
         trip_context = cached_agent_context
         destination, total_days = _infer_trip_meta(prompt, requested_days, conversation_context, previous_total_days)
     else:
