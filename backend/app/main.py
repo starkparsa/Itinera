@@ -44,7 +44,7 @@ for attempt in range(max_retries):
             print(f"Failed to connect to database after {max_retries} attempts")
             raise
 
-app = FastAPI(title="AI Travel Planner API")
+app = FastAPI(title="Itinera API")
 
 # ALLOWED_ORIGINS: comma-separated list of exact origins allowed to call this
 # API from a browser (e.g. "https://app.example.com,https://staging.example.com").

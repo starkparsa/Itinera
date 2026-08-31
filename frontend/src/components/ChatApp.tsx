@@ -107,7 +107,7 @@ export default function ChatApp({
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6 md:px-8">
         <div className="flex items-center justify-between gap-4">
           <h1 className="flex items-center gap-2 text-xl font-semibold">
-            <span aria-hidden>🧭</span> AI Travel Planner
+            <span aria-hidden>🧭</span> Itinera
           </h1>
           {topExportTrip && (
             <div className="flex shrink-0 items-center gap-2">

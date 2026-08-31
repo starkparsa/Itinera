@@ -8,7 +8,7 @@ export default function LoginPage() {
         <span className="text-4xl" aria-hidden>
           🧭
         </span>
-        <h1 className="text-2xl font-semibold tracking-tight">AI Travel Planner</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Itinera</h1>
         <p className="text-muted-foreground">Sign in to plan trips and save your chat history.</p>
       </div>
       <form

@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "AI Travel Planner",
+  title: "Itinera",
   description: "Chat-driven AI travel planner",
 };
 

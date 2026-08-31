@@ -116,7 +116,7 @@ whatever a real trip request reasonably needs) is a one-line fix.
 
 ### 4. `/docs`, `/redoc`, `/openapi.json` are open by default (informational)
 
-`FastAPI(title="AI Travel Planner API")` in
+`FastAPI(title="Itinera API")` in
 [`main.py`](../backend/app/main.py) doesn't set `docs_url=None`/
 `openapi_url=None`. Not a vulnerability by itself — plenty of real APIs
 keep interactive docs public on purpose — but it does mean your full
