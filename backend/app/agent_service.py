@@ -53,9 +53,13 @@ Migrated to Gemini's function-calling shape (google.genai.types) alongside
 llm_service.py before currency was re-enabled, so the mechanics didn't need
 migrating again once it was.
 """
+import logging
+
 from google.genai import types
 
-from . import llm_service, tools
+from . import gemini_client, tools
+
+logger = logging.getLogger(__name__)
 
 MAX_TOOL_ROUNDS = 4
 
@@ -161,33 +165,55 @@ def _call_gemini_with_tools(
     every tool this module knows about and would let one loop reach the
     other loop's tool.
 
-    thinking_level stays MINIMAL for the same reason as llm_service.py:
-    verified live, it avoids a reasoning model burning the output-token
-    budget on invisible thinking tokens. automatic_function_calling is
-    explicitly disabled since this loop manages tool execution itself
-    (matching today's `{"error": str(exc)}` catch pattern) rather than
-    letting the SDK call Python functions on our behalf.
+    Client/model/thinking-config all come from gemini_client.py, shared
+    with llm_service.py (2026-08-31 architecture review, Tier 2) -- this
+    module used to reach into llm_service's own underscore-prefixed
+    internals (llm_service._get_client(), llm_service.GEMINI_MODEL,
+    llm_service._THINKING_CONFIG) for these, which was both real coupling
+    across a module boundary and the only reason this module needed to
+    import llm_service at all (see gemini_client.py's docstring). thinking_
+    level stays MINIMAL for the same reason as llm_service.py: verified
+    live, it avoids a reasoning model burning the output-token budget on
+    invisible thinking tokens. automatic_function_calling is explicitly
+    disabled since this loop manages tool execution itself (matching
+    today's `{"error": str(exc)}` catch pattern) rather than letting the
+    SDK call Python functions on our behalf.
     """
-    return llm_service._get_client().models.generate_content(
-        model=llm_service.GEMINI_MODEL,
+    return gemini_client.get_client().models.generate_content(
+        model=gemini_client.GEMINI_MODEL,
         contents=contents,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
             tools=[tool_schema],
-            thinking_config=llm_service._THINKING_CONFIG,
+            thinking_config=gemini_client.THINKING_CONFIG,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
 
 
-def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.Tool) -> str:
-    """The manual tool-calling round trip shared by gather_trip_context and
-    answer_question_with_tools -- the mechanics (thinking_level, role="user"
-    for function responses, MAX_TOOL_ROUNDS, quiet failure) are identical
-    between the two; only which tool is exposed, what system prompt is
-    used, and how the caller treats the result (cached once vs. run fresh
-    every turn) differ. See this module's docstring for why those two
-    loops stay separate rather than sharing one flag/schema.
+def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.Tool, loop_name: str) -> str:
+    """The manual tool-calling round trip shared by all three loops
+    (gather_trip_context, gather_place_context_for_itinerary,
+    answer_question_with_tools) -- the mechanics (thinking_level,
+    role="user" for function responses, MAX_TOOL_ROUNDS, quiet-to-the-
+    caller failure) are identical between them; only which tool is
+    exposed, what system prompt is used, and how the caller treats the
+    result (cached once vs. run fresh every turn) differ. See this
+    module's docstring for why the loops stay separate rather than
+    sharing one flag/schema.
+
+    "Quiet failure" here means quiet to the *caller* only (still returns
+    "" on any failure, exactly as before -- every caller's own docstring
+    documents that contract and nothing about it changed). It used to also
+    mean quiet in the logs, with zero signal that anything went wrong at
+    all -- a real gap (2026-08-31 architecture review, Tier 2): all three
+    loops are on by default in production, so a genuine failure (Wikipedia
+    changing its response shape, a Gemini schema rejection) would silently
+    degrade to "no place/currency context" forever with nothing in the
+    logs to catch it. loop_name (a short fixed string identifying which of
+    the three callers this is, e.g. "currency", "qa_place_context",
+    "planning_place_context") exists purely so those log lines say which
+    loop actually failed, not just that some loop somewhere did.
     """
     try:
         for _ in range(MAX_TOOL_ROUNDS):
@@ -224,8 +250,18 @@ def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.T
             # the shape Ollama's /api/chat used.
             contents.append(types.Content(role="user", parts=response_parts))
 
-        return ""  # hit MAX_TOOL_ROUNDS without a final answer -- bail out quietly
+        # Hit MAX_TOOL_ROUNDS without a final answer -- still bail out
+        # quietly to the caller (see docstring), but a loop that never
+        # converges is worth a real log line: it's a different failure
+        # shape from an outright exception (the model keeps calling tools
+        # instead of ever answering) and would otherwise leave no trace.
+        logger.warning(
+            "agent_service tool-calling loop '%s' hit MAX_TOOL_ROUNDS (%d) without a final answer",
+            loop_name, MAX_TOOL_ROUNDS,
+        )
+        return ""
     except Exception:
+        logger.exception("agent_service tool-calling loop '%s' failed", loop_name)
         return ""
 
 
@@ -257,7 +293,7 @@ def gather_trip_context(prompt: str, destination: str | None = None) -> str:
 
     user_content = f"Trip destination: {destination}\n\n{prompt}" if destination else prompt
     contents = [types.Content(role="user", parts=[types.Part(text=user_content)])]
-    return _run_tool_loop(contents, AGENT_SYSTEM_PROMPT, tools.CURRENCY_TOOL_SCHEMAS)
+    return _run_tool_loop(contents, AGENT_SYSTEM_PROMPT, tools.CURRENCY_TOOL_SCHEMAS, loop_name="currency")
 
 
 def gather_place_context_for_itinerary(prompt: str) -> str:
@@ -293,7 +329,9 @@ def gather_place_context_for_itinerary(prompt: str) -> str:
         return ""
 
     contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
-    return _run_tool_loop(contents, PLANNING_TOOL_SYSTEM_PROMPT, tools.PLANNING_TOOL_SCHEMAS)
+    return _run_tool_loop(
+        contents, PLANNING_TOOL_SYSTEM_PROMPT, tools.PLANNING_TOOL_SCHEMAS, loop_name="planning_place_context",
+    )
 
 
 def answer_question_with_tools(
@@ -377,4 +415,4 @@ def answer_question_with_tools(
     ]
     contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
 
-    return _run_tool_loop(contents, system_instruction, tools.QA_TOOL_SCHEMAS)
+    return _run_tool_loop(contents, system_instruction, tools.QA_TOOL_SCHEMAS, loop_name="qa_place_context")
