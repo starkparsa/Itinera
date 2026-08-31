@@ -236,3 +236,11 @@ backend/_dev_site.db
 # blocked at the directory level.
 graphify-out/*
 !graphify-out/graph.html
+
+# skills-lock.json (npx-skills / skills.sh package manager) -- a lockfile
+# for globally-installed Claude Code skills, written to whatever directory
+# `npx skills add ... --global` happened to run from. It doesn't describe
+# anything about this project (the skills it locks went to ~/.claude/skills/,
+# not here) -- an artifact of where a command was run, not a real dependency
+# of this repo.
+skills-lock.json
