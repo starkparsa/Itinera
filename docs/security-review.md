@@ -1,8 +1,9 @@
 # Security review: manual pass findings
 
-**Status: advisory, findings only — nothing here has been fixed yet.
-Written 2026-08-30 by manual code inspection (grep + read), not a
-dedicated security-scanning skill — none is installed, see note below.**
+**Status: mostly advisory — two items (CORS, rate limiting) were fixed
+2026-08-31, everything else below is still open.** Written 2026-08-30 by
+manual code inspection (grep + read), not a dedicated security-scanning
+skill — none is installed, see note below.
 
 ## On tooling
 
@@ -78,19 +79,32 @@ server-side (`logger.exception(...)`, already done in at least one of
 these spots) and return a fixed, generic message to the client instead of
 interpolating `{exc}` into it.
 
-### 2. No API-level rate limiting (medium, cost-relevant here specifically)
+### 2. No API-level rate limiting (medium, cost-relevant here specifically) — FIXED 2026-08-31
 
-Every request-throttling reference found in the codebase is Gemini's own
-internal 429-detection (`llm_service.py`/`groq_service.py`'s
+Every request-throttling reference found in the codebase used to be
+Gemini's own internal 429-detection (`llm_service.py`/`groq_service.py`'s
 `_is_rate_limited`) — that's about reacting to a quota already exhausted,
-not preventing abuse. Nothing limits how often an authenticated user (or a
-buggy client, or a compromised/leaked JWT) can call `/trips/generate`,
+not preventing abuse. Nothing limited how often an authenticated user (or a
+buggy client, or a compromised/leaked JWT) could call `/trips/generate`,
 each hit of which is 2+ real Gemini calls. For this app specifically, that
-means the same 20-requests/day free-tier wall already documented in
-`CLAUDE.md` as a *development* annoyance becomes a real *denial-of-service
-vector against your own quota* once anyone besides you can reach it. Worth
-a simple per-user rate limit (`slowapi` is the common FastAPI-native
-choice) before a real public deployment, not necessarily before that.
+meant the same 20-requests/day free-tier wall already documented in
+`CLAUDE.md` as a *development* annoyance could become a real
+*denial-of-service vector against your own quota* once anyone besides you
+could reach it.
+
+**Fix**: `slowapi` (IP-keyed) added — a generous 100/minute app-wide
+default (`app/rate_limit.py`, applied globally via `SlowAPIMiddleware`) plus
+a stricter 10/minute limit specifically on `POST /trips/generate`
+(`@limiter.limit("10/minute")`, `routers/trips.py`), the one route that
+always costs real LLM spend per call. In-process/in-memory storage — real
+protection for the current single-instance deployment target, but **not**
+shared across replicas if the backend is ever horizontally scaled; see
+`rate_limit.py`'s module docstring for the Redis-backed upgrade path when
+that changes. This is IP-based abuse/flood protection, not a per-account
+cost quota — a real per-user daily/monthly cap (tied to `User.id`) is a
+separate, still-open follow-up once there are real paid/free account tiers
+to define it against. Covered by
+`backend/tests/test_cors_and_rate_limiting.py`.
 
 ### 3. No length cap on the prompt field (low-medium)
 
@@ -112,20 +126,25 @@ default-by-omission.
 
 ## Already flagged elsewhere, not repeated in detail here
 
-- CORS `allow_origins=["*"]` — see `docs/deployment-readiness.md` §1.1,
-  the highest-priority item in that doc already.
-- Secrets living in a plain `.env` for local dev — same doc, §1.4.
+- CORS `allow_origins=["*"]` — was the highest-priority item in
+  `docs/deployment-readiness.md` §1.1. **FIXED 2026-08-31**: `main.py` now
+  reads an explicit `ALLOWED_ORIGINS` allow-list from the environment
+  (defaults to the local Next.js dev origin only), plus `allow_methods`/
+  `allow_headers` narrowed from `["*"]` to the actual verbs/headers this API
+  uses. See `docs/deployment-guide.md` §3.1 for setting the real value at
+  deploy time. Covered by `backend/tests/test_cors_and_rate_limiting.py`.
+- Secrets living in a plain `.env` for local dev — same doc, §1.4, still
+  open (local dev is expected to use `.env`; the real ask there is that
+  *production* secrets go through Secret Manager, not `.env` copied onto
+  the deploy target — see `docs/deployment-guide.md` §1.3).
 
 ## Suggested order
 
-1. CORS fix + exception-detail fix (#1 above) — both quick, both belong in
-   the same "before deploying publicly" pass as the CORS item already
-   flagged in `deployment-readiness.md`.
+1. ~~CORS fix~~ — **done, 2026-08-31**. Exception-detail fix (#1 above)
+   still open — same "before handling real users' data" pass.
 2. `max_length` on `TripRequest.prompt` (#3) — one line, no dependency on
    anything else.
 3. Decide `/docs` exposure (#4) — a product decision, not a bug; make it
    consciously either way.
-4. Rate limiting (#2) — the most involved of the four, worth doing once a
-   real deployment target is picked (ties into whatever the host's own
-   request limits/pricing look like).
+4. ~~Rate limiting (#2)~~ — **done, 2026-08-31**.
 5. Run `/code-review ultra` for a deeper pass than this manual one caught.

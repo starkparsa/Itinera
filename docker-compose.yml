@@ -32,6 +32,13 @@ services:
       # every other part of the app reads (database.py, alembic/env.py).
       # No longer a hardcoded local `mysql` container reference.
       DATABASE_URL: ${DATABASE_URL}
+      # CORS allow-list (see main.py, docs/security-review.md) -- defaults
+      # to the local Next.js dev origin if unset, which is exactly what
+      # `docker compose up` needs since the frontend container is still
+      # reached at http://localhost:3000 from a browser's point of view
+      # (only the backend->frontend *internal* hop uses the `frontend`
+      # hostname). Override for a real deployment.
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       # Was never forwarded here (pre-existing gap, found by the

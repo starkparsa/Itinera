@@ -147,24 +147,24 @@ Two things need it:
 
 ## Part 3 — Close the loop back on the backend
 
-### 3.1 Tighten CORS to the real frontend URL
+### 3.1 Point CORS at the real frontend URL
 
-This is the fix already flagged as the #1 item in
-`docs/deployment-readiness.md` — now you have the real URL to put there:
+**Done in code, 2026-08-31** — `allow_origins=["*"]` was the #1 item
+flagged in `docs/deployment-readiness.md`; it's no longer a code change you
+need to make at deploy time, just a config value. `backend/app/main.py` now
+reads `ALLOWED_ORIGINS` (comma-separated exact origins) from the
+environment, defaulting to `http://localhost:3000` for local dev. Set the
+real value as part of this deploy:
 
-```python
-# backend/app/main.py
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://<your-vercel-url>"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+```bash
+gcloud run services update <service-name> \
+  --set-env-vars ALLOWED_ORIGINS=https://<your-vercel-url>
 ```
 
-Rebuild and redeploy the backend image (repeat 1.2 and 1.4 — `gcloud run
-deploy` with the same service name updates it in place, no downtime for a
-low-traffic app).
+Multiple origins (e.g. a staging Vercel URL alongside production) are
+comma-separated, no spaces: `ALLOWED_ORIGINS=https://app.example.com,https://staging.example.com`.
+No rebuild needed — this is an env var, not a code change, so `gcloud run
+services update` applies it to the existing image in place.
 
 ### 3.2 Publish the Google OAuth consent screen
 

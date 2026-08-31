@@ -43,3 +43,18 @@ def override_auth():
     yield
     app.dependency_overrides.pop(get_current_user, None)
 
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    # app.state.limiter (see rate_limit.py) is a module-level singleton
+    # shared by every test in the whole pytest session, since they all
+    # import the same `app` object -- without resetting its in-memory
+    # counters before each test, tests that call POST /trips/generate
+    # several times across the suite would eventually trip the real
+    # 10/minute limit and start failing with 429s that have nothing to do
+    # with what's actually being tested. test_rate_limiting.py deliberately
+    # does NOT get this reset applied mid-test (only before each test
+    # starts) so it can still exercise the real limit.
+    app.state.limiter.reset()
+    yield
+
