@@ -27,7 +27,7 @@ export default function Sidebar({
   return (
     <aside className="flex w-full shrink-0 flex-col gap-3 border-b bg-muted/30 p-4 md:w-64 md:border-r md:border-b-0">
       <h3 className="flex items-center gap-1.5 text-sm font-semibold">
-        <span aria-hidden>🧭</span> Itinera
+        <img src="/logo-mark.png" alt="" aria-hidden className="h-4 w-4" /> Itinera
       </h3>
       <Button onClick={onNewChat} className="justify-center gap-1.5">
         <Plus className="size-4" />
