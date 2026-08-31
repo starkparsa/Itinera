@@ -8,7 +8,7 @@
             "type": "editor-browser",
             "request": "launch",
             "name": "Open graph.html",
-            "url": "file:///c%3A/Mine/Projects/Travel-Planner/graphify-out/graph.html"
+            "url": "file:///c%3A/Mine/Projects/Itinera/graphify-out/graph.html"
         }
     ]
 }
