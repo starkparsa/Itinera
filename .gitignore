@@ -230,12 +230,13 @@ backend/_dev_site.db
 
 # graphify (knowledge-graph tool output) -- local analysis artifacts, not
 # meant to ship in the repo (extraction sidecars, cache/, cost tracking,
-# raw graph.json). Keep graph.html tracked so it can be shared/reviewed
-# without regenerating it. Must be `graphify-out/*` (not `graphify-out/`)
-# for the negation below to actually reach the file instead of being
-# blocked at the directory level.
+# raw graph.json, graph.html). graph.html was tracked for a while so it
+# could be shared/reviewed without regenerating it, but it's a large
+# (~1MB) generated file that changes on every graphify rebuild -- pure
+# git churn with no diffable content -- so it's untracked again as of
+# 2026-08-31, per explicit user decision. Regenerate locally
+# (`graphify export html` or a full `/graphify` run) whenever needed.
 graphify-out/*
-!graphify-out/graph.html
 
 # skills-lock.json (npx-skills / skills.sh package manager) -- a lockfile
 # for globally-installed Claude Code skills, written to whatever directory
