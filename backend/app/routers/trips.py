@@ -13,6 +13,7 @@ from .. import (
     llm_service,
     models,
     schemas,
+    usage_quota,
     weather_service,
 )
 from ..auth import get_current_user
@@ -90,6 +91,23 @@ def generate_trip(
     # (which trusted a client-supplied user_id) is gone. Ownership checks on
     # *other* endpoints (get_trip, calendar export, conversations) are
     # still pending -- Phase C.
+
+    # Per-account daily cost cap, checked before anything else in this
+    # function -- same "gate before anything expensive runs" discipline as
+    # classify_intent below (architecture principle #1), just one step
+    # earlier: a user who's already hit today's limit shouldn't cost so
+    # much as a single classification call. See usage_quota.py for why this
+    # is DB-backed and distinct from rate_limit.py's IP-keyed flood
+    # protection.
+    if not usage_quota.check_and_consume_daily_quota(user, db):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily limit of {usage_quota.DAILY_TRIP_GENERATION_LIMIT} requests reached for "
+                "this account. Try again tomorrow."
+            ),
+        )
+
     if trip_request.conversation_id:
         conversation = (
             db.query(models.Conversation)

@@ -18,6 +18,18 @@ class User(Base):
     # have none.
     google_sub = Column(String(255), unique=True, index=True, nullable=True)
     display_name = Column(String(255))
+    # Per-account daily quota on POST /trips/generate (see
+    # app/usage_quota.py) -- distinct from rate_limit.py's IP-keyed slowapi
+    # limiter, which is flood/abuse protection, not a real per-account cost
+    # cap (a shared IP, or one account rotating IPs, isn't bounded by it the
+    # way this is). daily_request_count_date is the calendar day this
+    # count applies to; a request on a new day resets the counter rather
+    # than accumulating forever. DB-backed (not in-memory, unlike
+    # rate_limit.py's limiter) specifically so it stays correct if the
+    # backend is ever horizontally scaled -- see usage_quota.py for the
+    # full rationale.
+    daily_request_count = Column(Integer, nullable=False, default=0)
+    daily_request_count_date = Column(Date, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     trips = relationship("Trip", back_populates="owner", cascade="all, delete-orphan")
@@ -28,7 +40,13 @@ class Conversation(Base):
     __tablename__ = "conversations"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # Indexed: filtered on for every ownership check across trips.py/
+    # conversations.py (list_conversations, plus every 404-on-cross-user-id
+    # check) -- a foreign key column gets no index automatically in
+    # Postgres (unlike the primary key it references), so this was a real
+    # full-table-scan-per-query gap. Fixed 2026-08-31 across every FK
+    # column in this file, see the Alembic migration adding them.
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     title = Column(String(255), nullable=False, default="New chat")
     # Cached findings from the agent tool-calling step, set once per
     # conversation. That step is currently paused (see agent_service.py) --
@@ -56,7 +74,11 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True, index=True)
-    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    # Indexed -- every conversation load (routers/conversations.py) filters
+    # messages by this via the Conversation.messages relationship; see
+    # Conversation.user_id's comment above for why this needs to be
+    # explicit.
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False, index=True)
     role = Column(String(20), nullable=False)  # "user" or "assistant"
     content = Column(Text, nullable=False)
     trip_id = Column(Integer, ForeignKey("trips.id"), nullable=True)
@@ -70,14 +92,18 @@ class Trip(Base):
     __tablename__ = "trips"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    # Indexed -- see Conversation.user_id's comment above.
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     # ondelete="SET NULL": deleting a conversation shouldn't be blocked by (or
     # cascade-delete) trips it produced -- MySQL enforces FK constraints by
     # default (unlike SQLite, which is why this only surfaced against a real
     # database), so without this, deleting any conversation that has
     # generated a trip raises an IntegrityError. The trip and its itinerary
     # survive; it just becomes unlinked from the (now-gone) chat thread.
-    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True)
+    # Indexed for the same reason as every other FK here -- looked up on
+    # every question/edit turn (routers/trips.py's latest_trip/previous_trip
+    # queries) and on every conversation reload.
+    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True, index=True)
     destination = Column(String(255), nullable=False)
     prompt = Column(Text)  # the original natural-language request
     # Real calendar start date, resolved deterministically (date_resolver.py,
@@ -101,7 +127,9 @@ class ItineraryItem(Base):
     __tablename__ = "itinerary_items"
 
     id = Column(Integer, primary_key=True, index=True)
-    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False)
+    # Indexed -- see Conversation.user_id's comment above; loaded via
+    # Trip.items on every trip/conversation read.
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False, index=True)
     day_number = Column(Integer, nullable=False)
     time_of_day = Column(String(50))  # e.g. "morning", "14:00"
     activity = Column(Text, nullable=False)

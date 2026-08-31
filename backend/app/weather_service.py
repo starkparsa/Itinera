@@ -166,6 +166,31 @@ def summarize_for_prompt(destination: str, weather: list[dict]) -> str:
     return f"Real weather forecast for {destination}: " + "; ".join(day_lines)
 
 
+def read_cached_weather(trip: "models.Trip") -> list[dict]:
+    """Returns whatever forecast is already cached on `trip.weather_json`,
+    with no freshness check and no network call -- unlike
+    get_or_refresh_trip_weather, this never re-fetches, even if the cache
+    is stale or missing entirely (returns [] in that case, same "no data
+    beats invented/stale-labeled-as-fresh data" contract as everywhere
+    else in this module).
+
+    For a conversation with several trips (one per edit turn), only the
+    *latest* trip's weather actually needs a freshness check on every
+    reload -- older trips are historical record at this point, and a real
+    user is never looking at "is Tuesday's forecast still accurate" for a
+    trip three edits ago. routers/conversations.py's get_conversation uses
+    this for every trip except the latest one, instead of calling
+    get_or_refresh_trip_weather for all of them -- that used to mean a
+    freshness check (and, on a cache miss, a live geocode + forecast call)
+    for every historical trip on every single conversation reload, scaling
+    with edit count for no real benefit (found in the 2026-08-31
+    architecture review).
+    """
+    if not trip.weather_json:
+        return []
+    return json.loads(trip.weather_json)
+
+
 def get_or_refresh_trip_weather(trip: "models.Trip", items: list["models.ItineraryItem"]) -> list[dict]:
     """Returns a trip's per-day forecast, reading the cached
     `Trip.weather_json` when it's fresh and only hitting Open-Meteo again

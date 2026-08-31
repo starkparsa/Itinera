@@ -39,6 +39,9 @@ services:
       # (only the backend->frontend *internal* hop uses the `frontend`
       # hostname). Override for a real deployment.
       ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:3000}
+      # Per-account daily quota on /trips/generate (see app/usage_quota.py)
+      # -- defaults to 20/day per account if unset here too.
+      DAILY_TRIP_GENERATION_LIMIT: ${DAILY_TRIP_GENERATION_LIMIT:-20}
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       # Was never forwarded here (pre-existing gap, found by the

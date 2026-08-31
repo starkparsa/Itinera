@@ -177,6 +177,35 @@ def test_get_or_refresh_trip_weather_refetches_when_stale():
     assert trip.weather_fetched_at > datetime.utcnow() - timedelta(seconds=5)
 
 
+def test_read_cached_weather_returns_parsed_json_with_no_network_call():
+    trip = Mock(
+        weather_json='[{"day_number": 1, "date": "2026-08-26", "temp_min": 10, "temp_max": 20, "condition": "Clear sky"}]',
+    )
+
+    with patch("app.weather_service.requests.get") as mock_get:
+        result = weather_service.read_cached_weather(trip)
+
+    mock_get.assert_not_called()
+    assert result == [{"day_number": 1, "date": "2026-08-26", "temp_min": 10, "temp_max": 20, "condition": "Clear sky"}]
+
+
+def test_read_cached_weather_stale_cache_still_returned_unrefreshed():
+    # Unlike get_or_refresh_trip_weather, this never checks staleness at
+    # all -- callers that want a freshness check use that function instead
+    # (see routers/conversations.py, which only does that for a
+    # conversation's most recently generated trip).
+    trip = Mock(
+        weather_json='[{"day_number": 1, "date": "2026-08-26", "temp_min": 10, "temp_max": 20, "condition": "stale"}]',
+        weather_fetched_at=datetime.utcnow() - timedelta(days=30),
+    )
+    assert weather_service.read_cached_weather(trip)[0]["condition"] == "stale"
+
+
+def test_read_cached_weather_no_cache_returns_empty_list():
+    trip = Mock(weather_json=None)
+    assert weather_service.read_cached_weather(trip) == []
+
+
 def test_summarize_for_prompt_includes_both_units_and_condition():
     weather = [
         {"day_number": 1, "date": "2026-08-26", "temp_min": 25.0, "temp_max": 40.0, "temp_min_f": 77.0, "temp_max_f": 104.0, "condition": "Overcast"},

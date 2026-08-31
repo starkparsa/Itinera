@@ -830,3 +830,122 @@ def test_question_does_not_override_an_already_resolved_start_date():
 
     updated_trip = client.get(f"/trips/{trip_id}").json()
     assert updated_trip["start_date"] == "2026-08-26"  # unchanged -- the original resolved date wins
+
+
+# ---------- regression: get_conversation only refreshes the latest trip's weather ----------
+
+def test_conversation_reload_only_refreshes_weather_for_the_latest_trip():
+    # A conversation with two generated trips (e.g. one edit turn) used to
+    # call get_or_refresh_trip_weather -- a freshness check, and on a cache
+    # miss a live geocode + forecast fetch -- for EVERY trip with a message
+    # on every single reload, not just the current one. Confirms the fix:
+    # only the most recently generated trip gets that treatment; the older
+    # one is served from whatever's already cached (weather_service.
+    # read_cached_weather), with get_or_refresh_trip_weather never called
+    # for it at all.
+    fake_weather = [
+        {"day_number": 1, "date": "2026-08-26", "temp_min": 14.0, "temp_max": 22.5, "temp_min_f": 57.2, "temp_max_f": 72.5, "condition": "Clear sky"},
+    ]
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+    ):
+        first = client.post("/trips/generate", json={"prompt": "4 days in Austin starting 2026-08-26"})
+    conv_id = first.json()["conversation_id"]
+    older_trip_id = first.json()["trip_id"]
+
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=fake_weather),
+    ):
+        second = client.post(
+            "/trips/generate", json={"prompt": "make it a week instead", "conversation_id": conv_id},
+        )
+    latest_trip_id = second.json()["trip_id"]
+    assert latest_trip_id != older_trip_id
+
+    # Captured via side_effect, not read back from call_args afterward --
+    # the request's DB session (and the ORM objects it produced) is closed
+    # by the time client.get() returns, and get_conversation's own
+    # db.commit() expires those objects' attributes by default, so reading
+    # trip.id from a captured call_args after the fact raises a real
+    # DetachedInstanceError. Recording the id live, while the session is
+    # still open, sidesteps that entirely.
+    refreshed_trip_ids = []
+    cached_trip_ids = []
+
+    def _record_refresh(trip, items):
+        refreshed_trip_ids.append(trip.id)
+        return fake_weather
+
+    def _record_cached(trip):
+        cached_trip_ids.append(trip.id)
+        return []
+
+    with (
+        patch(
+            "app.routers.conversations.weather_service.get_or_refresh_trip_weather", side_effect=_record_refresh,
+        ) as mock_refresh,
+        patch(
+            "app.routers.conversations.weather_service.read_cached_weather", side_effect=_record_cached,
+        ) as mock_cached,
+    ):
+        client.get(f"/conversations/{conv_id}")
+
+    # Only ever called once, for the latest trip -- never for the older one.
+    mock_refresh.assert_called_once()
+    assert refreshed_trip_ids == [latest_trip_id]
+    mock_cached.assert_called_once()
+    assert cached_trip_ids == [older_trip_id]
+
+
+# ---------- list_conversations pagination ----------
+
+def test_list_conversations_respects_limit_and_offset():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        for prompt in ("trip one", "trip two", "trip three"):
+            client.post("/trips/generate", json={"prompt": prompt})
+
+    first_page = client.get("/conversations", params={"limit": 2, "offset": 0}).json()
+    second_page = client.get("/conversations", params={"limit": 2, "offset": 2}).json()
+
+    assert len(first_page) == 2
+    assert len(second_page) == 1
+    assert {c["id"] for c in first_page}.isdisjoint({c["id"] for c in second_page})
+
+
+def test_list_conversations_rejects_a_limit_above_the_hard_cap():
+    response = client.get("/conversations", params={"limit": 99999})
+    assert response.status_code == 422  # FastAPI's own Query(le=...) validation, not a silent clamp
+
+
+# ---------- per-account daily quota (usage_quota.py) ----------
+
+def test_generate_trip_returns_429_once_the_daily_quota_is_exhausted():
+    with (
+        patch("app.usage_quota.DAILY_TRIP_GENERATION_LIMIT", 2),
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+    ):
+        first = client.post("/trips/generate", json={"prompt": "trip one"})
+        second = client.post("/trips/generate", json={"prompt": "trip two"})
+        third = client.post("/trips/generate", json={"prompt": "trip three"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert third.status_code == 429
+    assert "Daily limit" in third.json()["detail"]
+
+
+def test_daily_quota_blocks_before_any_llm_call_at_all():
+    # The whole point of checking this first (architecture principle #1,
+    # applied one step earlier than intent classification) -- a request
+    # over quota shouldn't cost so much as a single Gemini call, including
+    # off_topic/question turns, which also route through classify_intent.
+    with (
+        patch("app.usage_quota.DAILY_TRIP_GENERATION_LIMIT", 0),
+        patch("app.llm_service.classify_intent") as mock_classify,
+    ):
+        response = client.post("/trips/generate", json={"prompt": "anything at all"})
+
+    assert response.status_code == 429
+    mock_classify.assert_not_called()
