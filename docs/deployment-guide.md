@@ -35,7 +35,7 @@ gcloud auth login
 gcloud config set project <YOUR_PROJECT_ID>
 gcloud config set run/region us-east1   # or whichever region is closest to you/Neon
 
-gcloud artifacts repositories create travel-planner \
+gcloud artifacts repositories create itinera \
   --repository-format=docker \
   --location=us-east1
 
@@ -47,8 +47,8 @@ gcloud auth configure-docker us-east1-docker.pkg.dev
 From the repo root:
 
 ```bash
-docker build -t us-east1-docker.pkg.dev/<YOUR_PROJECT_ID>/travel-planner/backend:latest ./backend
-docker push us-east1-docker.pkg.dev/<YOUR_PROJECT_ID>/travel-planner/backend:latest
+docker build -t us-east1-docker.pkg.dev/<YOUR_PROJECT_ID>/itinera/backend:latest ./backend
+docker push us-east1-docker.pkg.dev/<YOUR_PROJECT_ID>/itinera/backend:latest
 ```
 
 (This is the same [`backend/Dockerfile`](../backend/Dockerfile) already
@@ -76,8 +76,8 @@ echo -n "<value>" | gcloud secrets create DATABASE_URL --data-file=-
 ### 1.4 Deploy
 
 ```bash
-gcloud run deploy travel-planner-backend \
-  --image us-east1-docker.pkg.dev/<YOUR_PROJECT_ID>/travel-planner/backend:latest \
+gcloud run deploy itinera-backend \
+  --image us-east1-docker.pkg.dev/<YOUR_PROJECT_ID>/itinera/backend:latest \
   --region us-east1 \
   --allow-unauthenticated \
   --port 8000 \
@@ -89,7 +89,7 @@ gcloud run deploy travel-planner-backend \
 calls directly, not a private service; Cloud Run's own IAM auth is a
 different mechanism than this app's JWT bridge (`auth.py`) and would
 conflict with it, not add to it. Note the printed **Service URL**
-(`https://travel-planner-backend-<hash>-<region>.a.run.app` or similar) —
+(`https://itinera-backend-<hash>-<region>.a.run.app` or similar) —
 you need it for every step below.
 
 Leave `--min-instances` unset (defaults to 0, i.e. scales to zero) to stay
@@ -189,7 +189,7 @@ This is a manual console step with no CLI equivalent worth scripting.
 ## Rollback
 
 Both platforms keep prior deployments: `gcloud run services update-traffic
-travel-planner-backend --to-revisions=<previous-revision>=100` for the
+itinera-backend --to-revisions=<previous-revision>=100` for the
 backend, and Vercel's **Deployments** tab has a one-click "Promote to
 Production" on any earlier build for the frontend. Neither requires a new
 build — both roll back to an already-built artifact.
