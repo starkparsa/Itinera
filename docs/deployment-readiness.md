@@ -1,7 +1,7 @@
 # Deployment readiness: prep, methods, and pruning candidates
 
-**Status: advisory only — nothing in this doc has been actioned. Written
-2026-08-30 at the user's request, after the Neon Postgres migration
+**Status: mostly actioned as of 2026-08-31 — see the strikethroughs below.
+Written 2026-08-30 at the user's request, after the Neon Postgres migration
 (`docs/sessions/2026-08-29-neon-postgres-migration.md`) removed the last
 piece of local-only infrastructure the app depended on.**
 
@@ -16,30 +16,37 @@ forever the way `CLAUDE.md` is.
 
 ### Must fix before any public deployment
 
-1. **CORS is wide open.** [`backend/app/main.py:46`](../backend/app/main.py#L46)
-   — `allow_origins=["*"]`, with a comment already flagging it:
-   `# tighten this before deploying publicly`. Fine for local dev (frontend
-   and backend both on `localhost`), a real hole once the backend has a
-   public URL — any website could call your API with a logged-in user's
-   browser. Fix: `allow_origins=[os.environ["FRONTEND_URL"]]` (or a small
-   explicit list), not a wildcard.
+1. ~~**CORS is wide open.**~~ **FIXED 2026-08-31.** `backend/app/main.py`
+   now reads an explicit `ALLOWED_ORIGINS` env-var allow-list (defaults to
+   the local Next.js dev origin) instead of `["*"]`. Set it to the real
+   frontend origin at deploy time — see `docs/deployment-guide.md` §3.1.
 2. **Google OAuth consent screen is still in "Testing" status.** Per
    `CLAUDE.md`'s Auth decision row, this caps refresh tokens at 7 days —
    real users would get silently logged out of Calendar push weekly.
    Publishing to Production in Google Cloud Console is a manual step in
-   the console, not something to script; do it before telling anyone else
-   to use the app.
+   the console — **still open, needs you specifically**: Claude has no
+   access to your Google Cloud Console session, and this isn't the kind of
+   account-settings change to delegate even if it did. Google Cloud
+   Console → APIs & Services → OAuth consent screen → **Publish App**. A
+   real OAuth client already exists (`AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET`
+   in `.env` are real, confirmed 2026-08-31), so this is reachable right
+   now, not blocked on anything else.
 3. **Every URL-shaped env var still says `localhost`.** `AUTH_URL`,
    `BACKEND_URL`, the Google OAuth redirect URI
-   (`http://localhost:3000/api/auth/callback/google`) — all need real
-   production values, and the redirect URI specifically needs to be
-   re-registered in Google Cloud Console for the new domain, or login
-   breaks outright.
+   (`http://localhost:3000/api/auth/callback/google`) — audited
+   2026-08-31: every one of these is already `process.env.X ?? "http://
+   localhost..."` (frontend) / `os.getenv("X", "http://localhost...")`
+   (backend), never a hardcoded requirement — confirmed via a full grep,
+   not assumed. **No code change needed here**; this item is really "set
+   real values once you have a real URL," which is inherently sequenced
+   *after* the first deploy (Cloud Run/Vercel hand you the URL, then you
+   feed it back in) — see `docs/deployment-guide.md` Parts 2-3. The OAuth
+   redirect URI specifically needs re-registering in Google Cloud Console
+   for the new domain, or login breaks outright.
 4. **Secrets currently live in a plain `.env` file.** Fine for solo local
-   dev; not how they should reach a real host. Whatever platform you pick
-   (see §2) has its own secret/env-var store — use that, don't ship `.env`
-   in the image or commit it (it's already gitignored, just don't
-   override that).
+   dev; not how they should reach a real host. `docs/deployment-guide.md`
+   §1.3 already covers moving them to Cloud Run's Secret Manager — this is
+   a deploy-time action, not something to pre-fix in the repo.
 
 ### Should fix soon after
 
@@ -49,14 +56,19 @@ forever the way `CLAUDE.md` is.
    rolls the new image out anywhere. Real CD needs one more job once a
    host is picked (webhook trigger, `flyctl deploy`, a Render/Railway
    deploy hook, etc.) — the exact shape depends entirely on §2's choice.
-6. **Gemini's free-tier request cap is a real production risk, not just a
-   dev annoyance.** `CLAUDE.md`'s decision log already documents hitting
-   the 20-requests/day wall on one model during *development alone* — real
-   multi-user traffic will hit limits fast. The Groq fallback
-   (`groq_service.py`) already exists for this and is documented as
-   "not yet live-verified end-to-end" — verify it actually fires under
-   load before relying on it, and budget for Gemini's paid tier if usage
-   grows past what free covers.
+   Deliberately sequenced after the first manual deploy (Part 1-3 of
+   `docs/deployment-guide.md`), not before — automating a rollout target
+   that doesn't exist yet has nothing to deploy to.
+6. ~~**Gemini's free-tier request cap is a real production risk...**~~
+   **Groq fallback live-verified end-to-end, 2026-08-31.** Previously
+   flagged as "not yet live-verified" — confirmed live with a real network
+   call to Groq (both `_call_gemini`'s structured-output path and
+   `_call_gemini_chat`'s plain-chat path), triggered by a simulated Gemini
+   429 so it didn't cost real Gemini quota to test. Both correctly routed
+   to Groq and returned valid, correctly-parsed responses. The underlying
+   risk (Gemini's free tier is genuinely low) is unchanged and still worth
+   budgeting a paid tier for once usage grows — this item is about the
+   fallback mechanism working, which it does.
 7. **Docker images run as root, single process, no container-level health
    check.** Not urgent for a low-traffic hobby app behind a platform's own
    health checks, but worth a `USER` directive and (for the backend) an
