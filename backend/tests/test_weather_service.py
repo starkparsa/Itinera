@@ -10,7 +10,7 @@ def test_weather_is_not_registered_as_a_gemini_tool():
     # judgment call the model makes, so it must not cost any Gemini tokens.
     assert "get_daily_forecast" not in tools.TOOL_FUNCTIONS
     assert "geocode" not in tools.TOOL_FUNCTIONS
-    assert len(tools.TOOL_SCHEMAS.function_declarations) == 2  # currency + get_place_context
+    assert len(tools.TOOL_SCHEMAS.function_declarations) == 4  # currency + get_place_context + get_place_details + find_nearby_places
 
 
 def test_geocode_success():

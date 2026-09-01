@@ -5,12 +5,28 @@ Currency conversion uses the free, no-key Frankfurter API. A weather tool
 in practice; see CLAUDE.md's decision log. convert_currency isn't actively
 reachable right now either -- it's still gated behind agent_service.py's
 AGENT_TOOL_CALLING_ENABLED, paused as a product decision (see that
-module's docstring). get_place_context is reached through TWO separate,
-always-on loops (agent_service.answer_question_with_tools for
-conversational Q&A/tour-guide use, and
-agent_service.gather_place_context_for_itinerary for itinerary-planning
-background) -- see agent_service.py's module docstring for why three
-loops stay separate rather than sharing one flag/schema.
+module's docstring).
+
+THREE place tools exist now, split by what they're actually good at
+(2026-09-01 -- see CLAUDE.md's decision log for the full rationale):
+  - get_place_context (Wikipedia, free): history, cultural significance --
+    "why is this place known for X." Static-ish content, fine to cache
+    indefinitely.
+  - get_place_details (Google Places, billed): current/practical facts --
+    rating, price level, opening hours, category. Genuinely time-sensitive.
+  - find_nearby_places (Google Places, billed): recommendations near a
+    location -- a capability Wikipedia has no equivalent of at all.
+All three are reached through the SAME two loops
+(agent_service.answer_question_with_tools for conversational Q&A/tour-guide
+use, and agent_service.gather_place_context_for_itinerary for
+itinerary-planning background) -- see agent_service.py's module docstring
+for why loops stay split by caching semantics, not by which tool they
+expose. The two Places-backed tools have their own cost-control mechanism
+distinct from a loop-level flag: GOOGLE_PLACES_API_KEY's presence (checked
+via google_places_client.PLACES_API_ENABLED) is itself the kill switch --
+unset it and both functions return {"error": ...} immediately, no network
+call, so Wikipedia-only behavior is unaffected whether or not a Places key
+is configured.
 
 TOOL_SCHEMAS is in Gemini's function-calling shape (google.genai.types) as
 of the Gemini migration -- previously Ollama's dict-list shape.
@@ -18,7 +34,8 @@ of the Gemini migration -- previously Ollama's dict-list shape.
 import requests
 from google.genai import types
 
-from .clients import wikipedia_client
+from . import weather_service
+from .clients import google_places_client, wikipedia_client
 
 _BRIEF_CHAR_CAP = 320  # enforced even if Wikipedia's own extract runs long,
                         # so "brief" stays genuinely brief regardless of topic
@@ -100,6 +117,118 @@ def get_place_context(place_name: str, near: str | None = None, detail: str = "b
     return {"place": title, "summary": _trim_to_cap(text, cap), "detail": detail}
 
 
+def get_place_details(place_name: str, near: str | None = None, detail: str = "brief") -> dict:
+    """Give the LLM current, practical facts about a named place -- rating,
+    price level, category, whether it's open right now -- the complement
+    to get_place_context's historical framing. Sourced from Google Places
+    (billed; see google_places_client.py's module docstring for the cost
+    controls). 'detailed' additionally includes an editorial/generative
+    summary, website, and phone number when Google has them.
+
+    Returns {"place","address","rating","price_level","types","open_now","summary"}
+    on success (summary only populated for detail="detailed", and only if
+    Google supplied one), or {"error": ...} if the Places integration
+    isn't configured or no matching place could be found.
+    """
+    if not google_places_client.PLACES_API_ENABLED:
+        return {"error": "Google Places lookup is not configured"}
+
+    query = f"{place_name} {near}" if near else place_name
+    match = google_places_client.text_search(query)
+    if match is None:
+        return {"error": f"Could not find a Google Places match for '{place_name}'"}
+
+    detail = detail if detail == "detailed" else "brief"  # normalize, same as get_place_context
+    place_id = match.get("id")
+    fuller = google_places_client.place_details(place_id, detail=detail) if place_id else None
+    fuller = fuller or match  # fall back to the text_search fields if the details lookup failed
+
+    summary = None
+    if detail == "detailed":
+        raw_summary = (fuller.get("editorialSummary") or {}).get("text") or (
+            fuller.get("generativeSummary") or {}
+        ).get("overview", {}).get("text")
+        summary = _trim_to_cap(raw_summary, _DETAILED_CHAR_CAP) if raw_summary else None
+
+    return {
+        "place": (fuller.get("displayName") or {}).get("text") or place_name,
+        "address": fuller.get("formattedAddress"),
+        "rating": fuller.get("rating"),
+        "price_level": fuller.get("priceLevel"),
+        "types": fuller.get("types"),
+        "open_now": (fuller.get("currentOpeningHours") or {}).get("openNow"),
+        "summary": summary,
+    }
+
+
+def _geocode_for_places(near: str) -> tuple[float, float] | None:
+    """Resolve `near` to (lat, lng) for find_nearby_places, trying the
+    existing free Open-Meteo geocoder first (weather_service.geocode) and
+    falling back to Google Places' own text_search when that fails.
+
+    Live-verified need for the fallback (2026-09-01): Open-Meteo's
+    geocoder is city/place-name oriented and reliably fails on a
+    landmark-level `near` (e.g. "the Louvre", "1st arrondissement Paris")
+    -- confirmed live, it returned no match for several such phrasings.
+    Before this fallback existed, that failure surfaced as the *model*
+    retrying find_nearby_places several times with progressively broader
+    guesses at `near`, burning multiple real Gemini + geocoding calls and,
+    in one observed run, exhausting MAX_TOOL_ROUNDS before ever reaching a
+    successful call -- the tool worked, but the round budget didn't
+    survive the model's guessing. Resolving this deterministically in one
+    place, rather than leaving it to repeated LLM guesses, is the same
+    "don't leave to chance what code can just handle" discipline principle
+    #6 already applies to date arithmetic.
+
+    text_search is a billed Places call, so this fallback path costs real
+    money -- but only on the (uncommon) case where the free geocoder
+    already failed, and it's one bounded call, not a loop.
+    """
+    coords = weather_service.geocode(near)
+    if coords is not None:
+        return coords
+
+    if not google_places_client.PLACES_API_ENABLED:
+        return None
+    match = google_places_client.text_search(near)
+    location = (match or {}).get("location")
+    if not location:
+        return None
+    return location.get("latitude"), location.get("longitude")
+
+
+def find_nearby_places(place_type: str, near: str, limit: int = 5) -> dict:
+    """Recommend up to `limit` real places of `place_type` (e.g.
+    "restaurant", "cafe", "tourist_attraction" -- a Google Places
+    "included type") near a named location -- a capability Wikipedia has
+    no equivalent of. Sourced from Google Places (billed).
+
+    Returns {"results": [{"name","rating","address","price_level","open_now"}, ...]}
+    on success (possibly an empty list if nothing matched), or
+    {"error": ...} if the Places integration isn't configured or `near`
+    couldn't be resolved to a location at all.
+    """
+    if not google_places_client.PLACES_API_ENABLED:
+        return {"error": "Google Places lookup is not configured"}
+
+    coords = _geocode_for_places(near)
+    if coords is None:
+        return {"error": f"Could not resolve a location for '{near}'"}
+
+    places = google_places_client.nearby_search(coords[0], coords[1], place_type)
+    results = [
+        {
+            "name": (p.get("displayName") or {}).get("text"),
+            "rating": p.get("rating"),
+            "address": p.get("formattedAddress"),
+            "price_level": p.get("priceLevel"),
+            "open_now": (p.get("currentOpeningHours") or {}).get("openNow"),
+        }
+        for p in places[: max(0, limit)]
+    ]
+    return {"results": results}
+
+
 # Gemini-shaped tool schema (google.genai.types.Tool / FunctionDeclaration),
 # passed to GenerateContentConfig(tools=[...]) in agent_service.py.
 #
@@ -154,27 +283,85 @@ _GET_PLACE_CONTEXT_DECLARATION = types.FunctionDeclaration(
     },
 )
 
+_GET_PLACE_DETAILS_DECLARATION = types.FunctionDeclaration(
+    name="get_place_details",
+    description=(
+        "Get CURRENT, practical facts about a named place (landmark, "
+        "restaurant, museum, etc.) -- rating, price level, category, and "
+        "whether it's open right now. Use this for questions about a "
+        "place's present-day status or quality, not its history (use "
+        "get_place_context for that instead). Costs real money per call, "
+        "unlike get_place_context -- only call when the question actually "
+        "needs current/practical data."
+    ),
+    parameters_json_schema={
+        "type": "object",
+        "properties": {
+            "place_name": {"type": "string", "description": "Name of the place, e.g. 'the Louvre'"},
+            "near": {"type": "string", "description": "Optional city/region to disambiguate a common place name"},
+            "detail": {
+                "type": "string",
+                "enum": ["brief", "detailed"],
+                "description": "brief (default) unless the user explicitly wants more (adds a summary/website/phone)",
+            },
+        },
+        "required": ["place_name"],
+    },
+)
+
+_FIND_NEARBY_PLACES_DECLARATION = types.FunctionDeclaration(
+    name="find_nearby_places",
+    description=(
+        "Recommend real, named places of a given type (e.g. 'restaurant', "
+        "'cafe', 'tourist_attraction') near a location -- use this when "
+        "the user wants a recommendation or list near somewhere, a "
+        "capability Wikipedia has no equivalent of. Costs real money per "
+        "call -- only call when the user is actually asking for a "
+        "recommendation, not speculatively."
+    ),
+    parameters_json_schema={
+        "type": "object",
+        "properties": {
+            "place_type": {
+                "type": "string",
+                "description": "Google Places type, e.g. 'restaurant', 'cafe', 'tourist_attraction', 'museum'",
+            },
+            "near": {"type": "string", "description": "City, neighborhood, or landmark to search near"},
+            "limit": {"type": "integer", "description": "Max results to return, default 5"},
+        },
+        "required": ["place_type", "near"],
+    },
+)
+
 # Used by agent_service.gather_trip_context (currency only).
 CURRENCY_TOOL_SCHEMAS = types.Tool(function_declarations=[_CONVERT_CURRENCY_DECLARATION])
 
+_PLACE_TOOL_DECLARATIONS = [
+    _GET_PLACE_CONTEXT_DECLARATION,
+    _GET_PLACE_DETAILS_DECLARATION,
+    _FIND_NEARBY_PLACES_DECLARATION,
+]
+
 # Used by agent_service.answer_question_with_tools (place-context only).
-QA_TOOL_SCHEMAS = types.Tool(function_declarations=[_GET_PLACE_CONTEXT_DECLARATION])
+QA_TOOL_SCHEMAS = types.Tool(function_declarations=_PLACE_TOOL_DECLARATIONS)
 
 # Used by agent_service.gather_place_context_for_itinerary (place-context
 # only, itinerary-planning use rather than conversational Q&A -- own
 # types.Tool wrapper so it can be independently kill-switched via
 # PLANNING_TOOL_CALLING_ENABLED without touching QA_TOOL_CALLING_ENABLED).
-PLANNING_TOOL_SCHEMAS = types.Tool(function_declarations=[_GET_PLACE_CONTEXT_DECLARATION])
+PLANNING_TOOL_SCHEMAS = types.Tool(function_declarations=_PLACE_TOOL_DECLARATIONS)
 
 # Everything this module can do, for tests/introspection -- never pass this
 # combined list into a live GenerateContentConfig(tools=[...]) call, or a
 # loop's kill switch stops actually isolating its tool.
 TOOL_SCHEMAS = types.Tool(function_declarations=[
     _CONVERT_CURRENCY_DECLARATION,
-    _GET_PLACE_CONTEXT_DECLARATION,
+    *_PLACE_TOOL_DECLARATIONS,
 ])
 
 TOOL_FUNCTIONS = {
     "convert_currency": convert_currency,
     "get_place_context": get_place_context,
+    "get_place_details": get_place_details,
+    "find_nearby_places": find_nearby_places,
 }
