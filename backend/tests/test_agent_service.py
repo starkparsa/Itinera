@@ -221,9 +221,10 @@ def test_qa_tools_short_circuits_to_empty_when_disabled():
     mock_call.assert_not_called()
 
 
-def test_qa_tools_only_exposes_place_context_schema():
+def test_qa_tools_only_exposes_place_context_schemas():
     # Mirrors test_gather_trip_context_only_exposes_currency_schema -- the
-    # two loops must never see each other's tool.
+    # QA loop must see all three place tools (2026-09-01, Google Places
+    # addition) but never currency's tool.
     response = _mock_tool_response(text="It's a famous museum in Paris.")
 
     with (
@@ -234,7 +235,8 @@ def test_qa_tools_only_exposes_place_context_schema():
 
     tool_schema = mock_call.call_args.args[2]
     names = [d.name for d in tool_schema.function_declarations]
-    assert names == ["get_place_context"]
+    assert names == ["get_place_context", "get_place_details", "find_nearby_places"]
+    assert "convert_currency" not in names
 
 
 def test_qa_tools_runs_fresh_every_call_no_internal_caching():
@@ -404,10 +406,10 @@ def test_planning_context_short_circuits_to_empty_when_disabled():
     mock_call.assert_not_called()
 
 
-def test_planning_context_only_exposes_place_context_schema():
+def test_planning_context_only_exposes_place_context_schemas():
     # Mirrors test_gather_trip_context_only_exposes_currency_schema and
-    # test_qa_tools_only_exposes_place_context_schema -- all three loops
-    # must never see a tool they don't own.
+    # test_qa_tools_only_exposes_place_context_schemas -- the planning loop
+    # must see all three place tools but never currency's tool.
     response = _mock_tool_response(text="Lisbon is Portugal's hilly, coastal capital.")
 
     with (
@@ -418,7 +420,8 @@ def test_planning_context_only_exposes_place_context_schema():
 
     tool_schema = mock_call.call_args.args[2]
     names = [d.name for d in tool_schema.function_declarations]
-    assert names == ["get_place_context"]
+    assert names == ["get_place_context", "get_place_details", "find_nearby_places"]
+    assert "convert_currency" not in names
 
 
 def test_planning_context_uses_its_own_system_prompt_not_qa_or_currency():
