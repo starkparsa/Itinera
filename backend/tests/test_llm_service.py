@@ -475,6 +475,31 @@ def test_intent_instructions_constrains_tour_guide_requested_to_question_intent(
     assert "tour_guide_requested can only be true when intent is" in llm_service.INTENT_INSTRUCTIONS
 
 
+def test_intent_instructions_recognizes_being_physically_present_as_a_tour_guide_trigger():
+    # Regression test: a live-reported bug (2026-09-01) -- "I think i am
+    # already at wynwood walls i really want understand the importaance of
+    # the place" did not trigger tour_guide_requested, because the only
+    # recognized trigger phrasing was the literal "be my tour guide"/"take
+    # me through this place" set. A user describing being at a place and
+    # wanting to understand its importance is the same narrative/deep-dive
+    # request in different words.
+    assert "I'm at X and I want to understand its importance" in llm_service.INTENT_INSTRUCTIONS
+
+
+def test_intent_instructions_disambiguate_single_recommendation_from_new_trip():
+    # Regression test, same live-reported bug: "That is great i want to go
+    # somewhere to read a book can you suggest a place where i can go but
+    # still see the murals" -- a request to recommend ONE nearby spot within
+    # an already-discussed location -- was misclassified as new_trip and
+    # regenerated a whole unrelated 5-day Miami itinerary from scratch,
+    # instead of staying "question" (ideally reaching the new
+    # find_nearby_places tool). INTENT_INSTRUCTIONS had no example
+    # disambiguating a single-place recommendation ask from a genuine
+    # "plan a new trip" request.
+    assert "suggest a place where I can read but still see the murals" in llm_service.INTENT_INSTRUCTIONS
+    assert "not asking to plan a" in llm_service.INTENT_INSTRUCTIONS
+
+
 # ---------- conversational Q&A path ----------
 
 def test_answer_question_returns_model_content():

@@ -414,6 +414,34 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    history" instruction, re-verified live across 4 more runs with no
    invented venues. See
    [`docs/sessions/2026-08-27-day-count-drift-and-tour-guide-misrouting.md`](docs/sessions/2026-08-27-day-count-drift-and-tour-guide-misrouting.md).
+   **Fifth round, 2026-09-01** — a real user-reported conversation surfaced
+   the same failure *category* as the Fourth round above, recurring on
+   phrasing variants `INTENT_INSTRUCTIONS` still didn't cover: (a) "I think
+   i am already at wynwood walls i really want understand the importaance
+   of the place" — a physically-present narrative/deep-dive request — did
+   not set `tour_guide_requested`, because the trigger list only recognized
+   the literal "be my tour guide"/"take me through this place" phrasing;
+   (b) two turns later, "That is great i want to go somewhere to read a
+   book can you suggest a place where i can go but still see the murals" —
+   a request to recommend ONE nearby spot — was misclassified as
+   `new_trip` and generated a brand-new, unrelated 5-day Miami itinerary
+   ("Arrive in Miami and check into your hotel..."), ignoring that the
+   user had just said they were already there. Fixed the same way the
+   Fourth round was — concrete inline examples added to
+   `INTENT_INSTRUCTIONS`, not hard logic — covering both a
+   physically-present narrative trigger and an explicit `question`-vs-
+   `new_trip` disambiguation for single-place recommendation asks (which
+   contain travel-adjacent words like "go somewhere" without actually
+   asking to plan a trip). Live-verified against the exact reported
+   transcript, before and after: `tour_guide_requested` now correctly
+   `True` for message (a), and message (b) now correctly stays `question`
+   — the full `answer_question_with_tools` call for it returns a real,
+   grounded recommendation (naming actual nearby cafés) instead of
+   regenerating an itinerary. Also live-verified no over-correction: a
+   genuine "plan me a week in Tokyo," an explicit "make it a week
+   instead," and an explicit "be my tour guide" all still classify
+   correctly. See
+   [`docs/sessions/2026-09-01-intent-misclassification-recommendations.md`](docs/sessions/2026-09-01-intent-misclassification-recommendations.md).
 2. Gemini swap (structured output + native tool calling) — **done** (see
    decision log for the concrete `gemini-3.6-flash`/`thinking_level`/
    `role="user"` corrections found only by actually building it). The agent
