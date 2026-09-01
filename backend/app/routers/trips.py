@@ -34,13 +34,32 @@ MAX_SUMMARY_ITEMS = 10  # cap how many itinerary items get folded into the store
 def _build_conversation_context(conversation: models.Conversation) -> str:
     """Summarizes recent turns in a conversation into a short plain-text
     string the LLM can use as memory of what was discussed earlier. Used for
-    intent classification and itinerary generation prompts."""
+    intent classification and itinerary generation prompts.
+
+    Builds from the MOST RECENT message backward, dropping the oldest of
+    the last MAX_CONTEXT_MESSAGES turns first if the char budget is tight
+    -- not a plain `[:MAX_CONTEXT_CHARS]` slice of the chronologically-
+    joined string. Real bug, live-verified (2026-09-01): a user asked
+    about scuba diving, got a real grounded answer (Florida Keys, Florida
+    Reef Tract, Biscayne National Park), then said "can we add to the
+    plan" -- the head-sliced context cut off mid-sentence through the
+    scuba answer, dropping every one of those specifics, so the itinerary
+    regeneration that followed had no idea what "add to the plan" was
+    even asking for and produced an itinerary with zero mention of
+    diving. The most recent turn is always the one a follow-up like that
+    refers to, so it must never be the part that gets dropped."""
     recent = conversation.messages[-MAX_CONTEXT_MESSAGES:]
-    parts = []
-    for message in recent:
+    kept: list[str] = []
+    total_len = 0
+    for message in reversed(recent):
         prefix = "User asked" if message.role == "user" else "Assistant"
-        parts.append(f"{prefix}: {message.content}")
-    return " | ".join(parts)[:MAX_CONTEXT_CHARS]
+        part = f"{prefix}: {message.content}"
+        added_len = len(part) + (3 if kept else 0)  # " | " separator once joined
+        if total_len + added_len > MAX_CONTEXT_CHARS:
+            break
+        kept.append(part)
+        total_len += added_len
+    return " | ".join(reversed(kept))
 
 
 def _build_chat_messages(conversation: models.Conversation) -> list[dict]:

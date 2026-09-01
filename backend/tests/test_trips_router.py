@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app import date_resolver, models
 from app.database import Base, SessionLocal, engine
 from app.main import app
+from app.routers.trips import MAX_CONTEXT_CHARS, _build_conversation_context
 
 client = TestClient(app)
 
@@ -142,6 +143,72 @@ def test_second_message_continues_the_same_conversation():
 
     conv = client.get(f"/conversations/{conv_id}").json()
     assert len(conv["messages"]) == 4  # 2 user + 2 assistant across both turns
+
+
+# ---------- _build_conversation_context (real bug, 2026-09-01) ----------
+
+
+class _FakeMessage:
+    def __init__(self, role: str, content: str):
+        self.role = role
+        self.content = content
+
+
+class _FakeConversation:
+    def __init__(self, messages: list[_FakeMessage]):
+        self.messages = messages
+
+
+def test_build_conversation_context_keeps_most_recent_message_over_budget():
+    # Regression test: a live-reported bug where the char-budget truncation
+    # sliced the chronologically-joined string from the HEAD
+    # (`[:MAX_CONTEXT_CHARS]`), keeping the oldest of the last
+    # MAX_CONTEXT_MESSAGES turns and silently dropping the newest ones --
+    # exactly backwards from what a "recent conversation memory" string
+    # should preserve. Real symptom: a user discussed scuba diving
+    # (Florida Keys, Biscayne National Park), then said "can we add to the
+    # plan" -- the truncated context cut off mid-sentence through the scuba
+    # answer, so the itinerary regeneration that followed had no idea what
+    # to add.
+    long_old_message = "Old context that is not what the user is asking about right now. " * 10
+    newest_message = "The exact thing the user just asked to add to the plan: scuba diving in the Florida Keys."
+    conversation = _FakeConversation([
+        _FakeMessage("user", "some earlier question"),
+        _FakeMessage("assistant", long_old_message),
+        _FakeMessage("user", "another earlier question"),
+        _FakeMessage("assistant", long_old_message),
+        _FakeMessage("user", "that is nice where else can i go to in miami if i like scuba diving"),
+        _FakeMessage("assistant", newest_message),
+    ])
+
+    result = _build_conversation_context(conversation)
+
+    assert len(result) <= MAX_CONTEXT_CHARS
+    assert "scuba diving in the Florida Keys" in result
+    assert result.endswith(f"Assistant: {newest_message}")
+
+
+def test_build_conversation_context_preserves_chronological_order():
+    conversation = _FakeConversation([
+        _FakeMessage("user", "first"),
+        _FakeMessage("assistant", "second"),
+        _FakeMessage("user", "third"),
+    ])
+
+    result = _build_conversation_context(conversation)
+
+    assert result.index("first") < result.index("second") < result.index("third")
+
+
+def test_build_conversation_context_under_budget_keeps_everything():
+    conversation = _FakeConversation([
+        _FakeMessage("user", "weekend in Austin"),
+        _FakeMessage("assistant", "Sounds fun!"),
+    ])
+
+    result = _build_conversation_context(conversation)
+
+    assert result == "User asked: weekend in Austin | Assistant: Sounds fun!"
 
 
 def test_conversation_context_is_passed_to_llm_on_followup():

@@ -442,6 +442,32 @@ tradeoffs from the decision log above, not arbitrary sequencing.
    instead," and an explicit "be my tour guide" all still classify
    correctly. See
    [`docs/sessions/2026-09-01-intent-misclassification-recommendations.md`](docs/sessions/2026-09-01-intent-misclassification-recommendations.md).
+   **Sixth round, same day** — a different, unrelated mechanism from the
+   same live conversation: a user correctly got a real, grounded scuba-
+   diving answer (Florida Keys, Florida Reef Tract, Biscayne National
+   Park), then said "can we add to the plan" — the regenerated itinerary
+   had zero mention of diving anywhere. Root cause was not classification
+   this time (the message correctly hit `edit_trip`) but
+   `routers/trips.py::_build_conversation_context`'s char-budget
+   truncation: it joined the last `MAX_CONTEXT_MESSAGES` in chronological
+   order, then applied a plain `[:MAX_CONTEXT_CHARS]` slice — keeping the
+   **oldest** content and silently dropping the **newest** once the
+   budget was exceeded. Reproduced exactly with the real message content:
+   the 1000-char cutoff landed mid-sentence through the scuba answer,
+   dropping every relevant keyword before `generate_itinerary`'s
+   `conversation_context` ever saw it. Fixed by building the string from
+   the most recent message backward (dropping the oldest first when
+   over budget), then restoring chronological order — the most recent
+   turn, which any "add to the plan"-style follow-up refers to, is now
+   never the part that gets cut. Live-verified: the fixed context
+   preserves the scuba content intact, and a real `generate_itinerary`
+   call with it produces an itinerary that actually includes a Florida
+   Keys diving day and a Biscayne National Park day. Shared by both
+   `classify_intent` and itinerary generation (same function, same
+   truncated string), so this fix benefits intent classification on long
+   conversations too, not just the edit_trip path where it was first
+   observed. See
+   [`docs/sessions/2026-09-01-conversation-context-truncation-bug.md`](docs/sessions/2026-09-01-conversation-context-truncation-bug.md).
 2. Gemini swap (structured output + native tool calling) — **done** (see
    decision log for the concrete `gemini-3.6-flash`/`thinking_level`/
    `role="user"` corrections found only by actually building it). The agent
