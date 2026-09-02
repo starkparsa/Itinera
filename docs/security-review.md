@@ -47,7 +47,7 @@ before handling anyone's data but your own.
   destination/place name.
 - **Ownership checks are real, not cosmetic** — every trip/conversation
   endpoint filters by `user_id == user.id` from the verified JWT (see
-  `CLAUDE.md`'s Auth Phase C row), and a cross-user id correctly 404s
+  `decisions.md`'s Auth entry), and a cross-user id correctly 404s
   rather than 403ing (doesn't even confirm the id exists to someone who
   doesn't own it) — confirmed by reading `routers/trips.py` and
   `routers/conversations.py` directly, not just trusting the changelog.
@@ -88,7 +88,7 @@ not preventing abuse. Nothing limited how often an authenticated user (or a
 buggy client, or a compromised/leaked JWT) could call `/trips/generate`,
 each hit of which is 2+ real Gemini calls. For this app specifically, that
 meant the same 20-requests/day free-tier wall already documented in
-`CLAUDE.md` as a *development* annoyance could become a real
+`decisions.md`'s LLM provider entry as a *development* annoyance could become a real
 *denial-of-service vector against your own quota* once anyone besides you
 could reach it.
 

@@ -2,15 +2,16 @@
 
 **Status: mostly actioned as of 2026-08-31 — see the strikethroughs below.
 Written 2026-08-30 at the user's request, after the Neon Postgres migration
-(`docs/sessions/2026-08-29-neon-postgres-migration.md`) removed the last
+(see [`progress.md`](../progress.md)'s 2026-08-29 entry) removed the last
 piece of local-only infrastructure the app depended on.**
 
-This complements `CLAUDE.md`, it doesn't replace it — current architecture
-and decisions still live there. This is a one-time checklist for the
-specific question "what's between here and a real public deployment,"
-plus a concrete list of things worth deleting. Update or delete this file
-once its items are actually done; it's not meant to be kept current
-forever the way `CLAUDE.md` is.
+This complements [`decisions.md`](../decisions.md) and
+[`STATUS.md`](../STATUS.md), it doesn't replace them — current architecture
+and decisions live there. This is a one-time checklist for the specific
+question "what's between here and a real public deployment," plus a
+concrete list of things worth deleting. Update or delete this file once
+its items are actually done; it's not meant to be kept current forever
+the way `STATUS.md` is.
 
 ## 1. Prep checklist, ranked by how much it'll hurt if skipped
 
@@ -21,7 +22,7 @@ forever the way `CLAUDE.md` is.
    the local Next.js dev origin) instead of `["*"]`. Set it to the real
    frontend origin at deploy time — see `docs/deployment-guide.md` §3.1.
 2. **Google OAuth consent screen is still in "Testing" status.** Per
-   `CLAUDE.md`'s Auth decision row, this caps refresh tokens at 7 days —
+   `decisions.md`'s Auth entry, this caps refresh tokens at 7 days —
    real users would get silently logged out of Calendar push weekly.
    Publishing to Production in Google Cloud Console is a manual step in
    the console — **still open, needs you specifically**: Claude has no
@@ -77,9 +78,9 @@ forever the way `CLAUDE.md` is.
 ### Not blocking, worth knowing
 
 - Neon's free tier has real storage/compute-hour limits that weren't
-  re-verified as part of the migration (see
-  `docs/sessions/2026-08-29-neon-postgres-migration.md`) — check current
-  numbers against your actual usage before assuming headroom.
+  re-verified as part of the migration (see [`progress.md`](../progress.md)'s
+  2026-08-29 entry) — check current numbers against your actual usage
+  before assuming headroom.
 - No error tracking / structured logging beyond FastAPI's defaults and
   `print()`-based retry messages in `main.py` — fine solo, would want
   something (even just a log drain from whatever host you pick) once
@@ -97,7 +98,7 @@ platform's own build pipeline.
 > original version of this table recommended Fly.io as a free option. That
 > was wrong, and I only caught it by actually searching rather than
 > trusting a remembered figure — worth noting as a live example of exactly
-> the discipline this project's own `CLAUDE.md` keeps insisting on for
+> the discipline this project's `decisions.md`/`CLAUDE.md` keep insisting on for
 > every free-tier claim. **Fly.io removed free allowances for new accounts
 > in 2024**; a new signup gets a 2-hour/7-day trial, then requires a credit
 > card, and even a minimal always-on machine runs ~$1.94/mo. Not a $0
@@ -149,7 +150,7 @@ about but aren't where I'd start.
 
 Flagging these, not deleting them — a few things in this repo that *looked*
 dead turned out to be intentional (the `.ics` export endpoint, the Calendar
-status endpoint — see `CLAUDE.md`'s "Codebase cleanup pass" row), so
+status endpoint — see `progress.md`'s 2026-08-26 "Codebase cleanup pass" entry), so
 confirm before removing rather than trusting a search alone.
 
 | Candidate | Evidence | Confidence |
@@ -160,7 +161,7 @@ confirm before removing rather than trusting a search alone.
 | `pymysql` in `backend/requirements.txt` | Same story — only still needed as the migration script's source-side reader. | Same as above — remove together with the script. |
 | `docker-compose.yml`'s `mysql` service (`legacy-mysql` profile) | Kept deliberately as a rollback path, not started by default. | Same as above — a bundle of three related removals, not three separate decisions. |
 | `backend/_dev_site.db` | The accidentally-committed SQLite file from the MySQL reconciliation session — untracked and gitignored, but still sitting on disk with now-orphaned data (today's session in `_dev_site.db` predates the Neon migration and was never merged into it, per explicit user choice at the time). | Low urgency — it's not tracked or read by anything anymore, just disk clutter. Delete whenever, or keep as a curiosity; doesn't affect anything either way. |
-| `AGENT_TOOL_CALLING_ENABLED` currency tool-calling loop (`agent_service.py`) | **Not a pruning candidate — flagging so it isn't mistaken for one.** This is a fully-working feature behind a deliberate kill-switch (currently `False` by product decision, not a bug), see `CLAUDE.md`'s Weather/currency decision row. Removing the code would mean re-building it from scratch if the product decision reverses. | N/A — leave alone. |
+| `AGENT_TOOL_CALLING_ENABLED` currency tool-calling loop (`agent_service.py`) | **Not a pruning candidate — flagging so it isn't mistaken for one.** This is a fully-working feature behind a deliberate kill-switch (currently `False` by product decision, not a bug), see `decisions.md`'s Currency conversion entry. Removing the code would mean re-building it from scratch if the product decision reverses. | N/A — leave alone. |
 
 ### Suggested order if you want me to act on this
 
