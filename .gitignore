@@ -236,7 +236,31 @@ backend/_dev_site.db
 # git churn with no diffable content -- so it's untracked again as of
 # 2026-08-31, per explicit user decision. Regenerate locally
 # (`graphify export html` or a full `/graphify` run) whenever needed.
-graphify-out/*
+#
+# Deliberately unanchored (no leading slash, no trailing /*) -- the
+# previous `graphify-out/*` had a slash in the middle, which git anchors
+# to the directory the .gitignore lives in (repo root), so it only ever
+# matched a top-level graphify-out/ and silently missed a nested one
+# (found live: frontend/graphify-out/ sat untracked and unignored).
+# Same bug shape as the lib/ incident above, inverted -- that one was too
+# broad, this one was too narrow. Matching at any depth, like
+# __pycache__/ and .pytest_cache/ already do above, is what's wanted here.
+graphify-out/
+
+# OS junk files -- previously only ignored inside frontend/.gitignore
+# (.DS_Store), which doesn't cover backend/, docs/, or the repo root.
+# Added here so Mac/Windows collaborators don't need a personal global
+# gitignore just to keep these out of a PR diff.
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude Code's own per-user local settings/permissions -- .claude/settings.json
+# (shared, team-wide config) stays tracked; this file holds one person's
+# local overrides and shouldn't be committed. Doesn't exist in this repo
+# yet as of this line being added -- added proactively so it's covered
+# the moment it does, rather than after an accidental commit.
+.claude/settings.local.json
 
 # skills-lock.json (npx-skills / skills.sh package manager) -- a lockfile
 # for globally-installed Claude Code skills, written to whatever directory
