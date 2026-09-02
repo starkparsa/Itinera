@@ -655,5 +655,6 @@ docs/sessions/             Session-by-session history/learnings log -- see its R
 docs/deployment-readiness.md  One-time deployment prep checklist + pruning candidates (2026-08-30, advisory, update/delete once actioned -- not kept current like this file)
 docs/deployment-guide.md      Concrete step-by-step deploy walkthrough (backend: Cloud Run, frontend: Vercel) -- not yet executed as of writing
 docs/security-review.md       Manual security pass findings (2026-08-30) -- CORS/rate-limiting/error-detail-leak items, points to /code-review ultra for a deeper multi-agent pass
+docs/design-references.md     Links to published (private) design artifacts -- UX directions for web+app, the backend request-flow diagram -- not source of truth for implemented UI, the code is
 docs/architecture.md          Visual (Mermaid) companion to this file's "Architecture" section above -- diagrams, not prose; this file is still the source of truth if they disagree
 ```
