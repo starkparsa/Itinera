@@ -223,3 +223,17 @@ hardening already shipped ahead of an actual deploy. *Revisit: the OAuth
 consent screen publish step (STATUS.md's blockers) is the one piece that
 needs a human, and is deliberately not done speculatively before a real
 domain exists.*
+
+## `.gitignore` pattern anchoring — a reusable lesson
+
+A gitignore pattern with a slash only at the *end* (`foo/`) floats and
+matches at any depth; one with a slash in the *middle* (`foo/*`) anchors
+to the directory the `.gitignore` file lives in and won't match a nested
+`bar/foo/`. This project has hit both failure directions of that same
+rule: the `lib/` shadowing incident (2026-08-26) was a floating pattern
+matching too broadly and swallowing `frontend/src/lib/` from git
+entirely; `graphify-out/*` (2026-09-02) was an anchored pattern matching
+too narrowly and missing a nested `frontend/graphify-out/`. *Revisit:
+whenever adding a new ignore pattern for something that could plausibly
+exist at more than one depth in the tree — default to the floating form
+(`name/`) unless there's a specific reason to anchor it.*

@@ -6,22 +6,52 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
-## 2026-09-02 — Documentation rebuild + design artifacts
+## 2026-09-02 — Documentation rebuild, gitignore hygiene, and three design artifacts
 
-Rebuilt the project's documentation into this four-file structure
+**Documentation rebuilt into this four-file structure**
 (README/STATUS/decisions/progress), replacing the sprawling `CLAUDE.md`
 decision table and the 21-file `docs/sessions/` diary — `CLAUDE.md` kept
 as a slim pointer since it's the file Claude Code auto-loads as project
-instructions, not deleted outright. Also published two design artifacts
-this session: an **architecture diagram** correcting a hand-drawn sketch
-that had collapsed the classifier's four branches and the LLM/direct-call
-distinction into fewer boxes than the real system has, and a **UX
-directions canvas** (web + app mockups) built around a "Trip Hub" concept
-— the itinerary becomes a persistent structured record instead of living
-only inside chat scroll, with a mocked-up flight-tracking screen for the
-feature scoped the same session. See `docs/design-references.md` for the
-links. **Next**: neither Maps/routing nor flight price-tracking has
-started — see STATUS.md.
+instructions, not deleted outright. Shipped as PR #11 (a small
+design-references doc, merged) then PR #13 (the actual four-file
+rebuild) — the first attempt at the rebuild PR (#12) was accidentally
+auto-closed by GitHub when its base branch was deleted on #11's merge,
+and couldn't be reopened; re-created against `main` directly instead,
+no content lost.
+
+**Three `.gitignore` gaps found and fixed** (PR #14): `graphify-out/*`
+had a slash in the middle, which git anchors to the directory the
+`.gitignore` lives in — so it only matched a top-level `graphify-out/`
+and silently missed a nested `frontend/graphify-out/` that was sitting
+untracked on disk (same bug *shape*, inverted, as the documented `lib/`
+shadowing incident: that one was too broad, this one too narrow); no
+root-level OS-junk coverage (`.DS_Store` was frontend-only, `Thumbs.db`/
+`desktop.ini` uncovered anywhere); and no rule yet for Claude Code's own
+per-user `.claude/settings.local.json`. All three fixed. Also removed
+`Learnings.txt` (deleted from disk by the user outside this session,
+committed on explicit confirmation it should stay gone).
+
+**Three design artifacts published**, all still pending a decision as
+of this entry:
+- An **architecture diagram**, correcting a hand-drawn sketch that had
+  collapsed the classifier's four branches and the LLM/direct-call
+  distinction into fewer boxes than the real system has.
+- A **UX directions canvas** (web + app mockups) built around a "Trip
+  Hub" concept — the itinerary becomes a persistent structured record
+  instead of living only inside chat scroll — with a mocked-up
+  flight-tracking screen for the feature scoped the same session.
+- A **palette research page**: four travel-evocative color directions
+  (Ocean & Golden Hour — the current teal/amber, refined; Terracotta &
+  Sage; Dusk City; Trail & Canyon), each with a live chat-bubble mockup
+  in both themes. Found a real, previously-undocumented gap while
+  building it: `ChatMessage.tsx`'s assistant bubble is always plain
+  `bg-card` — tour-guide mode today only ever recolors the *user's own*
+  bubble. Every mockup on the page fixes this with a soft accent-tinted
+  assistant bubble; not yet applied to the actual component.
+
+See `docs/design-references.md` for all three links. **Next**: neither
+Maps/routing nor flight price-tracking has started; no palette direction
+has been picked yet either — see STATUS.md.
 
 ## 2026-09-01 — Conversation-context truncation bug
 

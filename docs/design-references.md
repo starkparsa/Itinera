@@ -31,3 +31,25 @@ four outcomes, the two schema-isolated tool-calling loops in
 `agent_service.py`, and the two things that never touch the LLM
 (`weather_service.py`, the DB writes). Made to correct a hand-drawn
 architecture sketch that had collapsed several of these into one box.
+
+## Palette research, 2026-09-02 — no direction chosen yet
+
+**[Itinera Palette Directions](https://claude.ai/code/artifact/1141672a-213f-4d34-a1a1-262dc87c3f38)**
+— four travel-evocative color directions, each with light/dark swatches and
+a live chat-bubble mockup in both normal and tour-guide mode: **A. Ocean &
+Golden Hour** (the current teal/amber, refined — the only direction using
+the app's real, verified color values), **B. Terracotta & Sage**
+(Mediterranean/desert), **C. Dusk City** (indigo + copper streetlight),
+**D. Trail & Canyon** (forest green + canyon rust). Every pairing keeps
+97°–150° of hue separation between primary and tour-guide accent —
+distinct enough to read as a mode switch, not so far apart it clashes.
+
+Real gap found while building this: `ChatMessage.tsx`'s assistant bubble
+is always plain `bg-card` — tour-guide mode today only ever recolors the
+**user's own** bubble, never the assistant's tour-guide replies. Every
+mockup on the page fixes this with a soft, low-chroma tint of the accent
+hue on the assistant bubble; not yet applied to the real component.
+
+B/C/D's oklch values are first-pass estimates calibrated to match
+teal-700/amber-700's lightness-chroma pattern, not verified Tailwind-named
+stops — a real WCAG AA contrast check is needed before any of them ship.
