@@ -13,7 +13,7 @@ canvases, viewable only by the account that published them.
 become a persistent structured record instead of living only inside chat
 scroll, which is how the app works today (see `TripView.tsx`). Includes a
 Flight Tracking mockup for the price-tracking feature discussed the same
-session (see `CLAUDE.md`'s Flights row — not built yet). Built from the
+session (see `decisions.md`'s Flights entry — not built yet). Built from the
 app's real tokens: teal-700 primary (`globals.css`), the amber tour-guide
 accent, Geist font, the existing emerald/sky alert convention.
 

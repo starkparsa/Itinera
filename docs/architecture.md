@@ -1,12 +1,11 @@
 # Architecture: how everything is linked and interacts
 
-**A visual companion to `CLAUDE.md`'s "Architecture: how a request
-actually flows" section — that section is still the prose source of truth
-for *why* things are built this way; this document is the *how it's
-wired* map, for orienting quickly in a codebase this size. Written
-2026-08-30. If the two ever disagree, trust the code, then flag the
-mismatch rather than trusting either doc blindly (same rule `CLAUDE.md`
-already states about itself).**
+**A visual companion to [`decisions.md`](../decisions.md)'s Architecture
+section — that section is the prose source of truth for *why* things are
+built this way; this document is the *how it's wired* map, for orienting
+quickly in a codebase this size. Written 2026-08-30. If the two ever
+disagree, trust the code, then flag the mismatch rather than trusting
+either doc blindly (same rule `CLAUDE.md` states about itself).**
 
 ## 1. System overview — every service and what talks to what
 
@@ -126,7 +125,7 @@ function-calling loops — same underlying mechanism, different flags,
 different schemas, different caching rules, on purpose (so flipping one
 loop's kill switch can never make another loop's tool reachable, and so
 each loop's caching behavior matches what that data actually needs — see
-`CLAUDE.md`'s "Place context" decision row for the full reasoning):
+[`decisions.md`](../decisions.md)'s "Place context" entry for the full reasoning):
 
 ```mermaid
 flowchart LR
@@ -222,8 +221,8 @@ reading the models alone:
   a `question`-intent turn's assistant `Message` always has `trip_id =
   NULL`, which is *why* `tour_guide_mode` had to be exposed on
   `ConversationDetail` rather than `TripResponse` (see
-  `docs/sessions/2026-08-29-tour-guide-mode-refinements.md`) — a
-  question-turn message has no trip to attach a field to.
+  [`progress.md`](../progress.md)'s 2026-08-29 tour-guide-mode-refinements
+  entry) — a question-turn message has no trip to attach a field to.
 
 ## 5. Auth: the BFF (backend-for-frontend) pattern
 

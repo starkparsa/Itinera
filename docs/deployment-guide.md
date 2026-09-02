@@ -168,7 +168,7 @@ services update` applies it to the existing image in place.
 
 ### 3.2 Publish the Google OAuth consent screen
 
-Still in "Testing" status per `CLAUDE.md`'s decision log — caps refresh
+Still in "Testing" status per `decisions.md`'s Auth entry — caps refresh
 tokens at 7 days, meaning real users lose Calendar push weekly. Google
 Cloud Console → APIs & Services → OAuth consent screen → **Publish App**.
 This is a manual console step with no CLI equivalent worth scripting.
