@@ -6,6 +6,57 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-04 — Ticketmaster event discovery, with a real live-caught matching bug
+
+A third planning round the same day, started from the user describing a
+new feature idea in passing ("I am also planning to add ticket master
+api...") rather than a concrete request — verified the API was actually
+workable within the $0 budget (5,000 requests/day, free, no card,
+confirmed live) before treating it as real scope, the same discipline
+already applied to Places/Pexels. Three scope questions
+(`AskUserQuestion`) settled the shape before planning: interests read
+fresh from the prompt each turn (explicitly NOT pulling the
+cross-trip-memory roadmap item forward); discovery on-demand only; an
+event can set `start_date`, with a 1-2-day settle-in buffer.
+
+The user then supplied a real Ticketmaster Consumer Key + Secret directly
+in chat — verified live immediately (a real Miami Heat game came back
+with full date/venue/classification data) before planning around it, and
+confirmed only the Consumer Key is actually needed for Discovery API
+reads (the Secret is for signed Commerce/checkout calls, out of scope,
+never stored).
+
+One more scope question, genuinely undecided rather than assumed: since
+"any jazz shows nearby?" (browsing) and "build the trip around that one"
+(committing) both call the same `find_events` tool, how should the
+system tell them apart without silently overriding dates on a question
+that was never a commitment? Settled on requiring explicit commit
+phrasing in the request's own wording, detected via a structured
+`COMMITTED_EVENT_ID: <id>` marker line the model is instructed to emit
+only on genuine commitment — not the model's own judgment call about a
+tool result, and not fuzzy prose parsing on the consuming end.
+
+**The key architectural finding, from a second Explore-agent pass**: no
+new `TripRequest` field or frontend change was needed at all. The Saved
+Places work from earlier the same day had already built the exact
+plumbing this needed — `_run_tool_loop`'s raw tool-call results already
+flow up through `generate_itinerary`'s `result["found_places"]` for
+`routers/trips.py` to consume once a `Trip` row exists. Events reused
+that channel directly.
+
+**A real bug caught by live-testing before calling this done, not
+assumed correct from the API docs**: after implementation, a live check
+with `keyword="jazz"` returned "Miami Heat vs. Utah Jazz" — a basketball
+game, matched on the opposing team's name, not an actual jazz show.
+Ticketmaster's `keyword` param turned out to be literal full-text name
+matching, not genre matching. Tested `classificationName` instead
+(first against Miami directly — zero results, which briefly looked like
+the fix didn't work — then against New York, which correctly returned
+five real, named jazz shows; Miami genuinely just had none listed at
+that moment, a content gap, not a bug). Confirmed the fix also holds for
+a sports interest (`classificationName=basketball` returned real Heat
+games, no false positives) before shipping it.
+
 ## 2026-09-04 — Trip Hub v2, Saved Places, and Pexels photos all shipped
 
 Planned in two rounds (`EnterPlanMode`/`ExitPlanMode`, both approved

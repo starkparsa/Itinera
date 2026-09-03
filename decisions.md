@@ -145,6 +145,53 @@ can flip back on without rebuilding anything. *Revisit: if the product
 decision changes — the code and tests are fully intact behind the flag,
 this is not a pruning candidate.*
 
+## Event discovery: Ticketmaster — live, 2026-09-04
+
+**find_events (Ticketmaster Discovery API, free tier confirmed live:
+5,000 req/day, no card) added as a fourth tool**, alongside the three
+place tools, reached through the same two on-demand loops
+(`answer_question_with_tools`/`gather_place_context_for_itinerary`) —
+not a separate always-on step, and not a new persistent interest
+profile. All three scope calls confirmed with the user before building:
+interests read fresh from the prompt each turn (doesn't pull the
+deliberately-last cross-trip-memory/pgvector item forward); discovery is
+on-demand only; an event can set a trip's `start_date`, but only on
+explicit commit phrasing.
+
+**A committed-to event's real date can set `start_date` — 2 days before
+the event, for settle-in time (`event_planning.py`,
+`SETTLE_IN_DAYS = 2`, a single tunable constant) — but only when the
+request's own wording truly commits ("build a trip around X"), never for
+a plain browsing/interest question.** Detected via a structured,
+deterministic marker (`PLANNING_TOOL_SYSTEM_PROMPT` instructs the model
+to emit `COMMITTED_EVENT_ID: <id>` on its own line only on genuine
+commitment, `event_planning.extract_committed_event_id` regex-matches
+that exact line — never fuzzy prose parsing) rather than trusting a
+find_events call's mere existence, or the model's own judgment call, as
+the signal — a narrow search returning one result is not the same thing
+as the user having committed to it. The resolved event is always
+re-fetched by id (`ticketmaster_client.get_event`) before its date is
+trusted, never taken from a possibly-stale earlier tool result. Tried as
+a fallback, same tier as `previous_trip.start_date`, only when the
+prompt's own text didn't already resolve an explicit date — an explicit
+date always wins, unchanged.
+
+**No new `TripRequest` field, no frontend/UI change** — the whole flow
+reuses this same day's Saved Places plumbing exactly: `_run_tool_loop`'s
+raw tool-call results already flow up through `generate_itinerary`'s
+`result["found_places"]`, so `find_events` cost nothing extra to wire
+into that existing channel. *Revisit: `find_events` has no Trip Hub
+panel card yet (unlike Saved Places, which got one) — purely
+backend/conversational for now; adding one is the natural next step.*
+
+**Ticketmaster's `keyword` param does literal name-matching, not genre
+matching — confirmed live, not assumed.** Searching `keyword="jazz"`
+returned "Miami Heat vs. Utah Jazz" (matched on the opposing team's
+name, not an actual jazz show). Switched to `classificationName`
+instead, confirmed live to return real genre-correct results for both a
+music genre and a sport. *Revisit: never switch back to `keyword` for
+interest matching without re-reading why.*
+
 ## Flights — not built
 
 No workable free flight-pricing API exists (Amadeus self-service was
