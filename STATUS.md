@@ -6,10 +6,9 @@ this snapshot, see [`progress.md`](progress.md).
 
 _Last rebuilt: 2026-09-02, consolidating everything documented up to that
 date into this four-file structure (README/STATUS/decisions/progress).
-Last updated: 2026-09-04, after Trip Hub v2 (palette, collapsible UI,
-Your Trips/Trip Hub pages) plus Saved Places persistence and Pexels trip
-photos were wired into the real app (see `progress.md`'s 2026-09-04
-entry)._
+Last updated: 2026-09-04, after Trip Hub v2, Saved Places, Pexels trip
+photos, and Ticketmaster event discovery were all wired into the real
+app (see `progress.md`'s 2026-09-04 entries)._
 
 ## Where the project stands
 
@@ -53,6 +52,7 @@ plain Q&A).
 | Wikipedia place context (`get_place_context`) | Live, free |
 | Google Places tools (`get_place_details`, `find_nearby_places`) | Live, billed — key set |
 | Saved Places (auto-persisted `find_nearby_places`/`get_place_details` results) | Live — shown on the Trip Hub page, only once a place has actually been found |
+| Event discovery (`find_events`, Ticketmaster) | Live, free tier — key set. On-demand only; a committed-to event can set a trip's `start_date` (2 days before, for settle-in time), but only on explicit commit phrasing |
 | Persistent tour-guide mode | Live, both chat bubbles now recolor |
 | Trip photos (Pexels, "{destination} skyline at night" first, plain name as fallback) | Live, billed-free tier — key set |
 | Your Trips / Trip Hub pages (`/trips`, `/trips/[tripId]`) | Live |
@@ -68,9 +68,9 @@ plain Q&A).
 
 ## Next action
 
-Trip Hub v2 (palette + collapsible UI + Your Trips/Trip Hub pages), Saved
-Places, and Pexels trip photos are all done — none of the three next
-candidates below depend on any of it:
+Trip Hub v2, Saved Places, Pexels trip photos, and Ticketmaster event
+discovery are all done — none of the three next candidates below depend
+on any of it:
 1. Build-order item 4: Maps/routing (planned around Google's Maps MCP
    server — the specific server/pricing/auth details need re-confirming
    live before writing code, per `decisions.md`'s Maps/routing entry).
@@ -79,6 +79,11 @@ candidates below depend on any of it:
    Trip Hub card still with zero backend data behind it.
 3. A real WCAG AA contrast check on the Dusk City oklch values, which
    shipped as first-pass estimates, not verified Tailwind-named stops.
+4. No frontend surface for events exists yet — `find_events` and
+   event-anchored dates are backend/conversational only so far (same as
+   Saved Places was before its Trip Hub panel card); a dedicated Events
+   card on the Trip Hub page, mirroring Saved Places', is the natural
+   next step whenever that's wanted.
 
 ## Known blockers / open items
 
