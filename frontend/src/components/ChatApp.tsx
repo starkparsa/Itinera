@@ -118,7 +118,7 @@ export default function ChatApp({
 
   return (
     <div
-      className="flex min-h-screen flex-col md:flex-row"
+      className="flex h-dvh flex-col overflow-hidden md:flex-row"
       data-tour-guide-mode={tourGuideMode ? "true" : undefined}
     >
       {sidebarOpen && (
@@ -132,8 +132,14 @@ export default function ChatApp({
         />
       )}
 
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6 md:px-8">
-        <div className="flex items-center justify-between gap-4">
+      {/* h-dvh + overflow-hidden above (not min-h-screen) plus min-h-0 here
+          is what actually makes the middle region scrollable instead of
+          the whole page -- a flex child's default min-height is `auto`,
+          which silently blocks it from ever shrinking/scrolling in a
+          column flex layout without this. */}
+      <main className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-hidden px-4 md:px-8">
+        {/* Locked to the top -- shrink-0 so the scrollable region below never pushes it out of view. */}
+        <div className="flex shrink-0 items-center justify-between gap-4 pt-6 pb-2">
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
@@ -157,36 +163,42 @@ export default function ChatApp({
           </div>
         </div>
 
-        {messages.length === 0 && !pendingPrompt && (
-          <p className="my-4 text-muted-foreground">
-            Describe a trip to start planning. Follow-ups in the same chat (e.g. &quot;make it a week instead&quot;)
-            reference what you asked before.
-          </p>
-        )}
-
-        <div className="my-4 flex flex-1 flex-col gap-4">
-          {messages.map((msg) => (
-            <ChatMessage key={msg.id} message={msg} />
-          ))}
-          {pendingPrompt && (
-            <>
-              <ChatMessage message={{ id: -1, role: "user", content: pendingPrompt, trip: null, created_at: "" }} />
-              <div className="flex justify-start">
-                <div className="max-w-[80%] rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground italic">
-                  Thinking — planning a full trip can take a few minutes, quick questions are much faster...
-                </div>
-              </div>
-            </>
+        {/* The only scrollable region -- everything above and below this stays put. */}
+        <div className="min-h-0 flex-1 overflow-y-auto py-4">
+          {messages.length === 0 && !pendingPrompt && (
+            <p className="text-muted-foreground">
+              Describe a trip to start planning. Follow-ups in the same chat (e.g. &quot;make it a week
+              instead&quot;) reference what you asked before.
+            </p>
           )}
+
+          <div className="flex flex-col gap-4">
+            {messages.map((msg) => (
+              <ChatMessage key={msg.id} message={msg} />
+            ))}
+            {pendingPrompt && (
+              <>
+                <ChatMessage message={{ id: -1, role: "user", content: pendingPrompt, trip: null, created_at: "" }} />
+                <div className="flex justify-start">
+                  <div className="max-w-[80%] rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground italic">
+                    Thinking — planning a full trip can take a few minutes, quick questions are much faster...
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
         </div>
 
-        {error && (
-          <Alert variant="destructive" className="mb-2">
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
-        )}
+        {/* Locked to the bottom -- shrink-0 for the same reason the header is. */}
+        <div className="shrink-0 pt-2 pb-6">
+          {error && (
+            <Alert variant="destructive" className="mb-2">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
 
-        <ChatInput disabled={pendingPrompt !== null} onSubmit={handleSubmit} />
+          <ChatInput disabled={pendingPrompt !== null} onSubmit={handleSubmit} />
+        </div>
       </main>
 
       {rightPanel}
