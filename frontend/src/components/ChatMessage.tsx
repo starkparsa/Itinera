@@ -7,7 +7,9 @@ export default function ChatMessage({ message }: { message: MessageOut }) {
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
         className={`max-w-[80%] rounded-xl px-4 py-3 text-sm ${
-          isUser ? "bg-primary text-primary-foreground" : "border bg-card text-card-foreground"
+          isUser
+            ? "bg-primary text-primary-foreground"
+            : "border-chat-assistant-border bg-chat-assistant-bg text-chat-assistant-fg border"
         }`}
       >
         <p className="whitespace-pre-wrap">{message.content}</p>

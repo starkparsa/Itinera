@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -117,10 +117,20 @@ class Trip(Base):
     # routers/trips.py's _fetch_weather_for_trip.
     weather_json = Column(Text, nullable=True)
     weather_fetched_at = Column(DateTime, nullable=True)
+    # Cached representative photo (pexels_client.py), keyed on destination.
+    # Unlike weather, deliberately no TTL/staleness check -- a destination's
+    # photo doesn't go stale the way a forecast does, so this is fetched at
+    # most once per trip (see pexels_service.get_or_refresh_trip_photo).
+    # photo_fetched_at is kept anyway for observability/parity with the
+    # weather pair above, it just never drives a refetch decision here.
+    photo_url = Column(String(500), nullable=True)
+    photo_credit = Column(String(255), nullable=True)  # "Photographer Name" -- Pexels' attribution ask
+    photo_fetched_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="trips")
     items = relationship("ItineraryItem", back_populates="trip", cascade="all, delete-orphan")
+    saved_places = relationship("SavedPlace", back_populates="trip", cascade="all, delete-orphan")
 
 
 class ItineraryItem(Base):
@@ -136,6 +146,34 @@ class ItineraryItem(Base):
     notes = Column(Text)
 
     trip = relationship("Trip", back_populates="items")
+
+
+class SavedPlace(Base):
+    """A place find_nearby_places/get_place_details actually surfaced for a
+    trip, auto-persisted the moment the tool call succeeds -- there's no
+    manual "save" affordance in the UI (places today are plain prose in
+    the LLM's reply, not structured cards to save individually), so every
+    real find becomes a row. Deduped at the application level on
+    (trip_id, name) in routers/trips.py before insert, not a DB unique
+    constraint -- simpler to reason about and test.
+    """
+
+    __tablename__ = "saved_places"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Same non-cascading-FK-plus-Python-relationship-cascade convention as
+    # ItineraryItem.trip_id above.
+    trip_id = Column(Integer, ForeignKey("trips.id"), nullable=False, index=True)
+    name = Column(String(255), nullable=False)
+    address = Column(String(500), nullable=True)
+    rating = Column(Float, nullable=True)
+    # Google Places' own priceLevel enum values, e.g. "PRICE_LEVEL_VERY_
+    # EXPENSIVE" (26 chars) -- sized to fit those directly, not truncated.
+    price_level = Column(String(40), nullable=True)
+    source = Column(String(30), nullable=False)  # "find_nearby_places" | "get_place_details"
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    trip = relationship("Trip", back_populates="saved_places")
 
 
 class GoogleCalendarCredential(Base):

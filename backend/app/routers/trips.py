@@ -1,9 +1,10 @@
 import logging
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from googleapiclient.errors import HttpError
-from sqlalchemy.orm import Session
+from sqlalchemy import func
+from sqlalchemy.orm import Session, selectinload
 
 from .. import (
     agent_service,
@@ -12,7 +13,9 @@ from .. import (
     google_calendar,
     llm_service,
     models,
+    pexels_service,
     schemas,
+    trip_status,
     usage_quota,
     weather_service,
 )
@@ -29,6 +32,57 @@ MAX_CONTEXT_CHARS = 1000  # cap so long histories don't bloat every prompt
 MAX_CHAT_HISTORY_MESSAGES = 10  # for the Q&A path, which uses real chat-formatted history
 MAX_CHAT_MESSAGE_CHARS = 500  # per-message cap so one long turn doesn't dominate the prompt
 MAX_SUMMARY_ITEMS = 10  # cap how many itinerary items get folded into the stored summary
+
+# Same reasoning/values as conversations.py's list cap -- see its comment.
+DEFAULT_TRIP_LIST_LIMIT = 100
+MAX_TRIP_LIST_LIMIT = 200
+
+# Only these two tools' results become a models.SavedPlace row --
+# get_place_context (Wikipedia) is history/background, not a "place to go
+# check out", and the paused currency tool obviously isn't a place at all.
+_SAVEABLE_PLACE_TOOLS = {"find_nearby_places", "get_place_details"}
+
+
+def _persist_found_places(db: Session, trip_id: int, tool_calls: list[dict]) -> None:
+    """Turns the raw {"tool","args","result"} entries agent_service's tool
+    loops return into models.SavedPlace rows for `trip_id` -- auto-saved,
+    no user action, per the "places today are plain prose, there's no
+    structured card to click a save button on" scoping decision.
+
+    Deduped at the application level on (trip_id, name), not a DB unique
+    constraint -- an edit turn that re-surfaces the same place (e.g. asked
+    about again, or found again by a broader nearby_search) shouldn't
+    duplicate it. Does not commit -- caller owns the transaction, same
+    convention as weather_service.get_or_refresh_trip_weather.
+    """
+    for call in tool_calls:
+        if call["tool"] not in _SAVEABLE_PLACE_TOOLS:
+            continue
+        result = call["result"]
+        # find_nearby_places returns {"results": [...]}; get_place_details
+        # returns a single flat dict -- normalize both into a list of
+        # candidate place dicts.
+        candidates = result.get("results", [result]) if call["tool"] == "find_nearby_places" else [result]
+
+        for place in candidates:
+            name = place.get("name") or place.get("place")  # tools.py uses "place" for get_place_details
+            if not name:
+                continue
+            already_saved = (
+                db.query(models.SavedPlace)
+                .filter(models.SavedPlace.trip_id == trip_id, models.SavedPlace.name == name)
+                .first()
+            )
+            if already_saved:
+                continue
+            db.add(models.SavedPlace(
+                trip_id=trip_id,
+                name=name,
+                address=place.get("address"),
+                rating=place.get("rating"),
+                price_level=place.get("price_level"),
+                source=call["tool"],
+            ))
 
 
 def _build_conversation_context(conversation: models.Conversation) -> str:
@@ -244,7 +298,7 @@ def generate_trip(
         # activation, and never again on later turns that keep it on.
         activating_tour_guide = tour_guide_requested and not conversation.tour_guide_mode
 
-        reply_text = agent_service.answer_question_with_tools(
+        reply_text, qa_tool_calls = agent_service.answer_question_with_tools(
             trip_request.prompt, chat_messages, agent_context=combined_context,
             # Pass the mode as it stood ENTERING this turn -- the
             # triggering "be my tour guide" turn itself already gets a
@@ -252,6 +306,12 @@ def generate_trip(
             # instruction, this flag only needs to cover turns after that.
             tour_guide_mode=conversation.tour_guide_mode,
         )
+        # No new Trip is created on the question path -- persist against
+        # whichever trip already exists in this conversation, if any.
+        # Nothing to attach a found place to when there isn't one yet, so
+        # this is skipped rather than fabricating a trip just to hold it.
+        if latest_trip:
+            _persist_found_places(db, latest_trip.id, qa_tool_calls)
 
         try:
             if not reply_text:
@@ -392,6 +452,13 @@ def generate_trip(
 
         weather_out = weather_service.get_or_refresh_trip_weather(trip, items_out)
 
+        # trip.id only exists from here on (db.flush() above) -- this is
+        # the earliest point in this turn that found places (gathered
+        # *before* the Trip row existed, see
+        # agent_service.gather_place_context_for_itinerary's docstring)
+        # can actually be persisted against it.
+        _persist_found_places(db, trip.id, result.get("found_places", []))
+
         assistant_summary = _summarize_itinerary(trip.destination, items_out)
 
         db.add(models.Message(conversation_id=conversation.id, role="user", content=trip_request.prompt))
@@ -419,6 +486,87 @@ def generate_trip(
     )
 
 
+@router.get("", response_model=list[schemas.TripSummary])
+def list_trips(
+    limit: int = Query(default=DEFAULT_TRIP_LIST_LIMIT, ge=1, le=MAX_TRIP_LIST_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Backs the "Your Trips" list page -- ownership-scoped and paginated
+    the same way list_conversations already is (routers/conversations.py),
+    deliberately mirrored rather than reinvented. Newest first.
+
+    One row per real "trip" the user thinks of, not one per Trip row --
+    generate_trip creates a brand-new Trip row on EVERY new_trip/edit_trip
+    turn in a conversation (it never updates one in place, see that
+    endpoint's own comment on why: "edit_trip currently still regenerates
+    the whole thing"), so a conversation refined 4 times has 4 Trip rows
+    all sharing one conversation_id. Listing every row unfiltered showed
+    the same trip duplicated once per edit -- confirmed live (a single
+    Miami conversation refined 4 times appeared as 4 separate "Miami"
+    cards). Only the latest Trip per conversation_id is shown here;
+    conversation_id-less trips (an orphan whose conversation was deleted,
+    or one predating conversation linkage) each stand on their own.
+
+    Two separate queries unioned, not one GROUP BY on
+    coalesce(conversation_id, id) -- that first version had a real
+    collision bug: Trip.id and Conversation.id are independent sequences
+    that can (and, confirmed live in a test, did) produce the same
+    number, so an orphaned trip's own id could numerically collide with a
+    genuinely unrelated trip's real conversation_id and wrongly merge the
+    two. Keeping "grouped by real conversation_id" and "each orphan on its
+    own" as two disjoint queries makes that collision structurally
+    impossible instead of just unlikely.
+    """
+    latest_per_conversation = (
+        db.query(func.max(models.Trip.id))
+        .filter(models.Trip.user_id == user.id, models.Trip.conversation_id.isnot(None))
+        .group_by(models.Trip.conversation_id)
+        .all()
+    )
+    orphan_trip_ids = (
+        db.query(models.Trip.id)
+        .filter(models.Trip.user_id == user.id, models.Trip.conversation_id.is_(None))
+        .all()
+    )
+    latest_trip_ids = [row[0] for row in latest_per_conversation] + [row[0] for row in orphan_trip_ids]
+    # selectinload the itinerary items in one extra batched query instead of
+    # one lazy-load per trip (the same N+1 shape get_conversation's own
+    # comment already flags and avoids for its trip/items chain).
+    trips = (
+        db.query(models.Trip)
+        .options(selectinload(models.Trip.items))
+        .filter(models.Trip.id.in_(latest_trip_ids))
+        .order_by(models.Trip.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+        .all()
+    )
+    summaries = []
+    for trip in trips:
+        day_count = max((item.day_number for item in trip.items), default=0)
+        # No-ops (returns None, no network call) when PEXELS_API_KEY isn't
+        # set, and only ever fetches once per trip after that -- see
+        # pexels_service's docstring for why this has no TTL check unlike
+        # the weather refresh below.
+        photo = pexels_service.get_or_refresh_trip_photo(trip)
+        summaries.append(
+            schemas.TripSummary(
+                id=trip.id,
+                destination=trip.destination,
+                start_date=trip.start_date,
+                day_count=day_count,
+                status=trip_status.derive_status(trip.start_date, day_count),
+                created_at=trip.created_at,
+                photo_url=photo["url"] if photo else None,
+                photo_credit=photo["credit"] if photo else None,
+            )
+        )
+    db.commit()  # persists any photo URLs just fetched above
+    return summaries
+
+
 @router.get("/{trip_id}", response_model=schemas.TripResponse)
 def get_trip(trip_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Ownership check as of Phase C (see CLAUDE.md decision log, "Auth"
@@ -438,6 +586,7 @@ def get_trip(trip_id: int, user: models.User = Depends(get_current_user), db: Se
         conversation_id=trip.conversation_id,
         weather=[schemas.DayWeatherOut(**w) for w in weather_out],
         start_date=trip.start_date,
+        saved_places=[schemas.SavedPlaceOut.model_validate(p) for p in trip.saved_places],
     )
 
 

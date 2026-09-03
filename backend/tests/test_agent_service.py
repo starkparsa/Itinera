@@ -215,9 +215,10 @@ def test_qa_tools_short_circuits_to_empty_when_disabled():
         patch("app.agent_service.QA_TOOL_CALLING_ENABLED", False),
         patch("app.agent_service._call_gemini_with_tools") as mock_call,
     ):
-        result = agent_service.answer_question_with_tools("tell me about the Louvre", [])
+        text, tool_calls = agent_service.answer_question_with_tools("tell me about the Louvre", [])
 
-    assert result == ""
+    assert text == ""
+    assert tool_calls == []
     mock_call.assert_not_called()
 
 
@@ -266,12 +267,42 @@ def test_qa_tools_runs_fresh_every_call_no_internal_caching():
             {"place": "Eiffel Tower", "summary": "A tower.", "detail": "brief"},
         ]) as mock_tool,
     ):
-        first = agent_service.answer_question_with_tools("tell me about the Louvre", [])
-        second = agent_service.answer_question_with_tools("what about the Eiffel Tower?", [])
+        first, first_calls = agent_service.answer_question_with_tools("tell me about the Louvre", [])
+        second, second_calls = agent_service.answer_question_with_tools("what about the Eiffel Tower?", [])
 
     assert first == "The Louvre is a famous museum in Paris."
     assert second == "The Eiffel Tower is a landmark in Paris."
     assert mock_tool.call_count == 2
+    # get_place_context (Wikipedia) results ARE captured by _run_tool_loop
+    # -- filtering to "only Places tools become a SavedPlace" happens at
+    # the consumption site (routers/trips.py), not in this shared helper.
+    assert first_calls == [{"tool": "get_place_context", "args": {"place_name": "Louvre"}, "result": {"place": "Louvre", "summary": "A museum.", "detail": "brief"}}]
+    assert second_calls == [{"tool": "get_place_context", "args": {"place_name": "Eiffel Tower"}, "result": {"place": "Eiffel Tower", "summary": "A tower.", "detail": "brief"}}]
+
+
+def test_qa_tools_excludes_error_results_from_returned_tool_calls():
+    # A tool result with an "error" key means that specific lookup failed
+    # (see tools.py's {"error": ...} contract) -- _run_tool_loop must not
+    # report that as a successful call. Real motivation: routers/trips.py
+    # persists these as SavedPlace rows, and a failed find_nearby_places
+    # lookup has no real place data to save.
+    tool_call_response = _mock_tool_response(function_calls=[
+        _mock_function_call("find_nearby_places", {"place_type": "cafe", "near": "nowhere"}),
+    ])
+    final_response = _mock_tool_response(text="Couldn't find anything nearby.")
+
+    with (
+        patch("app.agent_service.QA_TOOL_CALLING_ENABLED", True),
+        patch(
+            "app.agent_service._call_gemini_with_tools",
+            side_effect=[tool_call_response, final_response],
+        ),
+        patch("app.tools.find_nearby_places", return_value={"error": "Could not resolve a location for 'nowhere'"}),
+    ):
+        text, tool_calls = agent_service.answer_question_with_tools("cafes near nowhere", [])
+
+    assert text == "Couldn't find anything nearby."
+    assert tool_calls == []
 
 
 def test_qa_tools_builds_contents_from_chat_history_and_new_prompt():
@@ -348,9 +379,10 @@ def test_qa_tools_network_failure_fails_quietly():
         patch("app.agent_service.QA_TOOL_CALLING_ENABLED", True),
         patch("app.agent_service._call_gemini_with_tools", side_effect=ConnectionError("no route to host")),
     ):
-        result = agent_service.answer_question_with_tools("tell me about the Louvre", [])
+        text, tool_calls = agent_service.answer_question_with_tools("tell me about the Louvre", [])
 
-    assert result == ""
+    assert text == ""
+    assert tool_calls == []
 
 
 def test_qa_system_prompt_instructs_brief_default_and_against_inventing():
@@ -400,9 +432,10 @@ def test_planning_context_short_circuits_to_empty_when_disabled():
         patch("app.agent_service.PLANNING_TOOL_CALLING_ENABLED", False),
         patch("app.agent_service._call_gemini_with_tools") as mock_call,
     ):
-        result = agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
+        text, tool_calls = agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
 
-    assert result == ""
+    assert text == ""
+    assert tool_calls == []
     mock_call.assert_not_called()
 
 
@@ -461,9 +494,10 @@ def test_planning_context_network_failure_fails_quietly():
         patch("app.agent_service.PLANNING_TOOL_CALLING_ENABLED", True),
         patch("app.agent_service._call_gemini_with_tools", side_effect=ConnectionError("no route to host")),
     ):
-        result = agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
+        text, tool_calls = agent_service.gather_place_context_for_itinerary("5 days in Lisbon")
 
-    assert result == ""
+    assert text == ""
+    assert tool_calls == []
 
 
 def test_planning_system_prompt_instructs_brief_default_and_against_inventing():

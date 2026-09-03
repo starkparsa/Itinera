@@ -220,7 +220,9 @@ def _call_gemini_with_tools(
     )
 
 
-def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.Tool, loop_name: str) -> str:
+def _run_tool_loop(
+    contents: list, system_instruction: str, tool_schema: types.Tool, loop_name: str,
+) -> tuple[str, list[dict]]:
     """The manual tool-calling round trip shared by all three loops
     (gather_trip_context, gather_place_context_for_itinerary,
     answer_question_with_tools) -- the mechanics (thinking_level,
@@ -231,26 +233,39 @@ def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.T
     module's docstring for why the loops stay separate rather than
     sharing one flag/schema.
 
+    Returns `(text, tool_calls)` -- `tool_calls` is every successful call
+    this loop made, as `{"tool", "args", "result"}` dicts, in call order,
+    regardless of which tool it was (currency, Wikipedia, or Places).
+    Filtering to a specific tool (e.g. "only find_nearby_places/
+    get_place_details results become a saved place") is the *caller's*
+    job, not this shared helper's -- added 2026-09-04 specifically so
+    routers/trips.py can persist real Places results as models.SavedPlace
+    rows without this function needing to know anything about that.
+    Callers that don't need the raw calls (gather_trip_context) just
+    discard the second element.
+
     "Quiet failure" here means quiet to the *caller* only (still returns
-    "" on any failure, exactly as before -- every caller's own docstring
-    documents that contract and nothing about it changed). It used to also
-    mean quiet in the logs, with zero signal that anything went wrong at
-    all -- a real gap (2026-08-31 architecture review, Tier 2): all three
-    loops are on by default in production, so a genuine failure (Wikipedia
-    changing its response shape, a Gemini schema rejection) would silently
-    degrade to "no place/currency context" forever with nothing in the
-    logs to catch it. loop_name (a short fixed string identifying which of
-    the three callers this is, e.g. "currency", "qa_place_context",
-    "planning_place_context") exists purely so those log lines say which
-    loop actually failed, not just that some loop somewhere did.
+    ("", []) on any failure, exactly as "" used to work before tool_calls
+    existed -- every caller's own docstring documents that contract).  It
+    used to also mean quiet in the logs, with zero signal that anything
+    went wrong at all -- a real gap (2026-08-31 architecture review, Tier
+    2): all three loops are on by default in production, so a genuine
+    failure (Wikipedia changing its response shape, a Gemini schema
+    rejection) would silently degrade to "no place/currency context"
+    forever with nothing in the logs to catch it. loop_name (a short
+    fixed string identifying which of the three callers this is, e.g.
+    "currency", "qa_place_context", "planning_place_context") exists
+    purely so those log lines say which loop actually failed, not just
+    that some loop somewhere did.
     """
+    tool_calls: list[dict] = []
     try:
         for _ in range(MAX_TOOL_ROUNDS):
             response = _call_gemini_with_tools(contents, system_instruction, tool_schema)
             calls = response.function_calls or []
 
             if not calls:
-                return (response.text or "").strip()
+                return (response.text or "").strip(), tool_calls
 
             # Replay the model's own function-call turn back into the
             # conversation before sending results, exactly as Gemini's
@@ -271,6 +286,9 @@ def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.T
                     except Exception as exc:
                         result = {"error": str(exc)}
 
+                if isinstance(result, dict) and "error" not in result:
+                    tool_calls.append({"tool": fn_name, "args": fn_args, "result": result})
+
                 response_parts.append(types.Part.from_function_response(name=fn_name, response=result))
 
             # Function-response parts go back in a role="user" turn --
@@ -284,14 +302,16 @@ def _run_tool_loop(contents: list, system_instruction: str, tool_schema: types.T
         # converges is worth a real log line: it's a different failure
         # shape from an outright exception (the model keeps calling tools
         # instead of ever answering) and would otherwise leave no trace.
+        # tool_calls made along the way are real regardless of whether a
+        # final answer was ever reached, so they're still returned here.
         logger.warning(
             "agent_service tool-calling loop '%s' hit MAX_TOOL_ROUNDS (%d) without a final answer",
             loop_name, MAX_TOOL_ROUNDS,
         )
-        return ""
+        return "", tool_calls
     except Exception:
         logger.exception("agent_service tool-calling loop '%s' failed", loop_name)
-        return ""
+        return "", []
 
 
 def gather_trip_context(prompt: str, destination: str | None = None) -> str:
@@ -322,15 +342,21 @@ def gather_trip_context(prompt: str, destination: str | None = None) -> str:
 
     user_content = f"Trip destination: {destination}\n\n{prompt}" if destination else prompt
     contents = [types.Content(role="user", parts=[types.Part(text=user_content)])]
-    return _run_tool_loop(contents, AGENT_SYSTEM_PROMPT, tools.CURRENCY_TOOL_SCHEMAS, loop_name="currency")
+    text, _tool_calls = _run_tool_loop(contents, AGENT_SYSTEM_PROMPT, tools.CURRENCY_TOOL_SCHEMAS, loop_name="currency")
+    return text
 
 
-def gather_place_context_for_itinerary(prompt: str) -> str:
-    """Runs a place-context (Wikipedia) tool-calling loop over the raw trip
-    request and returns a short plain-text summary to fold into itinerary
-    generation, or "" if nothing useful was found, the loop fails for any
-    reason, or this step is currently disabled (see
-    PLANNING_TOOL_CALLING_ENABLED above).
+def gather_place_context_for_itinerary(prompt: str) -> tuple[str, list[dict]]:
+    """Runs a place-context (Wikipedia + Places) tool-calling loop over the
+    raw trip request and returns `(summary, tool_calls)` -- a short
+    plain-text summary to fold into itinerary generation (or "" if nothing
+    useful was found, the loop fails for any reason, or this step is
+    currently disabled, see PLANNING_TOOL_CALLING_ENABLED above), plus the
+    raw tool_calls from _run_tool_loop (see its docstring) so
+    llm_service.generate_itinerary can surface any find_nearby_places/
+    get_place_details results as `result["found_places"]` for
+    routers/trips.py to persist once a Trip row exists -- this loop itself
+    runs before that row does, so it can't persist anything directly.
 
     Deliberately takes only `prompt`, the same shape as gather_trip_context
     -- no destination parameter, even though llm_service.generate_itinerary
@@ -355,7 +381,7 @@ def gather_place_context_for_itinerary(prompt: str) -> str:
     uncached).
     """
     if not PLANNING_TOOL_CALLING_ENABLED:
-        return ""
+        return "", []
 
     contents = [types.Content(role="user", parts=[types.Part(text=prompt)])]
     return _run_tool_loop(
@@ -365,10 +391,15 @@ def gather_place_context_for_itinerary(prompt: str) -> str:
 
 def answer_question_with_tools(
     prompt: str, chat_messages: list[dict], agent_context: str = "", tour_guide_mode: bool = False,
-) -> str:
+) -> tuple[str, list[dict]]:
     """Runs the place-context tool-calling loop for a conversational
-    follow-up question and returns a plain-text answer, or "" if the step
-    is disabled, fails for any reason, or MAX_TOOL_ROUNDS is exceeded.
+    follow-up question and returns `(answer, tool_calls)` -- a plain-text
+    answer (or "" if the step is disabled, fails for any reason, or
+    MAX_TOOL_ROUNDS is exceeded) plus the raw tool_calls from
+    _run_tool_loop (see its docstring), so routers/trips.py's question
+    branch can persist any find_nearby_places/get_place_details results
+    against whatever trip already exists in this conversation, the same
+    way the planning path does via gather_place_context_for_itinerary.
 
     Callers MUST run this fresh on every question-intent turn -- do NOT
     wrap it in a once-per-conversation cache the way routers/trips.py
@@ -412,7 +443,7 @@ def answer_question_with_tools(
     doesn't override the per-turn escalate-only-if-asked logic below.
     """
     if not QA_TOOL_CALLING_ENABLED:
-        return ""
+        return "", []
 
     system_instruction = QA_TOOL_SYSTEM_PROMPT
     if tour_guide_mode:

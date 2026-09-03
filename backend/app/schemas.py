@@ -54,6 +54,50 @@ class TripResponse(BaseModel):
     # whether to show a calendar-export button at all -- see
     # calendar_export.py.
     start_date: date | None = None
+    # Auto-persisted places (see models.SavedPlace) -- empty until a
+    # find_nearby_places/get_place_details tool call has actually
+    # succeeded for this trip, never fabricated in between. Forward
+    # reference ("SavedPlaceOut" defined below) -- resolved by Pydantic
+    # once the whole module has loaded, same as any other in-module
+    # forward ref.
+    saved_places: list["SavedPlaceOut"] = []
+
+
+class TripSummary(BaseModel):
+    """One row for the 'Your Trips' list (GET /trips) -- deliberately
+    smaller than TripResponse, which carries a full itinerary/weather
+    payload meant for a single open trip, not a list of many. `status` is
+    computed in Python (trip_status.derive_status), never guessed by the
+    LLM -- see CLAUDE.md principle #6's date-arithmetic rule, which this
+    extends to trip status the same way."""
+
+    id: int
+    destination: str
+    start_date: date | None = None
+    day_count: int  # max(item.day_number) over the trip's itinerary; 0 if somehow empty
+    status: str  # "draft" | "upcoming" | "completed"
+    created_at: datetime
+    # Both null when PEXELS_API_KEY is unset or the search found nothing --
+    # the frontend falls back to a flat color banner, never a broken image.
+    photo_url: str | None = None
+    photo_credit: str | None = None
+
+    class Config:
+        from_attributes = True
+
+
+class SavedPlaceOut(BaseModel):
+    """A place find_nearby_places/get_place_details surfaced for a trip and
+    that got auto-persisted (models.SavedPlace) -- see routers/trips.py's
+    generate_trip/question-branch wiring."""
+
+    name: str
+    address: str | None = None
+    rating: float | None = None
+    price_level: str | None = None
+
+    class Config:
+        from_attributes = True
 
 
 class MessageOut(BaseModel):

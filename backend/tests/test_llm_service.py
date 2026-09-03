@@ -22,7 +22,7 @@ def mock_agent_context():
     # network calls to Gemini during tests.
     with (
         patch("app.llm_service.agent_service.gather_trip_context", return_value=""),
-        patch("app.llm_service.agent_service.gather_place_context_for_itinerary", return_value=""),
+        patch("app.llm_service.agent_service.gather_place_context_for_itinerary", return_value=("", [])),
     ):
         yield
 
@@ -369,7 +369,7 @@ def test_empty_cached_agent_context_still_gathers_fresh():
         patch("app.llm_service.agent_service.gather_trip_context", return_value="") as mock_gather,
         patch(
             "app.llm_service.agent_service.gather_place_context_for_itinerary",
-            return_value="Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints.",
+            return_value=("Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints.", []),
         ) as mock_place,
         patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
     ):
@@ -388,7 +388,7 @@ def test_currency_and_place_context_are_combined_when_both_return_findings():
         patch("app.llm_service.agent_service.gather_trip_context", return_value="500 USD is about 460 EUR."),
         patch(
             "app.llm_service.agent_service.gather_place_context_for_itinerary",
-            return_value="Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints.",
+            return_value=("Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints.", []),
         ),
         patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
     ):
