@@ -181,6 +181,41 @@ bespoke Streamlit-leftover red and shadcn's default grayscale — Tailwind's
 own teal-700/teal-400 oklch stops, not hand-picked. Dark mode stays
 `prefers-color-scheme`-driven, no toggle, no JS theming dependency.
 
+**Palette: Direction C, "Dusk City," chosen 2026-09-03** — indigo primary
+(`oklch(0.45 0.11 265)`) + copper tour-guide accent
+(`oklch(0.58 0.15 55)`), replacing the teal/amber pair above. Picked from
+four researched directions in `docs/design-references.md`'s Palette
+Directions artifact for a travel-evocative feel without going literally
+nature- or city-photograph-themed. *Not yet wired into `globals.css` —
+still mockup-only as of this writing.* Every mockup built after this point
+uses hue-locked neutrals derived from the same 265° hue rather than plain
+grey, deliberately, not just for these mockups but as the pattern to carry
+into the real tokens.
+
+**UI direction: "Trip Hub v2," chosen 2026-09-03, after a same-day
+rejected exploration.** A "City Passport" direction — the interface framed
+as a boarding-pass/travel document, with ink-stamp result cards and a
+literal app "Passport" tab of past trips — was fully built (two artifacts,
+kept in `docs/design-references.md` as a recorded dead end) and then
+explicitly rejected by the user once seen in full. The direction that
+replaced it rebuilds the original UX Directions canvas's "Trip Hub"
+concept (a persistent trip-list + active-trip view, not chat-only) as
+standard product UI in the Dusk City palette — flat buttons, real
+city-photo thumbnails, no travel-document metaphor. *Revisit the rejection
+only if the user brings the travel-document idea back up themselves —
+don't re-propose a stamp/passport metaphor by default.*
+
+**Both the trip sidebar and the Trip Hub's data-cards column are
+collapsed by default, opened only on request** — the strongest form yet of
+the "don't show a tool before it's been asked for" principle, extended
+from individual data cards (below) to the surrounding chrome itself.
+Implemented as a `display: none` toggle, not `width: 0` — the latter was
+tried first and silently broke the responsive stacked layout (collapsed
+content still claimed a full row's height). *Revisit: if this needs to
+become a persisted-per-user preference rather than always-collapsed-by-
+default, that's real state (localStorage or `User` row), not a CSS
+default.*
+
 ## Persistent tour-guide mode
 
 Once triggered (explicit ask, or a physically-present narrative request —

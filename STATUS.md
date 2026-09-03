@@ -6,8 +6,9 @@ this snapshot, see [`progress.md`](progress.md).
 
 _Last rebuilt: 2026-09-02, consolidating everything documented up to that
 date into this four-file structure (README/STATUS/decisions/progress).
-Last updated: 2026-09-02, after the `.gitignore` fixes and the palette
-research pass (see `progress.md`'s 2026-09-02 entry for both)._
+Last updated: 2026-09-03, after the palette choice, the "City Passport"
+direction (built, then rejected), and its replacement, "Trip Hub v2" (see
+`progress.md`'s 2026-09-03 entry)._
 
 ## Where the project stands
 
@@ -22,15 +23,22 @@ through one router (`POST /trips/generate`) — see `decisions.md`'s
 Architecture entry for the flow, or the published
 [request-flow diagram](design-references.md) for a visual trace.
 
-**Frontend**: Next.js (App Router, TS), Tailwind v4 + shadcn/ui, teal
-brand palette with an amber tour-guide-mode accent — **currently under
-active review**, not settled. Four alternative palette directions are
-published (see `docs/design-references.md`'s Palette Directions page);
-none chosen yet. A real gap found during that review: tour-guide mode
-today only recolors the user's own chat bubble (`ChatMessage.tsx`'s
-assistant bubble is always plain `bg-card`) — not yet fixed in the actual
-component. No native/PWA app exists yet — see `docs/design-references.md`'s
-UX Directions canvas for an unbuilt mockup of what one could look like.
+**Frontend**: Next.js (App Router, TS), Tailwind v4 + shadcn/ui, still
+running the **live** teal/amber palette in code — nothing below has been
+wired into the real app yet, all of it is still at the mockup stage.
+**Direction C ("Dusk City": indigo primary + copper tour-guide accent) is
+chosen**, and **"Trip Hub v2" is the chosen UI direction to build from**
+(see `docs/design-references.md`) — two pages (trip list, active Trip Hub)
+recreating the original UX Directions canvas's "Trip Hub" concept as
+standard product UI, with the trip sidebar and the Trip Hub's tools column
+both collapsed by default until opened. An earlier "City Passport"
+(travel-document/boarding-pass) direction was fully built and then
+explicitly rejected the same day — kept in `design-references.md` as a
+recorded dead end, not as a live option. A real gap found during the
+palette review and still unfixed: tour-guide mode today only recolors the
+user's own chat bubble (`ChatMessage.tsx`'s assistant bubble is always
+plain `bg-card`) — Direction C's copper tint values for it are already
+documented in `design-references.md`. No native/PWA app exists yet.
 
 **LLM**: Gemini API (`gemini-3.5-flash-lite`), Groq as an automatic
 fallback on rate-limit only. Not wired into the agentic tool-calling
@@ -59,21 +67,25 @@ plain Q&A).
 
 ## Next action
 
-Three candidates, none started:
-1. **Pick a palette direction** (see `docs/design-references.md`) and wire
-   it into `globals.css` + fix the tour-guide assistant-bubble gap in
-   `ChatMessage.tsx` — the smallest, most self-contained of the three.
-2. Build-order item 4: Maps/routing.
-3. Resolve the flight price-tracking data-source question
-   (Travelpayouts/Aviasales — unverified).
+**Integration of the Trip Hub v2 direction into the real frontend is about
+to start.** In order:
+1. Wire Direction C's tokens into `globals.css`'s `--primary`/`--ring`/
+   `--sidebar-primary`/`--sidebar-ring` + the tour-guide override block,
+   and fix the tour-guide assistant-bubble gap in `ChatMessage.tsx` using
+   the copper tint values documented in `design-references.md`.
+2. Build the collapsible-sidebar / collapsible-tools-column shell from the
+   Trip Hub v2 mockup into the real trip page components.
+3. Build-order item 4 (Maps/routing) and the flight price-tracking
+   data-source question (Travelpayouts/Aviasales — unverified) both remain
+   after this, unstarted.
 
 ## Known blockers / open items
 
-- **No palette direction chosen yet** — four researched candidates exist
-  (Ocean & Golden Hour/current, Terracotta & Sage, Dusk City, Trail &
-  Canyon); only Direction A uses the app's real, verified color values,
-  the other three are first-pass oklch estimates that need a real WCAG
-  contrast check before shipping.
+- **Neither the palette nor the Trip Hub v2 layout is wired into code
+  yet** — everything described above is still mockup-only. `globals.css`
+  still holds the old teal/amber values. Direction C's oklch values are
+  first-pass estimates, not verified Tailwind-named stops — a real WCAG AA
+  contrast check is needed before shipping.
 - **Tour-guide mode's chat-bubble treatment is incomplete** — only the
   user's own bubble recolors today; the assistant's tour-guide replies
   look identical to a normal reply. Fix is designed (a soft accent tint)
@@ -82,9 +94,8 @@ Three candidates, none started:
   refresh tokens at 7 days. Publishing to Production needs a human in
   Google Cloud Console; explicitly deferred until there's a real domain
   to publish against (see `decisions.md`'s Deployment entry).
-- **No native/PWA app exists** — the "App" mockups in the UX Directions
-  canvas assume one; that's a real engineering decision (React Native vs.
-  PWA vs. native) not yet made.
+- **No native/PWA app exists** — a real engineering decision (React
+  Native vs. PWA vs. native) not yet made.
 - **No user research behind the current UX direction** — built from
   feature docs and engineering history, not measured usage.
 - CI on `main` is green (fixed a `pytest` import bug that had been broken

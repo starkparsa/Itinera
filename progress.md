@@ -6,6 +6,101 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-03 — "City Passport" built and rejected; "Trip Hub v2" is the direction
+
+Continued the same day's design work past the palette choice below into a
+full UI direction pass, working from four explicit requirements: no
+AI-slop button/gradient styling, not robotic/sanitized, "city-looking" so
+the user feels like a tourist, and no tool/data card shown before it's
+actually been fetched.
+
+**First attempt — "City Passport"**: reframed the whole interface as a
+travel document instead of a dashboard — a boarding-pass photo strip,
+perforated tear-lines, rotated "ink stamp" result cards, a literal
+"Passport" app tab of past trips as stamped pages. Researched real dark-mode
+practice (avoid near-black, layer warmth, ambient glow) after the first
+pass read as cold; researched and confirmed Pexels' API as the real
+free-tier photo source (200 req/hr, no cost, no card); embedded real
+CC-licensed Wikimedia Commons photos (Lisbon/Kyoto/Marrakech, credited) for
+the mockup itself since the artifact sandbox can't hotlink external images.
+Built out to a full website-shell + two-app-screen mockup. **User rejected
+the whole direction outright** ("forget about city passport i do not like
+the idea") once it was fully built — the boarding-pass/stamp metaphor
+itself was the problem, not the execution. Both artifacts are kept, linked
+from `docs/design-references.md`, as a recorded dead end.
+
+**Second attempt — "Trip Hub v2", the direction going forward**: the user
+supplied a PDF export of the original `Itinera UX Directions` canvas's
+"Trip Hub" screens (a trip list and an active-trip working view) and asked
+for "2 pages similar to this" instead. Extracted its real content via
+`pdftotext -layout` (no PDF-rendering tool was available in-session) and
+rebuilt it faithfully as clean, standard product UI — same Dusk City
+palette and photo-thumbnail treatment carried over from City Passport, but
+dropped every travel-document affectation (no stamps, no tear-lines, no
+rotation). Then iterated twice more on request:
+- Added a working hamburger toggle to collapse/expand the trip sidebar on
+  both pages — first pass collapsed it via `width: 0`, which silently broke
+  at the responsive stacked breakpoint (leftover content still claimed a
+  full row's height, pushing everything else off-screen); fixed by
+  switching to `display: none`, verified at both breakpoints.
+- Added a second, independent collapse control (a chevron sitting on the
+  Trip Hub tools column's own edge, per the user's choice among four
+  offered patterns) for the Weather/Flight/Saved-Places column — collapses
+  to a thin labeled rail rather than disappearing outright.
+- Finally set **both** the sidebar and the tools column to start collapsed
+  by default on page load, opened only on request — the strongest version
+  of the "nothing pre-printed" requirement, now applied to the chrome
+  itself and not just the data cards.
+
+All three toggle states were verified with direct DOM/computed-style
+checks (`getComputedStyle`, `getBoundingClientRect`) rather than
+screenshots after the browser tool started returning stale frames on
+scroll partway through this session — a tool-side quirk confirmed not to
+be a page bug, not worth chasing further once the programmatic checks
+passed.
+
+**Repo hygiene, same session**: swept for unmerged work before starting
+real frontend integration. Confirmed (by content, not just PR status —
+e.g. `google_places_client.py` present on `main`, `card.tsx` absent) that
+every previously-open branch was already fully merged; deleted two stale
+local branches (`chore/gitignore-gaps`, `docs/design-references`) whose
+squash-merged content already lived on `main` under different commit SHAs.
+
+## 2026-09-03 — Palette direction chosen (Dusk City); UX canvas recolored
+
+Picked **Direction C, "Dusk City"** (indigo primary + copper tour-guide
+accent) from the four candidates in `Itinera Palette Directions`. Exact
+values now recorded in `docs/design-references.md`: primary
+`oklch(0.45 0.11 265)` (light) / `oklch(0.72 0.16 266)` (dark),
+tour-guide accent `oklch(0.58 0.15 55)` / `oklch(0.80 0.17 62)`, plus the
+assistant-bubble tint values for the `ChatMessage.tsx` fix that's still
+outstanding.
+
+Recolored the **Itinera UX Directions** canvas to preview the choice:
+found the whole canvas leaned on just 3 oklch tokens for its teal brand
+color (one dominant primary token used 19 times, a darker text variant
+used 8 times, one gradient companion used once) — a global find/replace
+swapped all three to Direction C's indigo family, republished to the same
+artifact URL. The canvas's tour-guide-mode toggle chips are still styled
+neutral gray, not recolored to the copper accent — they're plain-text
+JS-string-encoded content inside the canvas's rendered export, not
+something safe to hand-edit precisely, so that's left as a possible
+follow-up rather than risking a broken patch. Also caught and fixed a
+title regression from this: the file's `<title>` tag sits past the 8KB
+scan window the publish path uses to auto-detect a title, so the redeploy
+briefly fell back to the filename (`ux-directions-dusk-city`) until an
+explicit `title` param on the next publish corrected it back to
+"Itinera UX Directions" — worth remembering for any future edit-and-
+republish of this same exported-canvas file.
+
+**Not done yet, explicitly deferred**: wiring Direction C's tokens into
+the real `frontend/src/app/globals.css` (`--primary`/`--ring`/
+`--sidebar-primary`/`--sidebar-ring` + the tour-guide override block),
+applying the assistant-bubble tint to `ChatMessage.tsx`, and the WCAG AA
+contrast check that was already flagged as needed for any non-Direction-A
+palette. The live app still renders the old teal/amber palette — only the
+design canvas preview and the docs reflect the new choice so far.
+
 ## 2026-09-02 — Documentation rebuild, gitignore hygiene, and three design artifacts
 
 **Documentation rebuilt into this four-file structure**
