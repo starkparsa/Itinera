@@ -6,6 +6,27 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-04 — Trip Hub chat column now fills available width
+
+Follow-on to the accordion fix, same day: the user pointed at the
+`/trips/[tripId]` Trip Hub page and asked for the chat block (header,
+message list, composer) to be "horizontally dynamic." `ChatApp.tsx`'s
+`<main>` carried a flat `mx-auto max-w-3xl` cap regardless of context —
+the right call on the plain `/` chat, where `<main>` is the whole row,
+but on the Trip Hub page (with `TripHubPanel` as a shrink-0 sibling) it
+left the 768px-capped chat column centered in whatever space was left
+over next to the panel, instead of filling it — large uneven gaps on any
+reasonably wide viewport.
+
+Fix: the cap now applies only when `ChatApp` is rendered without a
+`rightPanel`; with one, `<main>` drops to a plain `w-full` and stretches
+to whatever width the flex row actually gives it. Message bubbles
+(already `max-w-[80%]` of their container) and the itinerary cards inside
+them get the same benefit for free. Verified with a static before/after
+HTML reproduction of the same flex layout (real login still isn't
+possible for the agent) — confirmed the dead gap is gone and the chat
+column now fills the row next to the panel.
+
 ## 2026-09-04 — Accordion collapse was never actually animating
 
 Follow-on, same day, after "lock the chat header/composer" shipped: the
@@ -36,6 +57,23 @@ contract (served locally, viewed via the browser tool) rather than
 through the real app, since logging in as the automated agent still
 isn't possible — confirmed a collapsed card now animates shut and the
 next card visibly moves up to fill the space.
+
+## 2026-09-04 — Chat header and composer locked in place
+
+Small layout request in between the Ticketmaster work and the accordion
+fix: the user wanted the chat title/header pinned to the top and the
+composer pinned to the bottom of the `/` chat page, with only the
+message list itself scrolling — the whole page had been scrolling as one
+block. Fixed in `ChatApp.tsx` by switching the outer container from
+`min-h-screen` to `h-dvh overflow-hidden` (a fixed-height shell instead
+of one that grows with content) and splitting the page into three
+explicit regions: a `shrink-0` header, a `min-h-0 flex-1 overflow-y-auto`
+scrollable middle, and a `shrink-0` footer. The `min-h-0` on the middle
+region turned out to be load-bearing, not decorative — a flex child's
+default `min-height: auto` silently blocks it from ever shrinking or
+scrolling in a column flex layout without it. Verified with a static
+HTML reproduction of the same three-region CSS contract, since logging
+into the real app as the agent still isn't possible.
 
 ## 2026-09-04 — Ticketmaster event discovery, with a real live-caught matching bug
 

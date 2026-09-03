@@ -8,7 +8,12 @@ _Last rebuilt: 2026-09-02, consolidating everything documented up to that
 date into this four-file structure (README/STATUS/decisions/progress).
 Last updated: 2026-09-04, after Trip Hub v2, Saved Places, Pexels trip
 photos, and Ticketmaster event discovery were all wired into the real
-app (see `progress.md`'s 2026-09-04 entries)._
+app, plus three same-day chat/Trip-Hub layout fixes: the chat header and
+composer locked in place with only the message list scrolling, the Day
+accordion cards actually animating shut (missing keyframes) instead of
+snapping, and the Trip Hub chat column filling available width instead
+of leaving dead space next to the side panel (see `progress.md`'s
+2026-09-04 entries)._
 
 ## Where the project stands
 
@@ -33,7 +38,9 @@ new `/trips` page (real trip cards — status pill, day count, a real
 per-city photo), and a new `/trips/[tripId]` Trip Hub page (the existing
 chat reused via `ChatApp`'s new `initialConversationId`/`rightPanel`
 props, plus a collapsible data column with Weather and Saved Places
-cards). The earlier "City Passport" (travel-document/boarding-pass)
+cards) — the chat column there now fills whatever width the row gives it
+next to that panel, instead of sitting in a fixed-width column with dead
+space beside it. The earlier "City Passport" (travel-document/boarding-pass)
 direction stays a rejected dead end, not touched. No native/PWA app
 exists yet.
 
