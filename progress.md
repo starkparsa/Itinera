@@ -6,6 +6,37 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-04 — Accordion collapse was never actually animating
+
+Follow-on, same day, after "lock the chat header/composer" shipped: the
+user asked that collapsing a Day card in the trip view let the following
+cards reflow up into the freed space, from a screenshot of the real
+running app. `frontend/src/components/ui/accordion.tsx` already applies
+`data-open:animate-accordion-down`/`data-closed:animate-accordion-up`,
+but no `accordion-down`/`accordion-up` keyframes existed anywhere in the
+project — no `tailwind.config.*` file at all (Tailwind v4, CSS-native
+config), and `globals.css`/the `tw-animate-css` package both lack them.
+
+That mattered functionally, not just cosmetically: base-ui's
+`useCollapsiblePanel` (shared by Accordion and Collapsible) decides how a
+panel closes by reading the *computed* `animation-name`/`-duration` off
+the panel element. With no real keyframe animation detected, it falls
+back to `animationType: 'none'` and unmounts the panel synchronously on
+close — which sounds like it should still reclaim space instantly, and
+does, but reads to a user as the card's content "just disappearing"
+rather than the layout dynamically reflowing, which is what was reported.
+
+Fix: added real `accordion-down`/`accordion-up` `@keyframes` (interpolating
+`height` against the `--accordion-panel-height` var the panel already
+exposes) plus matching `--animate-accordion-down`/`-up` entries in
+`globals.css`'s `@theme inline` block, so the classes already referenced
+in `accordion.tsx` resolve to a real CSS animation instead of a no-op.
+Verified with a minimal static HTML reproduction of the same CSS
+contract (served locally, viewed via the browser tool) rather than
+through the real app, since logging in as the automated agent still
+isn't possible — confirmed a collapsed card now animates shut and the
+next card visibly moves up to fill the space.
+
 ## 2026-09-04 — Ticketmaster event discovery, with a real live-caught matching bug
 
 A third planning round the same day, started from the user describing a

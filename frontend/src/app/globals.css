@@ -208,6 +208,31 @@ button {
   --radius-2xl: calc(var(--radius) * 1.8);
   --radius-3xl: calc(var(--radius) * 2.2);
   --radius-4xl: calc(var(--radius) * 2.6);
+  --animate-accordion-down: accordion-down 0.2s ease-out;
+  --animate-accordion-up: accordion-up 0.2s ease-out;
+}
+
+/* Drives the accordion-content collapse/expand in accordion.tsx. Without
+   these, `animate-accordion-down`/`-up` referenced there resolve to no
+   keyframes at all, so base-ui's useCollapsiblePanel (which detects motion
+   by reading computed animation-name/-duration) sees "no animation" and
+   snaps the panel closed instantly instead of collapsing -- which is also
+   why the layout around it never visibly reflows when a Day card closes. */
+@keyframes accordion-down {
+  from {
+    height: 0;
+  }
+  to {
+    height: var(--accordion-panel-height);
+  }
+}
+@keyframes accordion-up {
+  from {
+    height: var(--accordion-panel-height);
+  }
+  to {
+    height: 0;
+  }
 }
 
 @layer base {
