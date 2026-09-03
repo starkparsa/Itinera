@@ -16,7 +16,15 @@ THREE place tools exist now, split by what they're actually good at
     rating, price level, opening hours, category. Genuinely time-sensitive.
   - find_nearby_places (Google Places, billed): recommendations near a
     location -- a capability Wikipedia has no equivalent of at all.
-All three are reached through the SAME two loops
+A FOURTH tool, find_events (Ticketmaster, free, added 2026-09-04), covers
+real scheduled events -- concerts, games, shows -- a category none of the
+three place tools touch at all. Reached through the same two loops as the
+place tools (QA_AND_PLANNING_TOOL_SCHEMAS is shared across both), gated
+the same way: TICKETMASTER_API_KEY's presence
+(ticketmaster_client.TICKETMASTER_API_ENABLED) is its own kill switch,
+independent of the Places key.
+
+All four are reached through the SAME two loops
 (agent_service.answer_question_with_tools for conversational Q&A/tour-guide
 use, and agent_service.gather_place_context_for_itinerary for
 itinerary-planning background) -- see agent_service.py's module docstring
@@ -31,11 +39,13 @@ is configured.
 TOOL_SCHEMAS is in Gemini's function-calling shape (google.genai.types) as
 of the Gemini migration -- previously Ollama's dict-list shape.
 """
+from datetime import date
+
 import requests
 from google.genai import types
 
 from . import weather_service
-from .clients import google_places_client, wikipedia_client
+from .clients import google_places_client, ticketmaster_client, wikipedia_client
 
 _BRIEF_CHAR_CAP = 320  # enforced even if Wikipedia's own extract runs long,
                         # so "brief" stays genuinely brief regardless of topic
@@ -229,6 +239,50 @@ def find_nearby_places(place_type: str, near: str, limit: int = 5) -> dict:
     return {"results": results}
 
 
+def find_events(
+    city: str, keyword: str | None = None, start_date: str | None = None, end_date: str | None = None,
+) -> dict:
+    """Real, bookable events (concerts, games, shows) in `city`, optionally
+    filtered by `keyword` (the user's own stated interest, e.g. "jazz",
+    "basketball" -- never a guess at one) and/or a date window. Distinct
+    from find_nearby_places -- that's venues/businesses, this is
+    scheduled, dated events. Sourced from Ticketmaster (free).
+
+    Returns {"results": [{"event_id","name","date","time","venue","city",
+    "segment","genre","price_min","price_max","url"}, ...]} on success
+    (possibly an empty list), or {"error": ...} if Ticketmaster isn't
+    configured or nothing matched.
+    """
+    if not ticketmaster_client.TICKETMASTER_API_ENABLED:
+        return {"error": "Ticketmaster lookup is not configured"}
+
+    parsed_start = date.fromisoformat(start_date) if start_date else None
+    parsed_end = date.fromisoformat(end_date) if end_date else None
+    events = ticketmaster_client.search_events(city, keyword=keyword, start_date=parsed_start, end_date=parsed_end)
+    if not events:
+        return {"error": f"No events found for '{city}'" + (f" matching '{keyword}'" if keyword else "")}
+
+    results = []
+    for e in events:
+        classification = (e.get("classifications") or [{}])[0]
+        venues = (e.get("_embedded") or {}).get("venues") or []
+        price_ranges = (e.get("priceRanges") or [{}])[0]
+        results.append({
+            "event_id": e.get("id"),
+            "name": e.get("name"),
+            "date": (e.get("dates") or {}).get("start", {}).get("localDate"),
+            "time": (e.get("dates") or {}).get("start", {}).get("localTime"),
+            "venue": venues[0].get("name") if venues else None,
+            "city": (venues[0].get("city") or {}).get("name") if venues else None,
+            "segment": (classification.get("segment") or {}).get("name"),
+            "genre": (classification.get("genre") or {}).get("name"),
+            "price_min": price_ranges.get("min"),
+            "price_max": price_ranges.get("max"),
+            "url": e.get("url"),
+        })
+    return {"results": results}
+
+
 # Gemini-shaped tool schema (google.genai.types.Tool / FunctionDeclaration),
 # passed to GenerateContentConfig(tools=[...]) in agent_service.py.
 #
@@ -333,30 +387,64 @@ _FIND_NEARBY_PLACES_DECLARATION = types.FunctionDeclaration(
     },
 )
 
+_FIND_EVENTS_DECLARATION = types.FunctionDeclaration(
+    name="find_events",
+    description=(
+        "Find real, scheduled, bookable events -- concerts, games, shows -- "
+        "in a city, optionally filtered by the user's own stated interest "
+        "(keyword) and/or a date window. Distinct from find_nearby_places, "
+        "which is venues/businesses, not dated events. Free to call. If the "
+        "request's own wording clearly commits to building the trip around "
+        "a specific event this resolves (e.g. 'build a trip around X', "
+        "'plan it around this show'), say so explicitly and name the "
+        "event_id in your summary -- a request that merely asks what's "
+        "happening or browses options is NOT a commitment, and must never "
+        "be described as one."
+    ),
+    parameters_json_schema={
+        "type": "object",
+        "properties": {
+            "city": {"type": "string", "description": "City to search in"},
+            "keyword": {
+                "type": "string",
+                "description": "The user's own stated interest/genre, e.g. 'jazz', 'basketball' -- never a guess",
+            },
+            "start_date": {"type": "string", "description": "Optional ISO date (YYYY-MM-DD), start of the search window"},
+            "end_date": {"type": "string", "description": "Optional ISO date (YYYY-MM-DD), end of the search window"},
+        },
+        "required": ["city"],
+    },
+)
+
 # Used by agent_service.gather_trip_context (currency only).
 CURRENCY_TOOL_SCHEMAS = types.Tool(function_declarations=[_CONVERT_CURRENCY_DECLARATION])
 
-_PLACE_TOOL_DECLARATIONS = [
+# Shared by both agent_service.answer_question_with_tools and
+# gather_place_context_for_itinerary -- named for what it covers now
+# (place context AND events), not just "place" as before find_events
+# joined it 2026-09-04.
+_QA_AND_PLANNING_TOOL_DECLARATIONS = [
     _GET_PLACE_CONTEXT_DECLARATION,
     _GET_PLACE_DETAILS_DECLARATION,
     _FIND_NEARBY_PLACES_DECLARATION,
+    _FIND_EVENTS_DECLARATION,
 ]
 
-# Used by agent_service.answer_question_with_tools (place-context only).
-QA_TOOL_SCHEMAS = types.Tool(function_declarations=_PLACE_TOOL_DECLARATIONS)
+# Used by agent_service.answer_question_with_tools.
+QA_TOOL_SCHEMAS = types.Tool(function_declarations=_QA_AND_PLANNING_TOOL_DECLARATIONS)
 
-# Used by agent_service.gather_place_context_for_itinerary (place-context
-# only, itinerary-planning use rather than conversational Q&A -- own
+# Used by agent_service.gather_place_context_for_itinerary
+# (itinerary-planning use rather than conversational Q&A -- own
 # types.Tool wrapper so it can be independently kill-switched via
 # PLANNING_TOOL_CALLING_ENABLED without touching QA_TOOL_CALLING_ENABLED).
-PLANNING_TOOL_SCHEMAS = types.Tool(function_declarations=_PLACE_TOOL_DECLARATIONS)
+PLANNING_TOOL_SCHEMAS = types.Tool(function_declarations=_QA_AND_PLANNING_TOOL_DECLARATIONS)
 
 # Everything this module can do, for tests/introspection -- never pass this
 # combined list into a live GenerateContentConfig(tools=[...]) call, or a
 # loop's kill switch stops actually isolating its tool.
 TOOL_SCHEMAS = types.Tool(function_declarations=[
     _CONVERT_CURRENCY_DECLARATION,
-    *_PLACE_TOOL_DECLARATIONS,
+    *_QA_AND_PLANNING_TOOL_DECLARATIONS,
 ])
 
 TOOL_FUNCTIONS = {
@@ -364,4 +452,5 @@ TOOL_FUNCTIONS = {
     "get_place_context": get_place_context,
     "get_place_details": get_place_details,
     "find_nearby_places": find_nearby_places,
+    "find_events": find_events,
 }

@@ -1315,3 +1315,78 @@ def test_list_trips_photo_fetched_once_then_cached_on_the_trip_row():
         client.get("/trips")
 
     mock_search.assert_called_once()  # second list call reads the cached Trip.photo_url instead
+
+
+# ---------- Event-driven start date (Ticketmaster, event_planning.py) ----------
+
+FAKE_ITINERARY_COMMITTED_TO_EVENT = {
+    **FAKE_ITINERARY,
+    "agent_context": (
+        "Found Miami Heat vs. Phoenix Suns on 2027-03-08.\n"
+        "COMMITTED_EVENT_ID: abc123\n"
+        "Ground the itinerary around this game."
+    ),
+}
+
+
+def test_generate_trip_anchors_start_date_two_days_before_a_committed_event():
+    fake_event = {"id": "abc123", "dates": {"start": {"localDate": "2027-03-08"}}}
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY_COMMITTED_TO_EVENT),
+        patch("app.routers.trips.ticketmaster_client.get_event", return_value=fake_event) as mock_get_event,
+    ):
+        response = client.post("/trips/generate", json={"prompt": "plan a trip around that Heat game"})
+
+    assert response.status_code == 200
+    assert response.json()["start_date"] == "2027-03-06"  # 2 days before 2027-03-08
+    mock_get_event.assert_called_once_with("abc123")
+
+
+def test_generate_trip_does_not_anchor_when_no_commitment_marker_present():
+    # The planning loop found and mentioned an event in prose, but never
+    # emitted the required COMMITTED_EVENT_ID marker -- a browsing/
+    # interest-only turn, per PLANNING_TOOL_SYSTEM_PROMPT's instruction.
+    # Must not affect start_date at all.
+    fake_itinerary_browsing = {
+        **FAKE_ITINERARY,
+        "agent_context": "There's a Miami Heat game on 2027-03-08 if you're interested.",
+    }
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=fake_itinerary_browsing),
+        patch("app.routers.trips.ticketmaster_client.get_event") as mock_get_event,
+    ):
+        response = client.post("/trips/generate", json={"prompt": "any games on while I'm in Miami?"})
+
+    assert response.status_code == 200
+    assert response.json()["start_date"] is None
+    mock_get_event.assert_not_called()
+
+
+def test_explicit_date_in_prompt_wins_over_a_committed_event():
+    fake_event = {"id": "abc123", "dates": {"start": {"localDate": "2027-03-08"}}}
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY_COMMITTED_TO_EVENT),
+        patch("app.routers.trips.ticketmaster_client.get_event", return_value=fake_event) as mock_get_event,
+    ):
+        response = client.post(
+            "/trips/generate",
+            json={"prompt": "5 days in Miami starting September 20th, built around that Heat game"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["start_date"] == "2026-09-20"  # the prompt's own explicit date, not event-derived
+    mock_get_event.assert_not_called()  # never even looked up -- start_date was already resolved
+
+
+def test_committed_event_lookup_failure_falls_through_cleanly():
+    # get_event returning None (bad id, network failure) must not 500 --
+    # falls through to the next tier (previous_trip, then None) the same
+    # way a geocoding miss or any other optional lookup does elsewhere.
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY_COMMITTED_TO_EVENT),
+        patch("app.routers.trips.ticketmaster_client.get_event", return_value=None),
+    ):
+        response = client.post("/trips/generate", json={"prompt": "plan a trip around that Heat game"})
+
+    assert response.status_code == 200
+    assert response.json()["start_date"] is None

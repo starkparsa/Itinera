@@ -10,6 +10,7 @@ from .. import (
     agent_service,
     calendar_export,
     date_resolver,
+    event_planning,
     google_calendar,
     llm_service,
     models,
@@ -20,6 +21,7 @@ from .. import (
     weather_service,
 )
 from ..auth import get_current_user
+from ..clients import ticketmaster_client
 from ..database import get_db
 from ..rate_limit import limiter
 
@@ -416,12 +418,30 @@ def generate_trip(
         conversation.agent_context = result.get("agent_context", "")
 
     # Real calendar start date, resolved in Python (never LLM arithmetic --
-    # principle #6). If this turn's prompt doesn't say a date (e.g. an
-    # edit_trip turn like "make it longer"), fall back to whatever the
-    # previous trip in this conversation resolved (looked up once, above,
-    # and reused here), the same reuse pattern already used for the
-    # agent_context cache and the Q&A destination hint.
+    # principle #6). The user's own explicit date always wins first.
     start_date = date_resolver.resolve_trip_start_date(trip_request.prompt, date.today())
+
+    # Second: if this turn's planning loop found a specific event AND the
+    # request's own wording truly committed to building the trip around it
+    # (PLANNING_TOOL_SYSTEM_PROMPT's "COMMITTED_EVENT_ID:" marker -- never
+    # set for a browsing/interest-only question, so this can't fire just
+    # because find_events happened to resolve one result), let that
+    # event's real date -- re-fetched by id, never trusted from a
+    # possibly-stale earlier tool result -- set start_date instead. Tried
+    # before the previous_trip fallback below: a fresh commitment made
+    # THIS turn is a stronger signal than carrying forward an old trip's
+    # date.
+    if start_date is None:
+        committed_event_id = event_planning.extract_committed_event_id(result.get("agent_context", ""))
+        if committed_event_id:
+            event = ticketmaster_client.get_event(committed_event_id)
+            event_date_str = (event or {}).get("dates", {}).get("start", {}).get("localDate")
+            if event_date_str:
+                start_date = event_planning.resolve_start_date_for_event(date.fromisoformat(event_date_str))
+
+    # Third: whatever the previous trip in this conversation resolved
+    # (looked up once, above, and reused here), the same reuse pattern
+    # already used for the agent_context cache and the Q&A destination hint.
     if start_date is None and previous_trip:
         start_date = previous_trip.start_date
 
