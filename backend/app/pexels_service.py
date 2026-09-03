@@ -15,7 +15,6 @@ from datetime import datetime
 from . import models
 from .clients import pexels_client
 
-
 # Tried first, in order -- a night skyline shot is what the user actually
 # wants for every trip card; the plain destination name is the fallback
 # ONLY for a destination Pexels genuinely has no skyline-style photo for
