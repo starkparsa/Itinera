@@ -18,7 +18,7 @@
 
 import "server-only";
 import { backendAuthHeader } from "./authHeader";
-import type { ConversationDetail, ConversationSummary, TripResponse } from "./types";
+import type { ConversationDetail, ConversationSummary, TripResponse, TripSummary } from "./types";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
@@ -32,6 +32,32 @@ export async function listConversations(): Promise<ConversationSummary[]> {
     return await res.json();
   } catch {
     return []; // sidebar just won't update this run -- not worth blocking on, same as before
+  }
+}
+
+export async function listTrips(): Promise<TripSummary[]> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/trips`, {
+      cache: "no-store",
+      headers: await backendAuthHeader(),
+    });
+    if (!res.ok) return [];
+    return await res.json();
+  } catch {
+    return [];
+  }
+}
+
+export async function getTrip(tripId: number): Promise<TripResponse | null> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/trips/${tripId}`, {
+      cache: "no-store",
+      headers: await backendAuthHeader(),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
   }
 }
 

@@ -493,9 +493,14 @@ def generate_itinerary(
     # conversation whose first turn was a question -- a real bug found by
     # the 2026-08-30 code review, not something the "" caching was ever
     # meant to imply for this loop specifically.
+    found_places: list[dict] = []
     if cached_agent_context:
         trip_context = cached_agent_context
         destination, total_days = _infer_trip_meta(prompt, requested_days, conversation_context, previous_total_days)
+        # No fresh place-context call happened this turn (the cache above
+        # is reused instead), so there's nothing new to persist as a saved
+        # place here -- an earlier turn's own found_places, if any, were
+        # already persisted when they were found.
     else:
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             currency_future = executor.submit(agent_service.gather_trip_context, prompt)
@@ -504,7 +509,7 @@ def generate_itinerary(
                 _infer_trip_meta, prompt, requested_days, conversation_context, previous_total_days,
             )
             currency_context = currency_future.result()
-            place_context = place_future.result()
+            place_context, found_places = place_future.result()
             destination, total_days = meta_future.result()
         # Two independent findings, both optional -- join whichever are
         # non-empty rather than assuming both ran/found something (either
@@ -526,6 +531,13 @@ def generate_itinerary(
     result = {"destination": destination, "days": all_days}
     if trip_context:
         result["agent_context"] = trip_context
+    if found_places:
+        # Raw {"tool","args","result"} entries from the planning tool loop
+        # (agent_service.gather_place_context_for_itinerary) -- routers/
+        # trips.py filters these to find_nearby_places/get_place_details
+        # only and persists them as models.SavedPlace rows once trip.id
+        # exists. Never surfaced to the LLM prompt itself, only used here.
+        result["found_places"] = found_places
     if requested_days and requested_days > MAX_TOTAL_DAYS:
         result["note"] = f"Requested {requested_days} days exceeds the {MAX_TOTAL_DAYS}-day limit; showing the first {MAX_TOTAL_DAYS} days."
     return result

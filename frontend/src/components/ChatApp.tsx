@@ -1,6 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Menu, Luggage } from "lucide-react";
 import type { ConversationSummary, MessageOut, TripResponse } from "@/lib/types";
 import { deleteConversation, generateTrip, getConversation, listConversations } from "@/lib/backend";
 import Sidebar from "./Sidebar";
@@ -8,6 +10,7 @@ import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import CalendarPushButton from "./CalendarPushButton";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button, buttonVariants } from "@/components/ui/button";
 
 // Newest message first whose trip has a resolved start_date -- port of
 // streamlit_app.py::_latest_exportable_trip(). Export stays hidden entirely
@@ -23,9 +26,21 @@ function latestExportableTrip(messages: MessageOut[]): TripResponse | null {
 export default function ChatApp({
   initialConversations,
   userEmail,
+  initialConversationId,
+  rightPanel,
 }: {
   initialConversations: ConversationSummary[];
   userEmail: string | null;
+  // Pre-selects a conversation on mount -- used by the Trip Hub page
+  // (app/trips/[tripId]/page.tsx) to open straight into a specific trip's
+  // chat instead of the empty "describe a trip" state. Omitted (the
+  // default) on the plain "/" entry point, which is unaffected.
+  initialConversationId?: number | null;
+  // Extra column rendered as a sibling of <main>, after it -- the Trip Hub
+  // page's collapsible Weather panel. Reusing this whole component rather
+  // than re-deriving chat rendering avoids two sources of truth for the
+  // same message list.
+  rightPanel?: React.ReactNode;
 }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>(initialConversations);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
@@ -37,10 +52,21 @@ export default function ChatApp({
   // it reverts automatically the moment a load reflects the mode turning
   // back off (e.g. after an edit/new-trip turn, or switching chats).
   const [tourGuideMode, setTourGuideMode] = useState(false);
+  // Collapsed by default -- "nothing extra on screen until asked for it,"
+  // per the Trip Hub v2 direction (decisions.md's UI styling entry).
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   async function refreshConversationList() {
     setConversations(await listConversations());
   }
+
+  // Runs once on mount only (the Trip Hub page never changes which trip a
+  // given mounted page points at -- navigating to a different trip is a
+  // full route change, not a prop update on this same instance).
+  useEffect(() => {
+    if (initialConversationId) loadConversation(initialConversationId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function loadConversation(id: number) {
     const detail = await getConversation(id);
@@ -95,25 +121,40 @@ export default function ChatApp({
       className="flex min-h-screen flex-col md:flex-row"
       data-tour-guide-mode={tourGuideMode ? "true" : undefined}
     >
-      <Sidebar
-        conversations={conversations}
-        activeConversationId={activeConversationId}
-        onSelect={loadConversation}
-        onNewChat={startNewChat}
-        onDelete={handleDelete}
-        userEmail={userEmail}
-      />
+      {sidebarOpen && (
+        <Sidebar
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelect={loadConversation}
+          onNewChat={startNewChat}
+          onDelete={handleDelete}
+          userEmail={userEmail}
+        />
+      )}
 
       <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col px-4 py-6 md:px-8">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="flex items-center gap-2 text-xl font-semibold">
-            <img src="/logo-mark.png" alt="" aria-hidden className="h-5 w-5" /> Itinera
-          </h1>
-          {topExportTrip && (
-            <div className="flex shrink-0 items-center gap-2">
-              <CalendarPushButton trip={topExportTrip} />
-            </div>
-          )}
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="icon"
+              className="size-8"
+              aria-label={sidebarOpen ? "Hide chats" : "Show chats"}
+              onClick={() => setSidebarOpen((open) => !open)}
+            >
+              <Menu className="size-4" />
+            </Button>
+            <h1 className="flex items-center gap-2 text-xl font-semibold">
+              <img src="/logo-mark.png" alt="" aria-hidden className="h-5 w-5" /> Itinera
+            </h1>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Link href="/trips" className={buttonVariants({ variant: "outline", size: "sm" })}>
+              <Luggage className="size-4" />
+              Your trips
+            </Link>
+            {topExportTrip && <CalendarPushButton trip={topExportTrip} />}
+          </div>
         </div>
 
         {messages.length === 0 && !pendingPrompt && (
@@ -147,6 +188,8 @@ export default function ChatApp({
 
         <ChatInput disabled={pendingPrompt !== null} onSubmit={handleSubmit} />
       </main>
+
+      {rightPanel}
     </div>
   );
 }

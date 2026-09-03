@@ -3,10 +3,12 @@ from unittest.mock import patch
 
 import pytest
 from conftest import TEST_GOOGLE_SUB
+from fastapi import Depends
 from fastapi.testclient import TestClient
 
 from app import date_resolver, models
-from app.database import Base, SessionLocal, engine
+from app.auth import get_current_user
+from app.database import Base, SessionLocal, engine, get_db
 from app.main import app
 from app.routers.trips import MAX_CONTEXT_CHARS, _build_conversation_context
 
@@ -55,7 +57,7 @@ def mock_qa_tools_by_default():
     # and app.routers.trips.agent_service are the same module object, so a
     # global autouse patch here would also clobber
     # test_agent_service.py's own direct tests of the real function.
-    with patch("app.routers.trips.agent_service.answer_question_with_tools", return_value=""):
+    with patch("app.routers.trips.agent_service.answer_question_with_tools", return_value=("", [])):
         yield
 
 
@@ -366,7 +368,7 @@ def test_question_uses_place_context_tool_answer_when_available():
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
         patch(
             "app.routers.trips.agent_service.answer_question_with_tools",
-            return_value="The Louvre is a famous museum in Paris.",
+            return_value=("The Louvre is a famous museum in Paris.", []),
         ) as mock_qa_tools,
         patch("app.llm_service.answer_question") as mock_answer,
     ):
@@ -385,7 +387,7 @@ def test_question_falls_back_to_plain_answer_when_tool_loop_returns_nothing():
     with (
         patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
-        patch("app.routers.trips.agent_service.answer_question_with_tools", return_value="") as mock_qa_tools,
+        patch("app.routers.trips.agent_service.answer_question_with_tools", return_value=("", [])) as mock_qa_tools,
         patch("app.llm_service.answer_question", return_value="A generic answer.") as mock_answer,
     ):
         response = client.post("/trips/generate", json={"prompt": "how much does that cost?"})
@@ -407,7 +409,7 @@ def test_tour_guide_mode_persists_across_question_turns_and_clears_on_edit_trip(
         patch("app.llm_service.classify_intent", return_value=("question", True)),
         patch(
             "app.routers.trips.agent_service.answer_question_with_tools",
-            return_value="Sure, let's go!",
+            return_value=("Sure, let's go!", []),
         ) as mock_qa,
     ):
         response = client.post("/trips/generate", json={"prompt": "be my tour guide"})
@@ -437,7 +439,7 @@ def test_tour_guide_mode_persists_across_question_turns_and_clears_on_edit_trip(
         patch("app.llm_service.classify_intent", return_value=("question", False)),
         patch(
             "app.routers.trips.agent_service.answer_question_with_tools",
-            return_value="More detail...",
+            return_value=("More detail...", []),
         ) as mock_qa2,
     ):
         turn2 = client.post(
@@ -986,6 +988,147 @@ def test_list_conversations_rejects_a_limit_above_the_hard_cap():
     assert response.status_code == 422  # FastAPI's own Query(le=...) validation, not a silent clamp
 
 
+# ---------- GET /trips (list, backs the "Your Trips" page) ----------
+
+def test_list_trips_returns_most_recent_first():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        client.post("/trips/generate", json={"prompt": "first trip"})
+        client.post("/trips/generate", json={"prompt": "second trip"})
+
+    trips = client.get("/trips").json()
+    assert len(trips) == 2
+    assert trips[0]["destination"] == "Austin"  # both come from FAKE_ITINERARY; order is what's under test
+    assert trips[0]["created_at"] >= trips[1]["created_at"]
+
+
+def test_list_trips_collapses_multiple_edit_turns_to_one_card():
+    # Regression test: a real user conversation refined 4 times showed up
+    # as 4 separate "Miami" cards on Your Trips, because generate_trip
+    # creates a brand-new Trip row on every edit_trip turn (it never
+    # updates one in place) and list_trips originally listed every row
+    # unfiltered. One conversation should always be exactly one card,
+    # reflecting the latest version -- confirmed here with a real
+    # multi-turn edit sequence, not just a single generate call.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        first = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    conv_id = first.json()["conversation_id"]
+    first_trip_id = first.json()["trip_id"]
+
+    later_itinerary = {**FAKE_ITINERARY, "destination": "Austin (updated)"}
+    with patch("app.llm_service.generate_itinerary", return_value=later_itinerary):
+        for _ in range(3):
+            latest = client.post(
+                "/trips/generate", json={"prompt": "add a day", "conversation_id": conv_id},
+            )
+    latest_trip_id = latest.json()["trip_id"]
+
+    assert latest_trip_id != first_trip_id  # really did create new rows each time
+
+    trips = client.get("/trips").json()
+    assert len(trips) == 1
+    assert trips[0]["id"] == latest_trip_id
+    assert trips[0]["destination"] == "Austin (updated)"
+
+
+def test_list_trips_keeps_conversationless_trips_separate_not_collapsed():
+    # A Trip with no conversation_id (e.g. its conversation was later
+    # deleted -- Trip.conversation_id is ON DELETE SET NULL) has nothing
+    # to group by. A naive `GROUP BY conversation_id` would put every such
+    # trip in the same NULL group and only show the single latest one --
+    # this confirms each stays its own card instead.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    trip_id = response.json()["trip_id"]
+    conv_id = response.json()["conversation_id"]
+
+    # Detach this trip from its conversation, then delete the conversation
+    # (real ON DELETE SET NULL path) so a second, genuinely
+    # conversation-less trip can be created independently.
+    db = SessionLocal()
+    try:
+        db.query(models.Trip).filter(models.Trip.id == trip_id).update({"conversation_id": None})
+        db.commit()
+    finally:
+        db.close()
+    client.delete(f"/conversations/{conv_id}")
+
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        client.post("/trips/generate", json={"prompt": "another weekend in Austin"})
+
+    trips = client.get("/trips").json()
+    assert len(trips) == 2
+
+
+def test_list_trips_respects_limit_and_offset():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        for prompt in ("trip one", "trip two", "trip three"):
+            client.post("/trips/generate", json={"prompt": prompt})
+
+    first_page = client.get("/trips", params={"limit": 2, "offset": 0}).json()
+    second_page = client.get("/trips", params={"limit": 2, "offset": 2}).json()
+
+    assert len(first_page) == 2
+    assert len(second_page) == 1
+    assert {t["id"] for t in first_page}.isdisjoint({t["id"] for t in second_page})
+
+
+def test_list_trips_rejects_a_limit_above_the_hard_cap():
+    response = client.get("/trips", params={"limit": 99999})
+    assert response.status_code == 422
+
+
+def test_list_trips_only_returns_the_current_users_trips():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        client.post("/trips/generate", json={"prompt": "my trip"})
+
+    # Swap the authenticated user mid-test to someone who owns nothing.
+    def _other_user(db=Depends(get_db)):
+        user = models.User(google_sub="a-different-google-sub", email="someone-else@example.com")
+        db.add(user)
+        db.flush()
+        return user
+
+    app.dependency_overrides[get_current_user] = _other_user
+    try:
+        response = client.get("/trips")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+    assert response.json() == []
+
+
+def test_list_trips_includes_derived_day_count_and_status():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        response = client.post("/trips/generate", json={"prompt": "a trip with no date mentioned"})
+    conv_id = response.json()["conversation_id"]
+
+    trips = client.get("/trips").json()
+    assert len(trips) == 1
+    assert trips[0]["day_count"] == 1  # FAKE_ITINERARY has a single day_number: 1 item
+    # No date-like text in the prompt above, so date_resolver resolves
+    # nothing and this should read as a draft -- exercises the real
+    # endpoint-to-trip_status wiring, not just derive_status in isolation
+    # (already covered by test_trip_status.py).
+    assert trips[0]["status"] == "draft"
+    assert trips[0]["start_date"] is None
+
+    # Now force a resolved start_date directly (avoids relying on fuzzy
+    # prompt-text date parsing here) and set it far enough in the past that
+    # a 1-day trip is unambiguously over, to confirm the "completed" branch
+    # is reachable end-to-end through the same endpoint.
+    db = SessionLocal()
+    try:
+        trip = db.query(models.Trip).filter(models.Trip.conversation_id == conv_id).first()
+        trip.start_date = date(2000, 1, 1)
+        db.commit()
+    finally:
+        db.close()
+
+    trips_after = client.get("/trips").json()
+    assert trips_after[0]["status"] == "completed"
+    assert trips_after[0]["start_date"] == "2000-01-01"
+
+
 # ---------- per-account daily quota (usage_quota.py) ----------
 
 def test_generate_trip_returns_429_once_the_daily_quota_is_exhausted():
@@ -1016,3 +1159,159 @@ def test_daily_quota_blocks_before_any_llm_call_at_all():
 
     assert response.status_code == 429
     mock_classify.assert_not_called()
+
+
+# ---------- Saved Places auto-persistence (models.SavedPlace) ----------
+
+FAKE_ITINERARY_WITH_PLACES = {
+    **FAKE_ITINERARY,
+    "found_places": [
+        {
+            "tool": "find_nearby_places",
+            "args": {"place_type": "cafe", "near": "Wynwood"},
+            "result": {"results": [
+                {"name": "Maman", "rating": 4.6, "address": "123 NW 2nd Ave", "price_level": "PRICE_LEVEL_MODERATE"},
+                {"name": "Angelina", "rating": 4.4, "address": "456 NW 3rd Ave", "price_level": None},
+            ]},
+        },
+    ],
+}
+
+
+def test_generate_trip_persists_found_places_from_the_planning_loop():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY_WITH_PLACES):
+        response = client.post("/trips/generate", json={"prompt": "trip with cafes near Wynwood"})
+    trip_id = response.json()["trip_id"]
+
+    trip_response = client.get(f"/trips/{trip_id}").json()
+    names = {p["name"] for p in trip_response["saved_places"]}
+    assert names == {"Maman", "Angelina"}
+    maman = next(p for p in trip_response["saved_places"] if p["name"] == "Maman")
+    assert maman["rating"] == 4.6
+    assert maman["price_level"] == "PRICE_LEVEL_MODERATE"
+
+
+def test_generate_trip_never_persists_wikipedia_or_currency_results_as_places():
+    fake_with_wikipedia = {
+        **FAKE_ITINERARY,
+        "found_places": [
+            {"tool": "get_place_context", "args": {"place_name": "Austin"}, "result": {"place": "Austin", "summary": "..."}},
+        ],
+    }
+    with patch("app.llm_service.generate_itinerary", return_value=fake_with_wikipedia):
+        response = client.post("/trips/generate", json={"prompt": "trip to Austin"})
+    trip_id = response.json()["trip_id"]
+
+    trip_response = client.get(f"/trips/{trip_id}").json()
+    assert trip_response["saved_places"] == []
+
+
+def test_repeated_find_nearby_places_call_does_not_duplicate_saved_places():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY_WITH_PLACES):
+        first = client.post("/trips/generate", json={"prompt": "trip with cafes near Wynwood"})
+    conv_id = first.json()["conversation_id"]
+    trip_id = first.json()["trip_id"]
+
+    # An edit turn in the SAME conversation that re-surfaces "Maman" (a
+    # trip already exists here, so this exercises the planning path's
+    # dedupe against a real existing row, not just an empty table).
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY_WITH_PLACES):
+        client.post("/trips/generate", json={"prompt": "add a day", "conversation_id": conv_id})
+
+    trip_response = client.get(f"/trips/{trip_id}").json()
+    maman_count = sum(1 for p in trip_response["saved_places"] if p["name"] == "Maman")
+    assert maman_count == 1
+
+
+def test_question_turn_persists_found_places_against_the_conversations_latest_trip():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        generate_response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    conv_id = generate_response.json()["conversation_id"]
+    trip_id = generate_response.json()["trip_id"]
+
+    qa_tool_calls = [
+        {"tool": "find_nearby_places", "args": {}, "result": {"results": [
+            {"name": "Radio Coffee", "rating": 4.7, "address": "4204 Menchaca Rd", "price_level": None},
+        ]}},
+    ]
+    with (
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch(
+            "app.routers.trips.agent_service.answer_question_with_tools",
+            return_value=("A few spots nearby.", qa_tool_calls),
+        ),
+    ):
+        response = client.post(
+            "/trips/generate", json={"prompt": "any good coffee nearby?", "conversation_id": conv_id},
+        )
+
+    assert response.status_code == 200
+    trip_response = client.get(f"/trips/{trip_id}").json()
+    assert {p["name"] for p in trip_response["saved_places"]} == {"Radio Coffee"}
+
+
+def test_question_turn_with_no_existing_trip_skips_persistence_cleanly():
+    # No trip exists yet in a brand-new conversation -- nothing to attach
+    # a found place to, should not error.
+    qa_tool_calls = [
+        {"tool": "find_nearby_places", "args": {}, "result": {"results": [{"name": "Some Cafe", "rating": 4.0, "address": None, "price_level": None}]}},
+    ]
+    with (
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch(
+            "app.routers.trips.agent_service.answer_question_with_tools",
+            return_value=("Sure, here's one.", qa_tool_calls),
+        ),
+    ):
+        response = client.post("/trips/generate", json={"prompt": "any good coffee nearby?"})
+
+    assert response.status_code == 200  # doesn't 500 despite nothing to attach the place to
+
+
+# ---------- Pexels trip photos (GET /trips list) ----------
+
+def test_list_trips_includes_photo_when_pexels_configured():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+
+    with (
+        patch("app.routers.trips.pexels_service.pexels_client.PEXELS_API_ENABLED", True),
+        patch(
+            "app.routers.trips.pexels_service.pexels_client.search_photo",
+            return_value={"url": "https://images.pexels.com/austin.jpeg", "photographer": "Jane Doe", "photographer_url": "x"},
+        ),
+    ):
+        trips = client.get("/trips").json()
+
+    assert trips[0]["photo_url"] == "https://images.pexels.com/austin.jpeg"
+    assert trips[0]["photo_credit"] == "Jane Doe"
+
+
+def test_list_trips_photo_is_null_when_pexels_not_configured():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+
+    with patch("app.routers.trips.pexels_service.pexels_client.PEXELS_API_ENABLED", False):
+        trips = client.get("/trips").json()
+
+    assert trips[0]["photo_url"] is None
+    assert trips[0]["photo_credit"] is None
+
+
+def test_list_trips_photo_fetched_once_then_cached_on_the_trip_row():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+
+    with (
+        patch("app.routers.trips.pexels_service.pexels_client.PEXELS_API_ENABLED", True),
+        patch(
+            "app.routers.trips.pexels_service.pexels_client.search_photo",
+            return_value={"url": "https://images.pexels.com/austin.jpeg", "photographer": "Jane Doe", "photographer_url": "x"},
+        ) as mock_search,
+    ):
+        client.get("/trips")
+        client.get("/trips")
+
+    mock_search.assert_called_once()  # second list call reads the cached Trip.photo_url instead
