@@ -136,8 +136,19 @@ export default function ChatApp({
           is what actually makes the middle region scrollable instead of
           the whole page -- a flex child's default min-height is `auto`,
           which silently blocks it from ever shrinking/scrolling in a
-          column flex layout without this. */}
-      <main className="mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col overflow-hidden px-4 md:px-8">
+          column flex layout without this.
+
+          The centered max-w-3xl reading column only makes sense on the
+          plain "/" chat, where <main> is the entire row. On the Trip Hub
+          page (rightPanel set), that same fixed cap left <main> centered
+          in whatever space was left over next to the panel instead of
+          actually filling it -- so drop the cap there and let the chat
+          block stretch to whatever width the row actually gives it. */}
+      <main
+        className={`flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-8 ${
+          rightPanel ? "w-full" : "mx-auto w-full max-w-3xl"
+        }`}
+      >
         {/* Locked to the top -- shrink-0 so the scrollable region below never pushes it out of view. */}
         <div className="flex shrink-0 items-center justify-between gap-4 pt-6 pb-2">
           <div className="flex items-center gap-2">
