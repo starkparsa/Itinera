@@ -217,3 +217,84 @@ def test_find_nearby_places_error_when_both_geocoders_fail():
         result = tools.find_nearby_places("cafe", near="Nowhereville")
 
     assert "error" in result
+
+
+def test_find_events_not_configured_returns_error_no_network_call():
+    with patch("app.tools.ticketmaster_client.TICKETMASTER_API_ENABLED", False), \
+         patch("app.tools.ticketmaster_client.search_events") as mock_search:
+        result = tools.find_events("Miami")
+
+    assert "error" in result
+    mock_search.assert_not_called()
+
+
+def test_find_events_success_flattens_and_handles_missing_optional_fields():
+    # Real Ticketmaster responses frequently omit classifications/
+    # priceRanges/venues entirely -- confirmed live during planning.
+    raw_events = [
+        {
+            "id": "abc123",
+            "name": "Miami Heat vs. Phoenix Suns",
+            "dates": {"start": {"localDate": "2027-03-08", "localTime": "19:30:00"}},
+            "classifications": [{"segment": {"name": "Sports"}, "genre": {"name": "Basketball"}}],
+            "priceRanges": [{"min": 45.0, "max": 350.0}],
+            "url": "https://www.ticketmaster.com/miami-heat-vs-phoenix-suns/event/abc123",
+            "_embedded": {"venues": [{"name": "Kaseya Center", "city": {"name": "Miami"}}]},
+        },
+        {
+            # No classifications, priceRanges, or venues at all.
+            "id": "def456",
+            "name": "Mystery Event",
+            "dates": {"start": {"localDate": "2027-04-01"}},
+        },
+    ]
+    with patch("app.tools.ticketmaster_client.TICKETMASTER_API_ENABLED", True), \
+         patch("app.tools.ticketmaster_client.search_events", return_value=raw_events) as mock_search:
+        result = tools.find_events("Miami", keyword="basketball")
+
+    mock_search.assert_called_once_with("Miami", keyword="basketball", start_date=None, end_date=None)
+    assert result["results"][0] == {
+        "event_id": "abc123",
+        "name": "Miami Heat vs. Phoenix Suns",
+        "date": "2027-03-08",
+        "time": "19:30:00",
+        "venue": "Kaseya Center",
+        "city": "Miami",
+        "segment": "Sports",
+        "genre": "Basketball",
+        "price_min": 45.0,
+        "price_max": 350.0,
+        "url": "https://www.ticketmaster.com/miami-heat-vs-phoenix-suns/event/abc123",
+    }
+    assert result["results"][1] == {
+        "event_id": "def456",
+        "name": "Mystery Event",
+        "date": "2027-04-01",
+        "time": None,
+        "venue": None,
+        "city": None,
+        "segment": None,
+        "genre": None,
+        "price_min": None,
+        "price_max": None,
+        "url": None,
+    }
+
+
+def test_find_events_no_results_returns_error():
+    with patch("app.tools.ticketmaster_client.TICKETMASTER_API_ENABLED", True), \
+         patch("app.tools.ticketmaster_client.search_events", return_value=[]):
+        result = tools.find_events("Nowhereville")
+
+    assert "error" in result
+
+
+def test_find_events_passes_parsed_date_window():
+    with patch("app.tools.ticketmaster_client.TICKETMASTER_API_ENABLED", True), \
+         patch("app.tools.ticketmaster_client.search_events", return_value=[]) as mock_search:
+        tools.find_events("Miami", start_date="2026-09-12", end_date="2026-09-17")
+
+    from datetime import date
+    mock_search.assert_called_once_with(
+        "Miami", keyword=None, start_date=date(2026, 9, 12), end_date=date(2026, 9, 17),
+    )
