@@ -181,16 +181,26 @@ bespoke Streamlit-leftover red and shadcn's default grayscale — Tailwind's
 own teal-700/teal-400 oklch stops, not hand-picked. Dark mode stays
 `prefers-color-scheme`-driven, no toggle, no JS theming dependency.
 
-**Palette: Direction C, "Dusk City," chosen 2026-09-03** — indigo primary
-(`oklch(0.45 0.11 265)`) + copper tour-guide accent
-(`oklch(0.58 0.15 55)`), replacing the teal/amber pair above. Picked from
-four researched directions in `docs/design-references.md`'s Palette
-Directions artifact for a travel-evocative feel without going literally
-nature- or city-photograph-themed. *Not yet wired into `globals.css` —
-still mockup-only as of this writing.* Every mockup built after this point
-uses hue-locked neutrals derived from the same 265° hue rather than plain
-grey, deliberately, not just for these mockups but as the pattern to carry
-into the real tokens.
+**Palette: Direction C, "Dusk City," chosen 2026-09-03, wired into
+`globals.css` 2026-09-04** — indigo primary (`oklch(0.45 0.11 265)`) +
+copper tour-guide accent (`oklch(0.58 0.15 55)`), replacing the teal/amber
+pair above. Picked from four researched directions in
+`docs/design-references.md`'s Palette Directions artifact for a
+travel-evocative feel without going literally nature- or
+city-photograph-themed. Every token (including neutrals, hue-locked to the
+same 265° rather than plain grey) is now live, not mockup-only. *Revisit:
+the oklch values are still first-pass estimates, not verified
+Tailwind-named stops — a real WCAG AA contrast check is owed before
+treating them as final.*
+
+**The assistant's chat bubble never recolored in tour-guide mode — only
+the user's own did, since only the user bubble ever rode `--primary`
+directly.** Fixed 2026-09-04 alongside the palette wiring: three new
+tokens (`--chat-assistant-bg`/`-border`/`-fg`, defaulting to the existing
+card tokens so normal mode is pixel-unchanged) get overridden to a soft
+copper tint inside the same `[data-tour-guide-mode="true"]` block that
+already swaps `--primary`. No new JS state — `ChatMessage.tsx` just reads
+different tokens, the existing attribute-selector mechanism does the rest.
 
 **UI direction: "Trip Hub v2," chosen 2026-09-03, after a same-day
 rejected exploration.** A "City Passport" direction — the interface framed
@@ -209,12 +219,106 @@ don't re-propose a stamp/passport metaphor by default.*
 collapsed by default, opened only on request** — the strongest form yet of
 the "don't show a tool before it's been asked for" principle, extended
 from individual data cards (below) to the surrounding chrome itself.
-Implemented as a `display: none` toggle, not `width: 0` — the latter was
-tried first and silently broke the responsive stacked layout (collapsed
-content still claimed a full row's height). *Revisit: if this needs to
+In the mockup this was `display: none` (not `width: 0`, which silently
+broke the responsive stacked layout); the real implementation
+(`ChatApp.tsx`/`TripHubPanel.tsx`, 2026-09-04) uses React conditional
+rendering, the framework-native equivalent. *Revisit: if this needs to
 become a persisted-per-user preference rather than always-collapsed-by-
-default, that's real state (localStorage or `User` row), not a CSS
-default.*
+default, that's real state (localStorage or `User` row), not component
+state.*
+
+**Trip Hub v2 wired into the real app 2026-09-04**: `GET /trips` (new
+endpoint) + `/trips` and `/trips/[tripId]` (new frontend routes). Reuses
+`ChatApp`'s existing message rendering for the Trip Hub page (via new
+`initialConversationId`/`rightPanel` props) rather than building a second
+chat renderer; the day-by-day itinerary is deliberately not duplicated
+outside the chat stream either, for the same reason — it already renders
+via `TripView` inside the message that generated it.
+
+**`GET /trips` shows one card per conversation, not one per `Trip` row —
+a real bug found and fixed the same day it shipped.** `generate_trip`
+creates a brand-new `Trip` row on every `new_trip`/`edit_trip` turn (it
+never updates one in place — see `edit_trip`'s own note above); the first
+version of `list_trips` listed every row unfiltered, so a conversation
+refined 4 times showed up as 4 duplicate cards — confirmed against a real
+user's live data. Fixed by keeping only the latest `Trip` per
+`conversation_id`. The first fix attempt (`GROUP BY
+coalesce(conversation_id, id)`, to give conversation-less orphan trips
+their own group) had its own real bug, also caught before shipping: `Trip`
+and `Conversation` ids are independent sequences that can produce the same
+number, so an orphan's own id could numerically collide with an unrelated
+trip's real `conversation_id` and wrongly merge the two. Replaced with two
+separate, unioned queries (grouped-by-conversation trips; conversation-less
+trips standing alone) — structurally collision-proof rather than just
+unlikely to collide. *Revisit: never revert to the single coalesced-key
+form without re-reading why.*
+
+## Saved Places (auto-persisted, no manual save action)
+
+**Places `find_nearby_places`/`get_place_details` surface for a trip are
+persisted automatically the moment the tool call succeeds — no "save this
+place" button exists or is planned**, confirmed explicitly with the user
+2026-09-04: building manual save would first require structured place
+cards in the chat UI (places today are plain prose in the LLM's reply),
+real scope beyond persistence alone. `models.SavedPlace`, deduped at the
+application level on `(trip_id, name)` (not a DB unique constraint — an
+edit turn re-surfacing the same place shouldn't duplicate it).
+
+**`_run_tool_loop` (shared by all three agentic loops) now returns the raw
+tool-call results alongside the reply text, not just the text.**
+Filtering to "only Places-tool results become a saved place" (never
+Wikipedia's `get_place_context`, never the paused currency tool) happens
+at the *consumption* site (`routers/trips.py`), not inside the shared
+loop — keeps that helper tool-agnostic, matching how it already stayed
+agnostic about which of the three loops was calling it.
+
+**Places found *before* a `Trip` row exists (the planning loop runs ahead
+of `generate_itinerary` creating one) get threaded through
+`generate_itinerary`'s existing result dict as `found_places`, persisted
+only once `db.flush()` gives a real `trip.id`.** On the Q&A path, no new
+`Trip` is ever created — found places attach to whatever trip already
+exists in that conversation (`latest_trip`), or are simply not persisted
+if none does yet; never fabricates a trip to hold a place.
+
+## Trip photos (Pexels)
+
+**Pexels, not a second Google Places call** — free tier confirmed live
+(200 req/hr, 20,000/month, no card, per Pexels' own docs), and photography
+is a different concern from place *data*, so a separate, purpose-built
+client (`pexels_client.py`) mirrors `google_places_client.py`'s shape
+rather than overloading the Places integration.
+
+**Fetched once per trip, ever — no TTL, unlike weather's 3-hour cache.** A
+destination's representative photo doesn't go stale the way a forecast
+does; `pexels_service.get_or_refresh_trip_photo` checks only whether
+`Trip.photo_url is None`, never a freshness window.
+
+**Query tries `"{destination} city skyline at night"` first, falls back
+to the plain destination name only if that returns zero results** —
+requested explicitly by the user 2026-09-04 ("I want to see the city
+skyline in the night for every place... only if that is not possible").
+Live-verified this fallback rarely actually triggers: Pexels' search is
+permissive enough to return *something* for almost any real-word query
+(even "Yellowstone National Park city skyline at night" found a result),
+so "not possible" in practice means a genuinely empty API response, not a
+semantic judgment this integration is equipped to make — there's no
+vision-based relevance check here, intentionally, matching this
+codebase's general anti-fabrication stance (never guess, only use real
+data or omit).
+
+**A real schema bug caught by inspecting the live DB, not just tests**:
+`main.py`'s `Base.metadata.create_all()` (a documented dev-convenience
+safety net) silently created `saved_places` on a dev-server auto-reload
+*before* `price_level`'s column width was corrected from `String(20)` to
+`String(40)` (Google's own `priceLevel` enum values run up to 26 chars,
+e.g. `PRICE_LEVEL_VERY_EXPENSIVE`) — the Alembic migration for the table
+alone was silently a no-op against a DB that already had it. Caught by
+directly inspecting the live schema post-migration, not by trusting the
+migration's exit code; fixed with a follow-up migration. *Revisit: a
+useful reminder that `create_all`'s "harmless no-op" claim only holds for
+column *existence*, not column *shape* — a model change to an
+already-`create_all`'d table always needs a real migration, checked
+against the live schema, not assumed to have been a no-op.*
 
 ## Persistent tour-guide mode
 

@@ -6,6 +6,93 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-04 — Trip Hub v2, Saved Places, and Pexels photos all shipped
+
+Planned in two rounds (`EnterPlanMode`/`ExitPlanMode`, both approved
+before writing code) and implemented across a single session, continuing
+directly from the previous day's design work.
+
+**Round 1 — Trip Hub v2 into the real app.** Two Explore-agent passes
+first, to find the real gap between the mockup and the code: no trips-list
+endpoint existed at all (trips only ever lived embedded inside chat
+messages), no `Collapsible`/`Sheet` primitive was installed, and two of
+the mockup's three Trip Hub cards (Flight, Saved Places) had zero backend
+data behind them. Scoped explicitly with the user to build everything
+*except* those two cards, and report back what got skipped.
+
+Shipped: Dusk City palette wired into `globals.css` (replacing the old
+teal/amber, `--ring` derived one step lighter than `--primary` since the
+palette research never specified a separate ring value); the real
+assistant-bubble tour-guide fix (three new `--chat-assistant-*` tokens,
+same attribute-selector mechanism the primary swap already used); a
+hand-rolled collapsible sidebar (skipped adding a new shadcn primitive —
+this project's `@base-ui/react` base made a CLI-generated `Collapsible`
+enough of an unknown that plain conditional rendering was simpler and
+more reliable); a new `GET /trips` endpoint with `trip_status.py`
+deriving draft/upcoming/completed in real Python, never guessed by the
+LLM; and new `/trips` + `/trips/[tripId]` pages, the latter reusing
+`ChatApp`'s existing rendering via two new optional props rather than
+building a second chat renderer.
+
+**Round 2 — the two skipped cards, on request.** The user asked to
+integrate Saved Places and Pexels photos too, "give me steps," which
+became a second planning pass (another Explore agent, focused this time
+on exactly where in the request lifecycle a `Trip` row exists relative to
+the tool-calling loops, and the real client/service pattern to mirror).
+Confirmed with the user up front: places auto-save, no manual save
+button — building one would need structured place cards in the chat UI
+first, real scope beyond persistence. Implementation touched
+`agent_service._run_tool_loop` itself (now returns raw tool-call results
+alongside the reply text, shared by all three tool loops, filtered to
+Places-only at the consumption site in `routers/trips.py`) and added a
+new `pexels_client.py`/`pexels_service.py` pair mirroring the existing
+Google Places/weather client-service split (fetched once per trip, no
+TTL — a photo doesn't go stale the way a forecast does).
+
+**Two real bugs found and fixed post-integration, not during it — both
+reported live by the user clicking through the actual result:**
+
+1. *"Only 3 trips but I see 7."* `GET /trips` was listing every `Trip`
+   row unfiltered, but `generate_trip` creates a new row on every edit
+   turn rather than updating one in place — confirmed against the user's
+   real data (one Miami conversation, refined 4 times, 4 rows). Fixed to
+   show the latest `Trip` per conversation. The first fix attempt (a
+   single `GROUP BY coalesce(conversation_id, id)` query, to keep
+   conversation-less orphan trips ungrouped) had its own bug, caught by
+   writing a test for exactly that orphan case before trusting the fix:
+   `Trip.id` and `Conversation.id` are independent sequences that can
+   produce the same number, so an orphan's own id collided with an
+   unrelated trip's real `conversation_id` in the test and wrongly merged
+   them. Replaced with two separate, unioned queries — structurally
+   collision-proof, not just unlikely to collide in practice.
+
+2. *"It did not work, I cleared the cache, I still don't see [night
+   skyline photos]."* Not a caching bug — the user's real trips had
+   already fetched and permanently cached their photo on an earlier
+   `/trips` load, *before* the night-skyline-first query change landed a
+   few messages later (a destination's photo is fetched once, ever, by
+   design). Diagnosed by reading the live `trips` table directly and
+   comparing `photo_fetched_at` timestamps against when the code actually
+   changed, not by guessing; fixed by clearing the three affected rows'
+   cached photo columns live and re-verifying the correct query fired.
+
+Also caught mid-flight, before it ever reached the user: applying the new
+Alembic migrations to the live Neon dev database, `main.py`'s
+`Base.metadata.create_all()` safety net turned out to have already
+silently created the `saved_places` table (on a dev-server auto-reload)
+with a too-narrow `price_level` column, from before that column's width
+was corrected in the model — caught by inspecting the live schema
+directly after "successfully" running the migration, not by trusting its
+exit code, and fixed with a follow-up migration.
+
+**Skipped, confirmed with the user, reported explicitly after
+integration**: flight tracking — still no backend data source of any
+kind, a genuinely separate feature.
+
+**Repo hygiene**: everything above committed in one branch/PR from a
+clean `main` (confirmed zero open PRs and zero stale branches beforehand),
+alongside this doc update.
+
 ## 2026-09-03 — "City Passport" built and rejected; "Trip Hub v2" is the direction
 
 Continued the same day's design work past the palette choice below into a
