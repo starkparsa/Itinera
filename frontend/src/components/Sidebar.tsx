@@ -58,6 +58,7 @@ export default function Sidebar({
               <li key={conv.id} className="flex items-center gap-1">
                 <button
                   onClick={() => onSelect(conv.id)}
+                  aria-current={active ? "true" : undefined}
                   className={`flex-1 truncate rounded-md px-2.5 py-1.5 text-left text-sm transition-colors ${
                     active ? "bg-primary text-primary-foreground" : "hover:bg-muted"
                   }`}

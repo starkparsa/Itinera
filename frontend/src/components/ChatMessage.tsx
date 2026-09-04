@@ -12,7 +12,14 @@ export default function ChatMessage({ message }: { message: MessageOut }) {
             : "border-chat-assistant-border bg-chat-assistant-bg text-chat-assistant-fg border"
         }`}
       >
-        <p className="whitespace-pre-wrap">{message.content}</p>
+        {/* Speaker is otherwise conveyed only by left/right position and
+            bubble color -- both invisible to a screen reader reading
+            through the role="log" transcript in ChatApp.tsx. sr-only text
+            gives the same "who said this" cue sighted users get for free. */}
+        <p className="whitespace-pre-wrap">
+          <span className="sr-only">{isUser ? "You: " : "Itinera: "}</span>
+          {message.content}
+        </p>
         {message.trip && <TripView trip={message.trip} />}
       </div>
     </div>
