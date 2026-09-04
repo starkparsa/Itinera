@@ -9,8 +9,13 @@ import Sidebar from "./Sidebar";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
 import CalendarPushButton from "./CalendarPushButton";
+import PendingIndicator from "./PendingIndicator";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useIsMobile } from "@/hooks/use-mobile";
 
 // Newest message first whose trip has a resolved start_date -- port of
 // streamlit_app.py::_latest_exportable_trip(). Export stays hidden entirely
@@ -21,6 +26,31 @@ function latestExportableTrip(messages: MessageOut[]): TripResponse | null {
     if (trip && trip.start_date && trip.trip_id) return trip;
   }
   return null;
+}
+
+// Covers both request shapes this component makes -- sending a prompt
+// (generateTrip) and loading a conversation (getConversation, from either a
+// sidebar click or the Trip Hub page's initial-mount fetch). "submitting"
+// carries the prompt so the pending bubble can echo it back; "loading" has
+// nothing to echo, so it renders skeleton bubbles instead.
+type PendingState = { kind: "idle" } | { kind: "submitting"; prompt: string } | { kind: "loading" };
+
+// A retryable error -- `retry` is whatever action produced the error,
+// closed over its original arguments, so the "Try again" button never has
+// to re-derive which of the two request shapes above failed.
+type ErrorState = { message: string; retry: () => void } | null;
+
+function ConversationSkeleton() {
+  return (
+    <div className="flex flex-col gap-4" aria-hidden>
+      <div className="flex justify-end">
+        <Skeleton className="h-10 w-2/5 rounded-xl" />
+      </div>
+      <div className="flex justify-start">
+        <Skeleton className="h-24 w-3/5 rounded-xl" />
+      </div>
+    </div>
+  );
 }
 
 export default function ChatApp({
@@ -45,16 +75,24 @@ export default function ChatApp({
   const [conversations, setConversations] = useState<ConversationSummary[]>(initialConversations);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<MessageOut[]>([]);
-  const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingState>({ kind: "idle" });
+  const [error, setError] = useState<ErrorState>(null);
   // Drives the [data-tour-guide-mode] accent override in globals.css --
   // set from whatever the backend last reported for this conversation, so
   // it reverts automatically the moment a load reflects the mode turning
   // back off (e.g. after an edit/new-trip turn, or switching chats).
   const [tourGuideMode, setTourGuideMode] = useState(false);
   // Collapsed by default -- "nothing extra on screen until asked for it,"
-  // per the Trip Hub v2 direction (decisions.md's UI styling entry).
+  // per the Trip Hub v2 direction (decisions.md's UI styling entry). Same
+  // boolean drives both presentations below (inline column on desktop, an
+  // overlay Sheet on mobile) -- there's one open/closed concept, just two
+  // ways of rendering it depending on viewport.
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // Real breakpoint check (not just a CSS class) -- deciding which of the
+  // two presentations to *mount* has to happen in JS. A CSS-only "hide the
+  // Sheet at md:" would still leave Base UI's Dialog open and trapping
+  // focus/scroll-locking the page behind an invisible overlay on desktop.
+  const isMobile = useIsMobile();
 
   async function refreshConversationList() {
     setConversations(await listConversations());
@@ -68,15 +106,27 @@ export default function ChatApp({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function loadConversation(id: number) {
-    const detail = await getConversation(id);
-    if (!detail) {
-      setError("Couldn't load that chat.");
-      return;
+  // showLoading=false is used only for the immediate post-generate load in
+  // handleSubmit below -- that call already has its own "submitting" bubble
+  // on screen, so touching `pending` here would just flash it to a skeleton
+  // and back for no reason. Every other caller (sidebar click, the
+  // Trip Hub mount effect) leaves it true and gets the real loading state.
+  async function loadConversation(id: number, opts: { showLoading?: boolean } = {}) {
+    const { showLoading = true } = opts;
+    if (showLoading) setPending({ kind: "loading" });
+    try {
+      const detail = await getConversation(id);
+      if (!detail) {
+        setError({ message: "Couldn't load that chat.", retry: () => loadConversation(id, opts) });
+        return;
+      }
+      setError(null);
+      setActiveConversationId(id);
+      setMessages(detail.messages);
+      setTourGuideMode(detail.tour_guide_mode);
+    } finally {
+      if (showLoading) setPending({ kind: "idle" });
     }
-    setActiveConversationId(id);
-    setMessages(detail.messages);
-    setTourGuideMode(detail.tour_guide_mode);
   }
 
   function startNewChat() {
@@ -92,22 +142,39 @@ export default function ChatApp({
     await refreshConversationList();
   }
 
+  // Selecting a chat or starting a new one closes the mobile Sheet overlay
+  // (it's covering the screen, so leaving it up would hide the result of
+  // the very action just taken) but leaves the desktop inline column open
+  // -- there it's just occupying a column next to the chat, not blocking it.
+  async function handleSelectConversation(id: number) {
+    await loadConversation(id);
+    if (isMobile) setSidebarOpen(false);
+  }
+
+  function handleNewChat() {
+    startNewChat();
+    if (isMobile) setSidebarOpen(false);
+  }
+
   async function handleSubmit(prompt: string) {
     setError(null);
-    setPendingPrompt(prompt);
+    setPending({ kind: "submitting", prompt });
     try {
       const result = await generateTrip(prompt, activeConversationId);
       if (!result.ok || !result.data) {
-        setError(result.error ?? "Couldn't reach the planner backend");
+        setError({
+          message: result.error ?? "Couldn't reach the planner backend",
+          retry: () => handleSubmit(prompt),
+        });
         return;
       }
       const newConversationId = result.data.conversation_id;
       if (newConversationId) {
-        await loadConversation(newConversationId);
+        await loadConversation(newConversationId, { showLoading: false });
         await refreshConversationList();
       }
     } finally {
-      setPendingPrompt(null);
+      setPending({ kind: "idle" });
     }
   }
 
@@ -121,15 +188,36 @@ export default function ChatApp({
       className="flex h-dvh flex-col overflow-hidden md:flex-row"
       data-tour-guide-mode={tourGuideMode ? "true" : undefined}
     >
-      {sidebarOpen && (
-        <Sidebar
-          conversations={conversations}
-          activeConversationId={activeConversationId}
-          onSelect={loadConversation}
-          onNewChat={startNewChat}
-          onDelete={handleDelete}
-          userEmail={userEmail}
-        />
+      {/* Same "collapsed by default, opened only on request" chrome either
+          way -- desktop renders it inline (pushes/shares the row, per the
+          Trip Hub v2 decision), mobile renders it as a full-height overlay
+          Sheet instead of pushing the compose box off-screen below a
+          stacked, full-width sidebar block. */}
+      {isMobile ? (
+        <Sheet open={sidebarOpen} onOpenChange={setSidebarOpen}>
+          <SheetContent side="left" className="w-4/5 gap-0 p-0 sm:max-w-xs">
+            <SheetTitle className="sr-only">Chats</SheetTitle>
+            <Sidebar
+              conversations={conversations}
+              activeConversationId={activeConversationId}
+              onSelect={handleSelectConversation}
+              onNewChat={handleNewChat}
+              onDelete={handleDelete}
+              userEmail={userEmail}
+            />
+          </SheetContent>
+        </Sheet>
+      ) : (
+        sidebarOpen && (
+          <Sidebar
+            conversations={conversations}
+            activeConversationId={activeConversationId}
+            onSelect={handleSelectConversation}
+            onNewChat={handleNewChat}
+            onDelete={handleDelete}
+            userEmail={userEmail}
+          />
+        )
       )}
 
       {/* h-dvh + overflow-hidden above (not min-h-screen) plus min-h-0 here
@@ -145,6 +233,7 @@ export default function ChatApp({
           actually filling it -- so drop the cap there and let the chat
           block stretch to whatever width the row actually gives it. */}
       <main
+        id="main-content"
         className={`flex min-h-0 flex-1 flex-col overflow-hidden px-4 md:px-8 ${
           rightPanel ? "w-full" : "mx-auto w-full max-w-3xl"
         }`}
@@ -164,6 +253,11 @@ export default function ChatApp({
             <h1 className="flex items-center gap-2 text-xl font-semibold">
               <img src="/logo-mark.png" alt="" aria-hidden className="h-5 w-5" /> Itinera
             </h1>
+            {tourGuideMode && (
+              <Badge variant="secondary" className="border-primary/30 text-primary">
+                🧭 Tour guide mode
+              </Badge>
+            )}
           </div>
           <div className="flex shrink-0 items-center gap-2">
             <Link href="/trips" className={buttonVariants({ variant: "outline", size: "sm" })}>
@@ -174,41 +268,53 @@ export default function ChatApp({
           </div>
         </div>
 
-        {/* The only scrollable region -- everything above and below this stays put. */}
-        <div className="min-h-0 flex-1 overflow-y-auto py-4">
-          {messages.length === 0 && !pendingPrompt && (
-            <p className="text-muted-foreground">
-              Describe a trip to start planning. Follow-ups in the same chat (e.g. &quot;make it a week
-              instead&quot;) reference what you asked before.
-            </p>
-          )}
+        {/* The only scrollable region -- everything above and below this stays put.
+            aria-live="polite" announces each new message as it arrives (assistant
+            replies, in particular) without stealing focus -- role="log" tells
+            screen readers this is a running transcript, not a single alert. */}
+        <div className="min-h-0 flex-1 overflow-y-auto py-4" role="log" aria-live="polite">
+          {pending.kind === "loading" ? (
+            <ConversationSkeleton />
+          ) : (
+            <>
+              {messages.length === 0 && pending.kind === "idle" && (
+                <p className="text-muted-foreground">
+                  Describe a trip to start planning. Follow-ups in the same chat (e.g. &quot;make it a week
+                  instead&quot;) reference what you asked before.
+                </p>
+              )}
 
-          <div className="flex flex-col gap-4">
-            {messages.map((msg) => (
-              <ChatMessage key={msg.id} message={msg} />
-            ))}
-            {pendingPrompt && (
-              <>
-                <ChatMessage message={{ id: -1, role: "user", content: pendingPrompt, trip: null, created_at: "" }} />
-                <div className="flex justify-start">
-                  <div className="max-w-[80%] rounded-xl border bg-card px-4 py-3 text-sm text-muted-foreground italic">
-                    Thinking — planning a full trip can take a few minutes, quick questions are much faster...
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
+              <div className="flex flex-col gap-4">
+                {messages.map((msg) => (
+                  <ChatMessage key={msg.id} message={msg} />
+                ))}
+                {pending.kind === "submitting" && (
+                  <>
+                    <ChatMessage
+                      message={{ id: -1, role: "user", content: pending.prompt, trip: null, created_at: "" }}
+                    />
+                    <PendingIndicator />
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* Locked to the bottom -- shrink-0 for the same reason the header is. */}
         <div className="shrink-0 pt-2 pb-6">
           {error && (
             <Alert variant="destructive" className="mb-2">
-              <AlertDescription>{error}</AlertDescription>
+              <AlertDescription className="flex items-center justify-between gap-3">
+                <span>{error.message}</span>
+                <Button variant="outline" size="sm" className="shrink-0" onClick={error.retry}>
+                  Try again
+                </Button>
+              </AlertDescription>
             </Alert>
           )}
 
-          <ChatInput disabled={pendingPrompt !== null} onSubmit={handleSubmit} />
+          <ChatInput disabled={pending.kind !== "idle"} onSubmit={handleSubmit} />
         </div>
       </main>
 

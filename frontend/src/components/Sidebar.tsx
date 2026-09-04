@@ -6,6 +6,17 @@ import { signOutAction } from "@/lib/authActions";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
 
 interface SidebarProps {
   conversations: ConversationSummary[];
@@ -53,14 +64,30 @@ export default function Sidebar({
                 >
                   {conv.title || "New chat"}
                 </button>
-                <button
-                  onClick={() => onDelete(conv.id)}
-                  title="Delete this chat"
-                  aria-label={`Delete ${conv.title}`}
-                  className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-60 transition-opacity hover:text-destructive hover:opacity-100"
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
+                <AlertDialog>
+                  <AlertDialogTrigger
+                    title="Delete this chat"
+                    aria-label={`Delete ${conv.title}`}
+                    className="shrink-0 rounded-md p-1.5 text-muted-foreground opacity-60 transition-opacity hover:text-destructive hover:opacity-100"
+                  >
+                    <Trash2 className="size-3.5" />
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Delete this chat?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        &quot;{conv.title || "New chat"}&quot; and its full history will be permanently deleted.
+                        This can&apos;t be undone.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancel</AlertDialogCancel>
+                      <AlertDialogAction variant="destructive" onClick={() => onDelete(conv.id)}>
+                        Delete
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
               </li>
             );
           })}

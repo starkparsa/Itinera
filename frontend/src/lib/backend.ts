@@ -35,29 +35,55 @@ export async function listConversations(): Promise<ConversationSummary[]> {
   }
 }
 
-export async function listTrips(): Promise<TripSummary[]> {
+// Unlike listConversations() above (fails open to [] -- it's a sidebar,
+// losing it silently for one run is genuinely low-stakes), listTrips() and
+// getTrip() below back the two Trip Hub pages' *only* content. Collapsing
+// "backend unreachable" into the same empty/null shape as "you really have
+// no trips"/"that trip really doesn't exist" is what let both pages show a
+// confidently wrong message on a network blip -- so both now return a
+// result the caller can tell apart, same ok/error shape generateTrip and
+// pushTripToCalendar already use below.
+export interface ListTripsResult {
+  ok: boolean;
+  trips: TripSummary[];
+  error?: string;
+}
+
+export async function listTrips(): Promise<ListTripsResult> {
   try {
     const res = await fetch(`${BACKEND_URL}/trips`, {
       cache: "no-store",
       headers: await backendAuthHeader(),
     });
-    if (!res.ok) return [];
-    return await res.json();
-  } catch {
-    return [];
+    if (!res.ok) return { ok: false, trips: [], error: `Backend returned ${res.status}` };
+    return { ok: true, trips: await res.json() };
+  } catch (exc) {
+    return { ok: false, trips: [], error: exc instanceof Error ? exc.message : "Couldn't reach the planner backend" };
   }
 }
 
-export async function getTrip(tripId: number): Promise<TripResponse | null> {
+export interface GetTripResult {
+  ok: boolean;
+  // Only true on a real 404 from the backend -- the caller should render a
+  // genuine "not found" page. Any other failure (network error, 5xx) sets
+  // `error` instead, so the caller can offer a retry rather than claim the
+  // trip doesn't exist when it might just be unreachable right now.
+  notFound?: boolean;
+  data?: TripResponse;
+  error?: string;
+}
+
+export async function getTrip(tripId: number): Promise<GetTripResult> {
   try {
     const res = await fetch(`${BACKEND_URL}/trips/${tripId}`, {
       cache: "no-store",
       headers: await backendAuthHeader(),
     });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
+    if (res.status === 404) return { ok: false, notFound: true };
+    if (!res.ok) return { ok: false, error: `Backend returned ${res.status}` };
+    return { ok: true, data: await res.json() };
+  } catch (exc) {
+    return { ok: false, error: exc instanceof Error ? exc.message : "Couldn't reach the planner backend" };
   }
 }
 
