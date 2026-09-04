@@ -17,8 +17,13 @@ of leaving dead space next to the side panel (see `progress.md`'s
 (PR #24): sidebar delete confirmation, a retryable error/loading state
 in `ChatApp` and across the two Trip Hub routes, an overlay drawer for
 the sidebar on mobile, and a first accessibility pass (skip link,
-`aria-live` transcript, focus management) — see `decisions.md`'s UI
-styling entries and `progress.md`'s 2026-09-04 entries._
+`aria-live` transcript, focus management). Updated once more same day
+(PR #27) after a real WCAG AA contrast check on the Dusk City palette
+(caught and fixed two failures in light-mode tour-guide mode) and a
+follow-up accessibility pass (announced status messages, a screen-reader
+speaker cue in chat, `aria-current` on the active conversation, a
+labeled composer) — see `decisions.md`'s UI styling entries and
+`progress.md`'s 2026-09-04 entries._
 
 ## Where the project stands
 
@@ -55,7 +60,13 @@ plain network blip; an overlay `Sheet` drawer for the sidebar on mobile
 instead of a full-width block that pushed the composer off-screen; and a
 first accessibility pass (skip link, `aria-live` on the message
 transcript, focus returning to the composer after a send, `#main-content`
-landmarks). No native/PWA app exists yet.
+landmarks). A same-day follow-up (PR #27) ran a real oklch->sRGB contrast
+check on the Dusk City palette — found and fixed two AA failures, both
+in light-mode tour-guide mode (the copper accent was darkened from
+`oklch(0.58 0.15 55)` to `oklch(0.45 0.15 55)`) — plus a second
+accessibility pass (announced status messages, a screen-reader speaker
+cue in chat, `aria-current` on the active conversation, a labeled
+composer). No native/PWA app exists yet.
 
 **LLM**: Gemini API (`gemini-3.5-flash-lite`), Groq as an automatic
 fallback on rate-limit only. Not wired into the agentic tool-calling
@@ -88,18 +99,16 @@ plain Q&A).
 
 ## Next action
 
-Trip Hub v2, Saved Places, Pexels trip photos, and Ticketmaster event
-discovery are all done — none of the three next candidates below depend
-on any of it:
+Trip Hub v2, Saved Places, Pexels trip photos, Ticketmaster event
+discovery, and the frontend UI/UX + accessibility/contrast pass are all
+done — none of the three next candidates below depend on any of it:
 1. Build-order item 4: Maps/routing (planned around Google's Maps MCP
    server — the specific server/pricing/auth details need re-confirming
    live before writing code, per `decisions.md`'s Maps/routing entry).
 2. Resolve the flight price-tracking data-source question
    (Travelpayouts/Aviasales — unverified). Flight tracking is the one
    Trip Hub card still with zero backend data behind it.
-3. A real WCAG AA contrast check on the Dusk City oklch values, which
-   shipped as first-pass estimates, not verified Tailwind-named stops.
-4. No frontend surface for events exists yet — `find_events` and
+3. No frontend surface for events exists yet — `find_events` and
    event-anchored dates are backend/conversational only so far (same as
    Saved Places was before its Trip Hub panel card); a dedicated Events
    card on the Trip Hub page, mirroring Saved Places', is the natural
@@ -107,9 +116,6 @@ on any of it:
 
 ## Known blockers / open items
 
-- **Dusk City's oklch values are first-pass estimates**, not verified
-  Tailwind-named stops — shipped live regardless (see `decisions.md`'s UI
-  styling entry); a real WCAG AA contrast check is still owed.
 - **Flight tracking has no backend data source at all** — the one Trip
   Hub card still genuinely unbuilt, not merely unwired.
 - **Google OAuth consent screen is still in "Testing" status** — caps
