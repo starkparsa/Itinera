@@ -300,6 +300,57 @@ trips standing alone) — structurally collision-proof rather than just
 unlikely to collide. *Revisit: never revert to the single coalesced-key
 form without re-reading why.*
 
+**Never run `npx shadcn add <component>` directly in this repo — hand-port
+instead, 2026-09-04.** The installed CLI (against this project's
+`base-nova` custom style, Base UI not Radix) wants to overwrite
+`button.tsx` unprompted and adds a stray `cn` npm package as a dependency
+the project doesn't need (it already has its own `cn()` in `lib/utils.ts`).
+`alert-dialog.tsx`, `sheet.tsx`, and `skeleton.tsx` were all added instead
+by running `npx shadcn view <name>` (read-only, writes nothing) to pull the
+registry's real Base UI + Tailwind source, then hand-copying it in with
+imports pointed at this project's own `@/lib/utils`/`@/components/ui/button`
+and the registry's `cn-font-heading`/app-internal icon-helper references
+swapped for what this repo actually has (`font-heading`, `lucide-react`).
+*Revisit: only after confirming with `--dry-run` that a future CLI version
+no longer tries to overwrite existing files unprompted.*
+
+**Retryable errors, not just error messages, 2026-09-04.** `ChatApp.tsx`'s
+`error` state carries a `retry` closure alongside the message (a
+`PendingState`/`ErrorState` union pair, replacing the previous separate
+`pendingPrompt`/`error` booleans) so a "Try again" button can always resend
+whatever actually failed — a prompt, or a conversation load — without the
+UI re-deriving which action to repeat. `listTrips()`/`getTrip()` in
+`backend.ts` got the matching fix on the read side: both used to fail open
+to `[]`/`null` on *any* failure, so a plain network blip rendered
+identically to "you have no trips" on `/trips` or a hard 404 on
+`/trips/[tripId]` — they now return a typed `{ ok, notFound?, error? }`
+result, and only a real backend 404 triggers `notFound()`. *Revisit: if a
+third request shape is added to `ChatApp`, extend the existing unions
+rather than reintroducing parallel booleans.*
+
+**Sidebar mobile drawer uses a real JS breakpoint check (`useIsMobile`,
+`useSyncExternalStore`), not a CSS-only hide, 2026-09-04.** Deciding which
+of the two sidebar presentations to *mount* — an overlay `Sheet` on mobile
+vs. the existing inline collapsible column on desktop, both driven by the
+same `sidebarOpen` boolean — has to happen in JS: a `md:hidden` class on a
+mounted-but-CSS-hidden Base UI `Dialog` would still leave it "open,"
+trapping focus and scroll-locking the page behind an invisible overlay on
+desktop. `useSyncExternalStore`, not `useState`+`useEffect`, avoids both
+the hydration flicker and this repo's `react-hooks/set-state-in-effect`
+lint error the naive version trips. *Revisit: never sidestep this with a
+pure-CSS breakpoint hide for a mounted dialog/sheet elsewhere in the app.*
+
+**The "Thinking…" staged-progress text is cosmetic, not real backend
+progress, 2026-09-04.** `PendingIndicator.tsx` cycles vague labels
+("Reading your trip…", "Checking the weather…") on a client-side timer
+because `generateTrip()`'s call to `POST /trips/generate` is still a
+single non-streaming request — the backend never tells the client which
+stage (classify → generate → weather) it's actually in. Real staged
+progress needs that endpoint to become a streaming one (SSE or similar);
+that's a backend architecture decision, not something to fake harder on
+the frontend. *Revisit: if/when streaming is added, replace the timer with
+real stage events rather than layering both.*
+
 ## Saved Places (auto-persisted, no manual save action)
 
 **Places `find_nearby_places`/`get_place_details` surface for a trip are
