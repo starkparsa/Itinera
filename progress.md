@@ -6,6 +6,89 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-04 — Frontend UI/UX review, worked through in four groups
+
+The user asked for a UI/UX review of the frontend and anything left
+behind, then worked through the findings in four scoped groups over one
+session, re-reading the current state before each group since the repo
+kept moving underneath the plan (Trip Hub v2 and three layout fixes
+landed mid-session — see the entries below this one). Two PRs: #24 (the
+code) and #25 (this documentation).
+
+**Group A — small, independent fixes.** Sidebar chat deletion now
+confirms via a real `AlertDialog` instead of deleting on the first click.
+Tour-guide mode gets a visible badge, not just a color shift. `layout.tsx`
+gained OpenGraph metadata and a themed viewport/theme-color (the favicon
+set turned out to already exist via Next's file convention — checked
+before adding a redundant one). First accessibility pass: `aria-live`/
+`role=log` on the message transcript, a skip link, focus returning to the
+composer after a send, `#main-content` landmarks.
+
+**Real bug caught mid-group: the shadcn CLI wanted to overwrite
+`button.tsx`.** Ran `npx shadcn add alert-dialog` to scaffold the confirm
+dialog; it hung on an unprompted "overwrite button.tsx?" confirmation and,
+once re-run non-interactively, a `git diff` showed it had also added a
+stray `cn` npm package as a dependency the project doesn't need (it
+already has its own `cn()` in `lib/utils.ts`). Reverted, and switched to
+`npx shadcn view <component>` (read-only) to pull the registry's real
+Base UI + Tailwind source, then hand-copied each one in with imports
+pointed at this project's actual conventions. Recorded as a decisions.md
+entry so a future session doesn't repeat the same overwrite.
+
+**Group B — `ChatApp`'s request lifecycle.** Replaced the separate
+`pendingPrompt`/`error` `useState` pair with a `PendingState` union
+(idle/submitting/loading) and a retryable `ErrorState` (`{ message,
+retry }`), covering both request shapes the component makes (sending a
+prompt, loading a conversation) with one "Try again" button wired to
+whichever action actually failed. Added a cosmetic staged-progress
+indicator (`PendingIndicator.tsx`) and a skeleton loading state for
+switching conversations — both flagged explicitly as covering a gap that
+already existed (a blank pane while `getConversation()` resolved), not
+introduced by the refactor.
+
+**Group C — mobile sidebar drawer.** Re-read `ChatApp.tsx` first and
+found the sidebar was already collapsible on both breakpoints (Trip Hub
+v2 had shipped that mid-session) — so the actual remaining gap was mobile
+specifically pushing the compose box off-screen with a full-width inline
+block, not "no collapse at all." Added a `useIsMobile` hook and rendered
+the sidebar as an overlay `Sheet` on mobile only, inline column unchanged
+on desktop.
+
+**Real bug avoided before it shipped: a CSS-only mobile hide would have
+been a focus-trap.** First instinct was `md:hidden` on the `Sheet` so it
+could stay mounted unconditionally; caught before writing it that a
+mounted-but-CSS-hidden Base UI `Dialog` stays "open" as far as focus
+trapping and scroll locking are concerned, which would silently break
+desktop keyboard navigation whenever `sidebarOpen` was true. Used a real
+`useSyncExternalStore`-based breakpoint check to decide which component
+*mounts* instead.
+
+**Group D — route-level error/loading states for the Trip Hub pages.**
+Re-read again and found Group D's original ask (pull the itinerary out of
+chat scroll into a persistent view) was already built more thoroughly
+than planned — `/trips`, `/trips/[tripId]`, `TripHubPanel` all existed.
+The real remaining gap: `listTrips()`/`getTrip()` failed open to `[]`/
+`null` on *any* failure, so a backend outage rendered identically to "you
+have no trips" on `/trips` or a hard 404 on `/trips/[tripId]` — silently
+misleading, same class of bug Group B had just fixed inside `ChatApp`,
+just not extended to these two newer routes. Gave both a typed `{ ok,
+notFound?, error? }` result, added a shared `RouteErrorState` component,
+`loading.tsx` for both routes, a themed `error.tsx` boundary, and a
+themed `not-found.tsx` replacing Next's unstyled default.
+
+**Verification, throughout.** `tsc --noEmit`, `eslint`, and (once, at the
+end) a full `next build` all clean after every group. Spot-checked live
+in the dev server browser preview where possible (login page, skip link
+keyboard-focus reveal, the new themed 404, console/server logs) — the
+authenticated chat flow itself still isn't reachable by the agent (real
+Google OAuth), so those code paths were verified by types + lint +
+reasoning about the Base UI API surface rather than a live click-through,
+called out explicitly rather than implied.
+
+Shipped as two commits, one PR each (both merged via a merge commit,
+branches deleted after): #24 for the code (branch `frontend-ui-ux-pass`),
+#25 for STATUS.md/decisions.md (branch `docs-frontend-ui-ux-pass`).
+
 ## 2026-09-04 — Trip Hub chat column now fills available width
 
 Follow-on to the accordion fix, same day: the user pointed at the
