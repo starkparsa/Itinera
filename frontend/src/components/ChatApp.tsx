@@ -274,7 +274,16 @@ export default function ChatApp({
             screen readers this is a running transcript, not a single alert. */}
         <div className="min-h-0 flex-1 overflow-y-auto py-4" role="log" aria-live="polite">
           {pending.kind === "loading" ? (
-            <ConversationSkeleton />
+            <>
+              {/* ConversationSkeleton itself is aria-hidden (it's decorative) --
+                  without this, a screen reader user switching chats would get
+                  total silence from the role="log" region until real content
+                  arrives, instead of the visual skeleton sighted users see. */}
+              <span className="sr-only" role="status">
+                Loading conversation…
+              </span>
+              <ConversationSkeleton />
+            </>
           ) : (
             <>
               {messages.length === 0 && pending.kind === "idle" && (

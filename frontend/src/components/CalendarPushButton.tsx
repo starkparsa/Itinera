@@ -44,8 +44,19 @@ export default function CalendarPushButton({ trip }: { trip: TripResponse }) {
       <Button variant="outline" size="sm" onClick={handleClick} disabled={status === "pushing"}>
         {status === "pushing" ? "Exporting…" : "📤 Export Plan"}
       </Button>
+      {/* role="status"/"alert" -- without this, the export result (success
+          count or error) was only ever visible, never announced; a screen
+          reader user who clicked the button had no way to learn what
+          happened short of re-discovering this paragraph. Both roles carry
+          an implicit aria-live (status=polite, alert=assertive), matching
+          the urgency difference between "it worked" and "it didn't." */}
       {message && (
-        <p className={`text-xs ${status === "error" ? "text-destructive" : "text-muted-foreground"}`}>{message}</p>
+        <p
+          role={status === "error" ? "alert" : "status"}
+          className={`text-xs ${status === "error" ? "text-destructive" : "text-muted-foreground"}`}
+        >
+          {message}
+        </p>
       )}
     </div>
   );

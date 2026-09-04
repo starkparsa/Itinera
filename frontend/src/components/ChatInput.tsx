@@ -34,8 +34,13 @@ export default function ChatInput({ disabled, onSubmit }: { disabled: boolean; o
 
   return (
     <div className="flex gap-2 border-t pt-4">
+      {/* aria-label, not just the placeholder -- placeholder text isn't a
+          reliable accessible name (it disappears once typed, and several
+          screen reader/browser combinations never expose it as the field's
+          name at all). */}
       <Textarea
         ref={textareaRef}
+        aria-label="Describe your trip"
         value={value}
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
