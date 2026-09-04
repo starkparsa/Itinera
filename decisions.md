@@ -236,9 +236,32 @@ pair above. Picked from four researched directions in
 travel-evocative feel without going literally nature- or
 city-photograph-themed. Every token (including neutrals, hue-locked to the
 same 265° rather than plain grey) is now live, not mockup-only. *Revisit:
-the oklch values are still first-pass estimates, not verified
-Tailwind-named stops — a real WCAG AA contrast check is owed before
-treating them as final.*
+the base indigo values were verified against WCAG AA 2026-09-04 (see the
+contrast-check entry below) — the copper accent's light-mode lightness
+changed as a result; nothing else here should need revisiting on that
+front again.*
+
+**A real WCAG AA contrast check on Dusk City, 2026-09-04 — found and
+fixed two failures, both in light-mode tour-guide mode.** Computed actual
+oklch->sRGB contrast ratios (a small script, not eyeballing hex values)
+for every text/background and UI-component pair across the palette,
+light+dark × normal+tour-guide (~20 pairs). White button text on the
+original copper `--primary` (`oklch(0.58 0.15 55)`) only reached 4.31:1
+against the 4.5:1 minimum; the tour-guide badge (`text-primary` on
+`bg-secondary`) similarly landed at 4.13:1. Checked both directions
+before picking a fix — even the app's own dark `--foreground` text
+topped out at 4.40:1 against that same copper, so the accent itself was
+too mid-toned in *either* text-color direction, not just the wrong
+choice of white vs. dark text. Fixed by darkening the light-mode
+tour-guide `--primary`/`--ring`/`--sidebar-primary`/`--sidebar-ring` to
+`oklch(0.45 0.15 55)` — matching the base indigo's own light-mode
+lightness exactly, so both accents now read as "equally dark" as a
+system. Now 7.47:1 / 7.15:1. Every other pair checked (dark mode
+entirely, the `--chat-assistant-*` trio, the destructive/emerald/sky
+Alert variants) already passed with real margin. *Revisit: any new color
+token added to `globals.css` should get the same computed check before
+shipping — a plausible-looking oklch triple is not evidence of AA
+compliance, as this entry demonstrates.*
 
 **The assistant's chat bubble never recolored in tour-guide mode — only
 the user's own did, since only the user bubble ever rode `--primary`
@@ -350,6 +373,26 @@ progress needs that endpoint to become a streaming one (SSE or similar);
 that's a backend architecture decision, not something to fake harder on
 the frontend. *Revisit: if/when streaming is added, replace the timer with
 real stage events rather than layering both.*
+
+**Accessibility pass #2, 2026-09-04 — the recurring bug shape was "state
+conveyed only visually."** A manual POUR pass (not the earlier skip-link/
+`aria-live`/landmarks pass, a follow-up) found the same underlying issue
+in five different components: information a sighted user gets for free
+from position or color alone had no programmatic equivalent for
+assistive tech. `ChatMessage.tsx`'s speaker (you vs. Itinera) was
+left/right position and bubble color only — added an `sr-only` speaker
+prefix. `Sidebar.tsx`'s active conversation was color only — added
+`aria-current`. `CalendarPushButton.tsx`'s export result (success count
+or error) was visible text with no `role="status"`/`"alert"`, so it was
+never announced. `ChatInput.tsx`'s composer had a placeholder but no
+accessible name (placeholder isn't a reliable label — it disappears once
+typed, and isn't always exposed as the field's name at all). `ChatApp.tsx`'s
+conversation-loading skeleton is correctly `aria-hidden` (it's decorative)
+but that left total silence for a screen reader during the load, so a
+sibling `sr-only role="status"` text was added alongside it. *Revisit:
+run this same "does this state have anything but a visual cue" check on
+any new interactive component — it caught five real instances in
+components that otherwise looked fine.*
 
 ## Saved Places (auto-persisted, no manual save action)
 

@@ -6,6 +6,43 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-04 — Real WCAG AA contrast check, second accessibility pass
+
+Follow-on to the four-group UI/UX review (below), same day: closed out
+the two items that review had explicitly left open — a real contrast
+check on the Dusk City palette, and a deeper accessibility pass. PR #27.
+
+**Contrast check.** Wrote a small script computing actual oklch->sRGB
+relative luminance and WCAG contrast ratios (Björn Ottosson's reference
+OKLab/OKLCH matrices) rather than eyeballing hex previews, and ran it
+against every text/background and UI-component pair in `globals.css` —
+light+dark × normal+tour-guide, ~20 pairs. Found two real AA failures,
+both in light-mode tour-guide mode: white button text on the copper
+`--primary` only reached 4.31:1 (needs 4.5:1), and the tour-guide badge
+similarly at 4.13:1. Before picking a fix, checked whether the problem
+was "wrong text color" or "accent itself un-hostable" — tested the app's
+own dark `--foreground` text against the same copper too, and it only
+reached 4.40:1, also failing. The accent (`oklch(0.58 0.15 55)`) was
+simply too mid-toned in either direction. Fixed by darkening it to
+`oklch(0.45 0.15 55)`, matching the base indigo's own light-mode
+lightness exactly — now 7.47:1 / 7.15:1, and every other pair checked
+already passed.
+
+**Second accessibility pass.** A manual POUR pass over the components
+that hadn't had one yet turned up the same underlying shape five times:
+state conveyed only visually, with no programmatic equivalent. Chat
+message speaker (position/color only → added an `sr-only` prefix), the
+active sidebar conversation (color only → `aria-current`), the calendar
+export result (visible text only → `role="status"`/`"alert"`), the
+composer's accessible name (placeholder only, not a reliable label →
+`aria-label`), and the conversation-loading skeleton (correctly
+`aria-hidden`, but that meant total screen-reader silence during a load
+→ a sibling `sr-only role="status"` announcement).
+
+Verified: `tsc --noEmit`, `eslint`, and a full `next build` all clean;
+dev server loads with no console/server errors. Shipped as one commit,
+one PR (#27, merged via a merge commit, branch deleted after).
+
 ## 2026-09-04 — Frontend UI/UX review, worked through in four groups
 
 The user asked for a UI/UX review of the frontend and anything left
