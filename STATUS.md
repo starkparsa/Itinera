@@ -13,7 +13,12 @@ composer locked in place with only the message list scrolling, the Day
 accordion cards actually animating shut (missing keyframes) instead of
 snapping, and the Trip Hub chat column filling available width instead
 of leaving dead space next to the side panel (see `progress.md`'s
-2026-09-04 entries)._
+2026-09-04 entries). Updated again same day after a frontend UI/UX pass
+(PR #24): sidebar delete confirmation, a retryable error/loading state
+in `ChatApp` and across the two Trip Hub routes, an overlay drawer for
+the sidebar on mobile, and a first accessibility pass (skip link,
+`aria-live` transcript, focus management) — see `decisions.md`'s UI
+styling entries and `progress.md`'s 2026-09-04 entries._
 
 ## Where the project stands
 
@@ -41,8 +46,16 @@ props, plus a collapsible data column with Weather and Saved Places
 cards) — the chat column there now fills whatever width the row gives it
 next to that panel, instead of sitting in a fixed-width column with dead
 space beside it. The earlier "City Passport" (travel-document/boarding-pass)
-direction stays a rejected dead end, not touched. No native/PWA app
-exists yet.
+direction stays a rejected dead end, not touched. A same-day UI/UX pass
+added: a real confirm dialog before deleting a chat; a retryable
+error/loading state in `ChatApp` (`PendingState`/`ErrorState` unions,
+replacing ad hoc booleans) and — separately — in `listTrips()`/`getTrip()`,
+which used to fail open to `[]`/`null` and render "no trips"/404 on a
+plain network blip; an overlay `Sheet` drawer for the sidebar on mobile
+instead of a full-width block that pushed the composer off-screen; and a
+first accessibility pass (skip link, `aria-live` on the message
+transcript, focus returning to the composer after a send, `#main-content`
+landmarks). No native/PWA app exists yet.
 
 **LLM**: Gemini API (`gemini-3.5-flash-lite`), Groq as an automatic
 fallback on rate-limit only. Not wired into the agentic tool-calling
