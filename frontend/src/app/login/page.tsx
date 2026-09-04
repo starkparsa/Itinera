@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 
 export default function LoginPage() {
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center gap-6 px-8 text-center">
+    <div id="main-content" className="flex min-h-screen flex-col items-center justify-center gap-6 px-8 text-center">
       <div className="flex flex-col items-center gap-2">
         <img src="/logo-mark.png" alt="" aria-hidden className="h-12 w-12" />
         <h1 className="text-2xl font-semibold tracking-tight">Itinera</h1>

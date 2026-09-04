@@ -26,12 +26,15 @@ export default function TripHubPanel({ trip }: { trip: TripResponse }) {
         open ? "w-full p-4 md:w-64" : "w-full p-2 md:w-10"
       }`}
     >
+      {/* size-8 matches the tap target ChatApp's own sidebar toggle uses
+          (Button size="icon") -- this one was a bare size-6 (24px) circle,
+          below that established convention. */}
       <button
         onClick={() => setOpen((o) => !o)}
         aria-label={open ? "Hide trip hub" : "Show trip hub"}
-        className="flex size-6 items-center justify-center rounded-full border bg-background text-muted-foreground hover:text-foreground md:absolute md:top-4 md:-left-3"
+        className="flex size-8 items-center justify-center rounded-full border bg-background text-muted-foreground hover:text-foreground md:absolute md:top-4 md:-left-4"
       >
-        {open ? <ChevronRight className="size-3.5" /> : <ChevronLeft className="size-3.5" />}
+        {open ? <ChevronRight className="size-4" /> : <ChevronLeft className="size-4" />}
       </button>
 
       {open ? (

@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { getTrip, listConversations } from "@/lib/backend";
 import ChatApp from "@/components/ChatApp";
 import TripHubPanel from "@/components/TripHubPanel";
+import RouteErrorState from "@/components/RouteErrorState";
 
 export default async function TripHubPage({ params }: { params: Promise<{ tripId: string }> }) {
   const session = await auth();
@@ -11,10 +12,22 @@ export default async function TripHubPage({ params }: { params: Promise<{ tripId
   }
 
   const { tripId } = await params;
-  const trip = await getTrip(Number(tripId));
-  if (!trip) {
+  const result = await getTrip(Number(tripId));
+  // notFound() is reserved for a real 404 from the backend -- any other
+  // failure (network error, 5xx) falls through to the inline error state
+  // below instead, so a transient outage isn't told to the user as "this
+  // trip doesn't exist."
+  if (result.notFound) {
     notFound();
   }
+  if (!result.ok || !result.data) {
+    return (
+      <main id="main-content" className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 py-6 md:px-8">
+        <RouteErrorState message={result.error ?? "Couldn't load this trip."} retryHref={`/trips/${tripId}`} />
+      </main>
+    );
+  }
+  const trip = result.data;
 
   const conversations = await listConversations();
 
