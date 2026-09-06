@@ -627,3 +627,31 @@ too narrowly and missing a nested `frontend/graphify-out/`. *Revisit:
 whenever adding a new ignore pattern for something that could plausibly
 exist at more than one depth in the tree — default to the floating form
 (`name/`) unless there's a specific reason to anchor it.*
+
+## Git-history secret audit — 2026-09-06
+
+Ran a full-history check (`git log --all -G'<pattern>'` for Google API-key,
+OAuth-client-secret, Groq-key, AWS-key, and private-key-header shapes,
+plus a name/content review of every historical revision of every
+`.env*` file ever tracked) after a frontend-secrets-exposure audit found
+no client-side issues. **Result: clean** — no real `.env`/`.env.local`
+file, and no hardcoded key/secret value, has ever been committed at any
+point in this repo's history, on any branch. Every tracked env-shaped
+file (`.env.example`, `.env.share.example`,
+`frontend/.env.local.example`) has held only placeholders
+(`Paste your API key here`, blank `KEY=`) in every revision, confirmed by
+diffing each one's full history, not just its current content.
+
+Found and fixed one real gap while checking: root `.gitignore`'s
+`.env` line only matches that exact filename — `.env.local`,
+`.env.production`, `backend/.env.local`, etc. were **not** covered
+anywhere outside `frontend/.gitignore` (which already has the broader
+`.env*` pattern). No such file ever existed, so nothing leaked, but it
+was a real hole. Fixed by broadening the root pattern to `.env.*` with
+explicit `!.env.example`/`!.env.share.example` negations, plus adding a
+defense-in-depth set of common secret-file shapes (`*.pem`, `*.key`,
+`*.p12`, `*.pfx`, `*credentials*.json`, `*service-account*.json`) that
+weren't yet covered at the repo root either. *Revisit: if a real
+`backend/.env` distinct from the root `.env` is ever introduced, confirm
+it's still covered — it is today (unanchored root patterns match at any
+depth), but re-check after any future `.gitignore` restructuring.*

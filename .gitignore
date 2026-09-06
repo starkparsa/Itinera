@@ -153,7 +153,16 @@ activemq-data/
 *.sage.py
 
 # Environments
+# `.env` alone only matches that exact filename -- it silently let
+# `.env.local`/`.env.production`/`.env.development`/etc. through
+# uncovered anywhere outside frontend/ (frontend/.gitignore already has
+# the broader `.env*` pattern). Broadened here 2026-09-06 during a
+# git-history secret audit, once confirmed no such file was ever
+# actually committed -- see decisions.md.
 .env
+.env.*
+!.env.example
+!.env.share.example
 .envrc
 .venv
 env/
@@ -161,6 +170,16 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Common secret/credential file shapes -- defense in depth in case one
+# ever lands outside frontend/ (frontend/.gitignore already ignores
+# *.pem). Added during the same 2026-09-06 audit.
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*service-account*.json
 
 # Spyder project settings
 .spyderproject
