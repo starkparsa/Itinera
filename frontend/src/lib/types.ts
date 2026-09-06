@@ -69,6 +69,10 @@ export interface ConversationSummary {
   id: number;
   title: string;
   created_at: string;
+  // Latest Trip id generated in this conversation, if any -- lets the
+  // sidebar route straight to that trip's Trip Hub page. Null for a
+  // conversation with no generated itinerary yet.
+  trip_id: number | null;
 }
 
 export interface ConversationDetail {

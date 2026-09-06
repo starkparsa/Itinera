@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from .. import models, schemas, weather_service
@@ -41,7 +42,31 @@ def list_conversations(
         .offset(offset)
         .all()
     )
-    return conversations
+
+    # Latest Trip id per conversation, same "max(Trip.id) grouped by
+    # conversation_id" shape as routers/trips.py's list_trips -- reused
+    # here rather than re-derived, so the two stay in sync automatically.
+    # Scoped to just this page's conversation ids, not every trip the user
+    # has ever generated.
+    conversation_ids = [c.id for c in conversations]
+    latest_trip_by_conversation: dict[int, int] = dict(
+        db.query(models.Trip.conversation_id, func.max(models.Trip.id))
+        .filter(models.Trip.user_id == user.id, models.Trip.conversation_id.in_(conversation_ids))
+        .group_by(models.Trip.conversation_id)
+        .all()
+        if conversation_ids
+        else []
+    )
+
+    return [
+        schemas.ConversationSummary(
+            id=c.id,
+            title=c.title,
+            created_at=c.created_at,
+            trip_id=latest_trip_by_conversation.get(c.id),
+        )
+        for c in conversations
+    ]
 
 
 @router.get("/{conversation_id}", response_model=schemas.ConversationDetail)

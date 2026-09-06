@@ -115,6 +115,14 @@ class ConversationSummary(BaseModel):
     id: int
     title: str
     created_at: datetime
+    # The latest Trip row generated in this conversation, if any -- lets the
+    # frontend route straight to that trip's "/trips/[tripId]" Trip Hub page
+    # instead of the plain chat view (routers/conversations.py's
+    # list_conversations computes this the same way routers/trips.py's
+    # list_trips already does: latest Trip per conversation_id). None for a
+    # conversation that hasn't generated an itinerary yet -- it has no Trip
+    # Hub page to go to.
+    trip_id: int | None = None
 
     class Config:
         from_attributes = True
