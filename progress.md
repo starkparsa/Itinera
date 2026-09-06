@@ -6,6 +6,112 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-06 — Split `generate_trip` and extracted `ChatShell.tsx` hooks (PR #33)
+
+The two "deliberate follow-ups" the codebase-cleanup pass below flagged
+but didn't touch — both deferred at the time as too risky to bundle with
+the zero/low-risk cleanup. Planned properly this time: two Explore passes
+(one per file, gathering exact line ranges/shared-state/cross-concern
+dependencies) feeding a Plan pass, then every claim in that plan
+double-checked by directly re-reading the actual current files before
+writing a line of code — not taken on an agent's word alone. Both are
+pure structural refactors; neither changes behavior.
+
+**Backend**: `routers/trips.py`'s `generate_trip` (~350 lines, three
+inline reply paths: off-topic, question, new/edit trip) split into three
+module-level helpers matching the file's own existing convention
+(`_persist_found_places`, `_build_conversation_context`, etc.):
+`_handle_off_topic`, `_handle_question`, `_handle_new_or_edit_trip`.
+`generate_trip` itself is now the shared preamble (quota check,
+conversation lookup/creation, intent classification) plus a 3-line
+dispatch. Extracted one branch at a time, running
+`pytest tests/test_trips_router.py -k <branch>` after each before moving
+to the next, then the full suite — 324/324 pass, `ruff check` clean.
+
+**Frontend**: `ChatShell.tsx` (578 lines, ~6 separable concerns per the
+2026-09-05 entry below) split into three new hooks, extracted in order
+from least to most coupled: `hooks/use-sidebar-open.ts` (self-contained,
+no cross-hook dependencies), `hooks/use-scroll-restore.ts` (needs only
+primitives `ChatShell` still owned directly at that point), and
+`hooks/use-conversation-loader.ts` (the largest and most coupled —
+conversation loading/caching *and* the pending/error state machine kept
+together deliberately, since `loadConversation` writes `pending`/`error`
+directly and splitting them would've meant passing setters bidirectionally
+between two hooks for no real benefit). Every load-bearing behavior from
+the 2026-09-05 fix — the Strict-Mode generation-counter guard, the
+module-scope caches (not hook-internal state, or they'd stop surviving
+remounts), `useSyncExternalStore` for the sidebar, `useLayoutEffect` for
+scroll timing, the `skipCache`+`showLoading` two-flag call shape — moved
+verbatim, not reimplemented. `ChatShell.tsx` is now 349 lines of glue +
+JSX. `ChatShellContext`'s public contract is unchanged, so
+`OpenConversation.tsx` and all three page files needed zero edits.
+`tsc`/`eslint` clean, full `next build` succeeds, dev server smoke-tested
+with no console errors.
+
+**Known gap**: no frontend test runner exists at all in this repo, so the
+real regression net for the frontend half is `tsc`/`eslint`/`build` plus
+a written manual checklist (chat-switch flash, scroll restore per
+conversation, Strict Mode rapid-click safety, delete clearing both
+caches) — not yet run by an actual signed-in user as of this entry, since
+the agent can't complete Google OAuth itself.
+
+## 2026-09-05/06 — Codebase-cleanup audit and cleanup (PR #31, #32)
+
+**PR #31 — a way to actually share a running instance.** CI already
+builds and publishes `ghcr.io/starkparsa/itinera-{backend,frontend}:latest`
+on every merge to `main` (confirmed live: both pullable with no login, via
+a raw anonymous-token manifest fetch, not assumed) — but nobody without
+the repo's full dev setup could use that fact. Added
+`docker-compose.share.yml` (pulls those images instead of building from
+source) and `.env.share.example`, defaulting `DATABASE_URL` to a local
+SQLite file so a friend needs nothing but Docker and one free Gemini key.
+Documented in README as a third "Option C" alongside the existing
+Docker-Compose-from-source and no-Docker paths.
+
+**PR #32 — full-codebase maintainability audit, then acted on the safe
+findings.** Three parallel Explore passes (backend, frontend, repo-root/
+config), every actionable finding verified directly against the real
+files before acting — not treated as ground truth from an agent's report
+alone. Overall finding: the codebase was already unusually disciplined;
+this was a short, low-risk list, not a sprawling one. Confirmed
+intentional and deliberately left alone: the MySQL/`legacy-mysql`/
+`pymysql`/`migrate_to_neon.py` rollback bundle (tracked by
+`docs/deployment-readiness.md` with an unmet removal condition), the
+`AGENT_TOOL_CALLING_ENABLED` currency kill-switch, `tools.TOOL_SCHEMAS`
+(exercised by a real test), and unused shadcn sub-exports (cost nothing
+at runtime, trimming them fights the project's own re-sync workflow).
+Shipped:
+
+- Deleted `frontend/src/app/api/trips/[tripId]/calendar/route.ts` — a
+  dead proxy route left over from before the two-button calendar export
+  UI was merged into one "Export Plan" button (2026-08-26 entry below).
+  The backend `.ics` endpoint it proxied stays; only the frontend wrapper
+  was unreachable.
+- Untracked `skills-lock.json` (`git rm --cached`) — committed before its
+  own `.gitignore` entry was added, directly contradicting that entry's
+  stated intent.
+- Reworded stale comments in `main.py`/`models.py` still naming MySQL as
+  the live database, post the 2026-08-29 Neon migration.
+- Forwarded `GOOGLE_PLACES_API_KEY`/`PEXELS_API_KEY`/`TICKETMASTER_API_KEY`
+  into both `docker-compose.yml` and `docker-compose.share.yml` — the same
+  class of gap `docker-compose.yml`'s own comments already recorded once
+  for `GROQ_API_KEY`, now recurring for three newer live, key-driven
+  features that had shipped since that fix.
+- Extracted `gemini_client.to_contents()` (identical chat-history-to-
+  `Content` conversion had been duplicated in `llm_service.py` and
+  `agent_service.py`) and `networkErrorMessage()` in `frontend/src/lib/
+  backend.ts` (the same catch-block ternary hand-rolled 4 times).
+- Removed two dead re-exports in `google_calendar.py` (`InvalidToken`,
+  `HttpError` — neither used anywhere, and `routers/trips.py` imports
+  `HttpError` directly from `googleapiclient.errors` instead).
+- Migrated all 5 pydantic v1-style `class Config: from_attributes = True`
+  blocks in `schemas.py` to v2's `model_config = ConfigDict(...)`.
+
+Deliberately *not* touched, flagged for their own later passes instead:
+splitting `generate_trip` and extracting `ChatShell.tsx`'s hooks — see
+the entry above this one for where those actually landed, one session
+later.
+
 ## 2026-09-05 — Chat-switch "full reload" bug: shared layout + server-side conversation seeding (PR #29)
 
 User-reported: switching chats in the sidebar looked like a full page

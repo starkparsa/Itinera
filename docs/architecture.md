@@ -268,6 +268,16 @@ conversation. See `decisions.md`'s UI styling entries for why: `/` and
 fully remounted the whole chat UI and re-ran auth + conversation-list
 fetches on every navigation.
 
+**Updated again 2026-09-06 (PR #33)** — the state the diagram below shows
+`ChatShell.tsx` as "owning" now actually lives in three extracted hooks
+it calls (`hooks/use-sidebar-open.ts`, `hooks/use-scroll-restore.ts`,
+`hooks/use-conversation-loader.ts`) rather than directly in the component
+-- `ChatShell.tsx` itself is 349 lines of glue + JSX now, not 578. Not
+redrawn as separate diagram nodes since this is an internal
+decomposition, not a change to the page/data-fetch relationships this
+diagram documents: `ChatShellContext`'s contract, and everything below
+about who calls what across the client/server boundary, is unchanged.
+
 ```mermaid
 flowchart TD
     Layout["app/(chat)/layout.tsx (Server Component)\nredirects to /login if unauthenticated,\nfetches conversation list ONCE --\nshared by both routes below, not\nremounted on navigation between them"]
