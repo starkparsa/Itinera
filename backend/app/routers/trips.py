@@ -143,214 +143,181 @@ def _summarize_itinerary(destination: str, items: list[models.ItineraryItem]) ->
     return summary[:1200]
 
 
-@router.post("/generate", response_model=schemas.TripResponse)
-# Stricter than the app-wide 100/minute default (see rate_limit.py) -- this
-# is the one route that always makes at least one real LLM call, so it's
-# the one that directly costs money per request. 10/minute per IP is
-# generous for a real user's own back-and-forth planning session while
-# still bounding worst-case spend from a single source. `request: Request`
-# below is required by slowapi's decorator (it locates the ASGI request by
-# that exact parameter name) -- distinct from `trip_request`, the actual
-# request body, which is what this function used to just call `request`
-# before this rate limit was added.
-@limiter.limit("10/minute")
-def generate_trip(
-    request: Request,
+def _handle_off_topic(
+    db: Session, conversation: models.Conversation, trip_request: schemas.TripRequest,
+) -> schemas.TripResponse:
+    """Off-topic turn: a fixed, non-LLM-generated decline. classify_intent
+    (called by generate_trip before dispatching here) is what actually
+    restricts the assistant to travel topics -- this branch never reaches
+    the itinerary/agent machinery at all, per architecture principle #1
+    ("classify before anything expensive runs")."""
+    db.add(models.Message(conversation_id=conversation.id, role="user", content=trip_request.prompt))
+    db.add(models.Message(conversation_id=conversation.id, role="assistant", content=llm_service.OFF_TOPIC_REPLY))
+    db.commit()
+    return schemas.TripResponse(conversation_id=conversation.id, reply=llm_service.OFF_TOPIC_REPLY)
+
+
+def _handle_question(
+    db: Session,
+    conversation: models.Conversation,
     trip_request: schemas.TripRequest,
-    user: models.User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    # Real auth as of Phase B (see CLAUDE.md decision log, "Auth" row) --
-    # get_current_user verifies the caller's JWT and guarantees a real,
-    # already-persisted User, so the old placeholder-auto-create block
-    # (which trusted a client-supplied user_id) is gone. Ownership checks on
-    # *other* endpoints (get_trip, calendar export, conversations) are
-    # still pending -- Phase C.
+    tour_guide_requested: bool,
+) -> schemas.TripResponse:
+    """Conversational Q&A turn -- no new Trip is generated. Grounds the
+    answer in real data (agent tool-calling findings, per-day weather) and
+    persists any places the tool loop found, but otherwise leaves
+    itinerary/trip state untouched. Extracted verbatim from generate_trip's
+    "question" branch (2026-09 maintainability review) -- see decisions.md
+    and progress.md for the history behind each piece of grounding below.
+    """
+    chat_messages = _build_chat_messages(conversation)
 
-    # Per-account daily cost cap, checked before anything else in this
-    # function -- same "gate before anything expensive runs" discipline as
-    # classify_intent below (architecture principle #1), just one step
-    # earlier: a user who's already hit today's limit shouldn't cost so
-    # much as a single classification call. See usage_quota.py for why this
-    # is DB-backed and distinct from rate_limit.py's IP-keyed flood
-    # protection.
-    if not usage_quota.check_and_consume_daily_quota(user, db):
-        raise HTTPException(
-            status_code=429,
-            detail=(
-                f"Daily limit of {usage_quota.DAILY_TRIP_GENERATION_LIMIT} requests reached for "
-                "this account. Try again tomorrow."
-            ),
+    # Needed below for both the on-demand currency fetch's destination
+    # hint and the real weather grounding -- looked up unconditionally
+    # now (not just inside the "nothing cached yet" branch below),
+    # since weather needs it on every question turn, not just the
+    # first one in a conversation.
+    latest_trip = (
+        db.query(models.Trip)
+        .filter(models.Trip.conversation_id == conversation.id)
+        .order_by(models.Trip.id.desc())
+        .first()
+    )
+
+    # Nothing gathered yet for this conversation at all -- try a real,
+    # scoped fetch before answering rather than letting the model guess
+    # (see CLAUDE.md principle #7). Gated on `is None` specifically (not
+    # just falsy) so this branch's own currency gather won't re-fire on
+    # every later question turn, even once it's cached "" for "found
+    # nothing". Deliberately NOT the same contract itinerary generation
+    # uses below (`cached_agent_context`/`was_freshly_gathered` there
+    # are truthy-gated, not `is None`-gated) -- a "" cached here by a
+    # Q&A turn must NOT permanently block that loop's own place-context
+    # gathering; see the 2026-08-30 fix on both of those for why.
+    fresh_agent_context = ""
+    if conversation.agent_context is None:
+        # A destination hint helps when the question itself doesn't name
+        # a place ("what does the temperature look like?"); fine to
+        # leave unset if no trip exists yet -- the question text alone
+        # may name one, and the fetch degrades quietly either way.
+        fresh_agent_context = agent_service.gather_trip_context(
+            trip_request.prompt, destination=latest_trip.destination if latest_trip else None,
         )
 
-    if trip_request.conversation_id:
-        conversation = (
-            db.query(models.Conversation)
-            .filter(models.Conversation.id == trip_request.conversation_id, models.Conversation.user_id == user.id)
-            .first()
-        )
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-    else:
-        title = trip_request.prompt[:60] + ("..." if len(trip_request.prompt) > 60 else "")
-        conversation = models.Conversation(user_id=user.id, title=title)
-        db.add(conversation)
-        db.flush()
+    effective_agent_context = fresh_agent_context or (conversation.agent_context or "")
 
-    conversation_context = _build_conversation_context(conversation)
+    # Real per-day forecast, if this conversation has a trip with one.
+    # Regression fix: a question about weather-appropriate outfits was
+    # answered with plausible-but-wrong temperatures (~70-80F for a
+    # real 104-108F forecast) because this data never reached the Q&A
+    # path at all -- only the currency agent_context above did (see
+    # CLAUDE.md decision log). Called on every question turn, not just
+    # once per conversation like the agent step above -- unlike that
+    # Gemini call, weather_service caches internally (3h TTL, see
+    # get_or_refresh_trip_weather), so this is a cheap cache read in
+    # the common case, not a fresh fetch every time.
+    weather_context = ""
+    if latest_trip:
+        # The generating prompt may never have named a date ("build me a
+        # trip to Austin"), leaving start_date unresolved -- but the
+        # question itself often does ("...this weekend"). Bug found live:
+        # asking a weather question with a date phrase in the *question*
+        # got "I don't have current weather data" even though the date
+        # was sitting right there in the text, because this branch only
+        # ever read the trip's already-resolved start_date. Try resolving
+        # one from the question text too (same deterministic
+        # date_resolver used at generation time -- principle #6), and
+        # persist it onto the trip so this unlocks weather (and calendar
+        # export) for the rest of the conversation too, not just this
+        # one answer (principle #5).
+        if latest_trip.start_date is None:
+            resolved_start_date = date_resolver.resolve_trip_start_date(trip_request.prompt, date.today())
+            if resolved_start_date:
+                latest_trip.start_date = resolved_start_date
 
-    # Classify before doing anything expensive. This is what fixes messages
-    # getting nonsensical itinerary-shaped replies to plain questions, and
-    # is also what actually restricts the assistant to travel topics --
-    # off-topic requests never reach the LLM's itinerary/agent machinery at
-    # all, they get a fixed, non-LLM-generated decline.
-    intent, tour_guide_requested = llm_service.classify_intent(trip_request.prompt, conversation_context)
+        weather_data = weather_service.get_or_refresh_trip_weather(latest_trip, latest_trip.items)
+        if weather_data:
+            weather_context = weather_service.summarize_for_prompt(latest_trip.destination, weather_data)
 
-    if intent == "off_topic":
-        db.add(models.Message(conversation_id=conversation.id, role="user", content=trip_request.prompt))
-        db.add(models.Message(conversation_id=conversation.id, role="assistant", content=llm_service.OFF_TOPIC_REPLY))
-        db.commit()
-        return schemas.TripResponse(conversation_id=conversation.id, reply=llm_service.OFF_TOPIC_REPLY)
+    combined_context = " ".join(part for part in (effective_agent_context, weather_context) if part)
 
-    if intent == "question":
-        chat_messages = _build_chat_messages(conversation)
+    # Try the place-context tool-calling loop first -- run fresh on
+    # every question turn, never cached across turns (see
+    # agent_service.answer_question_with_tools's docstring for why:
+    # unlike the currency agent step above, a different place can be
+    # asked about on every turn, so caching the first answer forever
+    # would silently reuse it for every later question). It already
+    # fails quietly (returns "" when QA_TOOL_CALLING_ENABLED is off or
+    # on any internal error), so an empty result here just means "fall
+    # back to the plain Q&A path" -- a Wikipedia/Gemini hiccup must
+    # never block an answer to the user's question.
+    # Captured before conversation.tour_guide_mode is mutated below --
+    # true exactly on the turn that flips the mode from off to on, so
+    # the deterministic acknowledgment prefix (below) fires once, on
+    # activation, and never again on later turns that keep it on.
+    activating_tour_guide = tour_guide_requested and not conversation.tour_guide_mode
 
-        # Needed below for both the on-demand currency fetch's destination
-        # hint and the real weather grounding -- looked up unconditionally
-        # now (not just inside the "nothing cached yet" branch below),
-        # since weather needs it on every question turn, not just the
-        # first one in a conversation.
-        latest_trip = (
-            db.query(models.Trip)
-            .filter(models.Trip.conversation_id == conversation.id)
-            .order_by(models.Trip.id.desc())
-            .first()
-        )
+    reply_text, qa_tool_calls = agent_service.answer_question_with_tools(
+        trip_request.prompt, chat_messages, agent_context=combined_context,
+        # Pass the mode as it stood ENTERING this turn -- the
+        # triggering "be my tour guide" turn itself already gets a
+        # detailed reply via QA_TOOL_SYSTEM_PROMPT's own per-turn
+        # instruction, this flag only needs to cover turns after that.
+        tour_guide_mode=conversation.tour_guide_mode,
+    )
+    # No new Trip is created on the question path -- persist against
+    # whichever trip already exists in this conversation, if any.
+    # Nothing to attach a found place to when there isn't one yet, so
+    # this is skipped rather than fabricating a trip just to hold it.
+    if latest_trip:
+        _persist_found_places(db, latest_trip.id, qa_tool_calls)
 
-        # Nothing gathered yet for this conversation at all -- try a real,
-        # scoped fetch before answering rather than letting the model guess
-        # (see CLAUDE.md principle #7). Gated on `is None` specifically (not
-        # just falsy) so this branch's own currency gather won't re-fire on
-        # every later question turn, even once it's cached "" for "found
-        # nothing". Deliberately NOT the same contract itinerary generation
-        # uses below (`cached_agent_context`/`was_freshly_gathered` there
-        # are truthy-gated, not `is None`-gated) -- a "" cached here by a
-        # Q&A turn must NOT permanently block that loop's own place-context
-        # gathering; see the 2026-08-30 fix on both of those for why.
-        fresh_agent_context = ""
-        if conversation.agent_context is None:
-            # A destination hint helps when the question itself doesn't name
-            # a place ("what does the temperature look like?"); fine to
-            # leave unset if no trip exists yet -- the question text alone
-            # may name one, and the fetch degrades quietly either way.
-            fresh_agent_context = agent_service.gather_trip_context(
-                trip_request.prompt, destination=latest_trip.destination if latest_trip else None,
+    try:
+        if not reply_text:
+            reply_text = llm_service.answer_question(
+                trip_request.prompt, chat_messages, agent_context=combined_context,
             )
+    except Exception as exc:
+        logger.exception("Q&A request failed for conversation %s", conversation.id)
+        raise HTTPException(status_code=502, detail=f"LLM failed to answer: {exc}")
 
-        effective_agent_context = fresh_agent_context or (conversation.agent_context or "")
+    # Deterministic, not LLM-worded -- exact required boilerplate is
+    # more reliable coming from Python than from trusting the model to
+    # phrase an acknowledgment verbatim every time (principle #6's
+    # discipline, extended from date arithmetic to fixed wording).
+    # Applies regardless of which path above produced reply_text.
+    if activating_tour_guide and not reply_text.startswith("Tour guide mode on."):
+        reply_text = f"Tour guide mode on. {reply_text}"
 
-        # Real per-day forecast, if this conversation has a trip with one.
-        # Regression fix: a question about weather-appropriate outfits was
-        # answered with plausible-but-wrong temperatures (~70-80F for a
-        # real 104-108F forecast) because this data never reached the Q&A
-        # path at all -- only the currency agent_context above did (see
-        # CLAUDE.md decision log). Called on every question turn, not just
-        # once per conversation like the agent step above -- unlike that
-        # Gemini call, weather_service caches internally (3h TTL, see
-        # get_or_refresh_trip_weather), so this is a cheap cache read in
-        # the common case, not a fresh fetch every time.
-        weather_context = ""
-        if latest_trip:
-            # The generating prompt may never have named a date ("build me a
-            # trip to Austin"), leaving start_date unresolved -- but the
-            # question itself often does ("...this weekend"). Bug found live:
-            # asking a weather question with a date phrase in the *question*
-            # got "I don't have current weather data" even though the date
-            # was sitting right there in the text, because this branch only
-            # ever read the trip's already-resolved start_date. Try resolving
-            # one from the question text too (same deterministic
-            # date_resolver used at generation time -- principle #6), and
-            # persist it onto the trip so this unlocks weather (and calendar
-            # export) for the rest of the conversation too, not just this
-            # one answer (principle #5).
-            if latest_trip.start_date is None:
-                resolved_start_date = date_resolver.resolve_trip_start_date(trip_request.prompt, date.today())
-                if resolved_start_date:
-                    latest_trip.start_date = resolved_start_date
+    if conversation.agent_context is None:
+        conversation.agent_context = fresh_agent_context
 
-            weather_data = weather_service.get_or_refresh_trip_weather(latest_trip, latest_trip.items)
-            if weather_data:
-                weather_context = weather_service.summarize_for_prompt(latest_trip.destination, weather_data)
+    # This turn explicitly asked the assistant to become a tour guide
+    # -- stays on for later turns until an edit_trip/new_trip turn
+    # clears it (see the branch below).
+    if tour_guide_requested:
+        conversation.tour_guide_mode = True
 
-        combined_context = " ".join(part for part in (effective_agent_context, weather_context) if part)
+    db.add(models.Message(conversation_id=conversation.id, role="user", content=trip_request.prompt))
+    db.add(models.Message(conversation_id=conversation.id, role="assistant", content=reply_text))
+    db.commit()
+    return schemas.TripResponse(conversation_id=conversation.id, reply=reply_text)
 
-        # Try the place-context tool-calling loop first -- run fresh on
-        # every question turn, never cached across turns (see
-        # agent_service.answer_question_with_tools's docstring for why:
-        # unlike the currency agent step above, a different place can be
-        # asked about on every turn, so caching the first answer forever
-        # would silently reuse it for every later question). It already
-        # fails quietly (returns "" when QA_TOOL_CALLING_ENABLED is off or
-        # on any internal error), so an empty result here just means "fall
-        # back to the plain Q&A path" -- a Wikipedia/Gemini hiccup must
-        # never block an answer to the user's question.
-        # Captured before conversation.tour_guide_mode is mutated below --
-        # true exactly on the turn that flips the mode from off to on, so
-        # the deterministic acknowledgment prefix (below) fires once, on
-        # activation, and never again on later turns that keep it on.
-        activating_tour_guide = tour_guide_requested and not conversation.tour_guide_mode
 
-        reply_text, qa_tool_calls = agent_service.answer_question_with_tools(
-            trip_request.prompt, chat_messages, agent_context=combined_context,
-            # Pass the mode as it stood ENTERING this turn -- the
-            # triggering "be my tour guide" turn itself already gets a
-            # detailed reply via QA_TOOL_SYSTEM_PROMPT's own per-turn
-            # instruction, this flag only needs to cover turns after that.
-            tour_guide_mode=conversation.tour_guide_mode,
-        )
-        # No new Trip is created on the question path -- persist against
-        # whichever trip already exists in this conversation, if any.
-        # Nothing to attach a found place to when there isn't one yet, so
-        # this is skipped rather than fabricating a trip just to hold it.
-        if latest_trip:
-            _persist_found_places(db, latest_trip.id, qa_tool_calls)
-
-        try:
-            if not reply_text:
-                reply_text = llm_service.answer_question(
-                    trip_request.prompt, chat_messages, agent_context=combined_context,
-                )
-        except Exception as exc:
-            logger.exception("Q&A request failed for conversation %s", conversation.id)
-            raise HTTPException(status_code=502, detail=f"LLM failed to answer: {exc}")
-
-        # Deterministic, not LLM-worded -- exact required boilerplate is
-        # more reliable coming from Python than from trusting the model to
-        # phrase an acknowledgment verbatim every time (principle #6's
-        # discipline, extended from date arithmetic to fixed wording).
-        # Applies regardless of which path above produced reply_text.
-        if activating_tour_guide and not reply_text.startswith("Tour guide mode on."):
-            reply_text = f"Tour guide mode on. {reply_text}"
-
-        if conversation.agent_context is None:
-            conversation.agent_context = fresh_agent_context
-
-        # This turn explicitly asked the assistant to become a tour guide
-        # -- stays on for later turns until an edit_trip/new_trip turn
-        # clears it (see the branch below).
-        if tour_guide_requested:
-            conversation.tour_guide_mode = True
-
-        db.add(models.Message(conversation_id=conversation.id, role="user", content=trip_request.prompt))
-        db.add(models.Message(conversation_id=conversation.id, role="assistant", content=reply_text))
-        db.commit()
-        return schemas.TripResponse(conversation_id=conversation.id, reply=reply_text)
-
-    # "new_trip" or "edit_trip" -- generate a full itinerary. Note: "edit_trip"
-    # currently still regenerates the whole thing (with conversation_context
-    # carrying the requested change) rather than surgically editing specific
-    # days -- true diff-based editing is a bigger feature for another time.
-    #
+def _handle_new_or_edit_trip(
+    db: Session,
+    user: models.User,
+    conversation: models.Conversation,
+    trip_request: schemas.TripRequest,
+    conversation_context: str,
+) -> schemas.TripResponse:
+    """"new_trip" or "edit_trip" -- generate a full itinerary. Note:
+    "edit_trip" currently still regenerates the whole thing (with
+    conversation_context carrying the requested change) rather than
+    surgically editing specific days -- true diff-based editing is a
+    bigger feature for another time. Extracted verbatim from
+    generate_trip's fallthrough branch (2026-09 maintainability review).
+    """
     # Explicitly talking about planning again turns persistent tour-guide
     # mode back off -- unconditional, regardless of tour_guide_requested
     # (INTENT_INSTRUCTIONS tells the model that combination shouldn't
@@ -504,6 +471,81 @@ def generate_trip(
         weather=[schemas.DayWeatherOut(**w) for w in weather_out],
         start_date=trip.start_date,
     )
+
+
+@router.post("/generate", response_model=schemas.TripResponse)
+# Stricter than the app-wide 100/minute default (see rate_limit.py) -- this
+# is the one route that always makes at least one real LLM call, so it's
+# the one that directly costs money per request. 10/minute per IP is
+# generous for a real user's own back-and-forth planning session while
+# still bounding worst-case spend from a single source. `request: Request`
+# below is required by slowapi's decorator (it locates the ASGI request by
+# that exact parameter name) -- distinct from `trip_request`, the actual
+# request body, which is what this function used to just call `request`
+# before this rate limit was added.
+@limiter.limit("10/minute")
+def generate_trip(
+    request: Request,
+    trip_request: schemas.TripRequest,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    # Real auth as of Phase B (see CLAUDE.md decision log, "Auth" row) --
+    # get_current_user verifies the caller's JWT and guarantees a real,
+    # already-persisted User, so the old placeholder-auto-create block
+    # (which trusted a client-supplied user_id) is gone. Ownership checks on
+    # *other* endpoints (get_trip, calendar export, conversations) are
+    # still pending -- Phase C.
+
+    # Per-account daily cost cap, checked before anything else in this
+    # function -- same "gate before anything expensive runs" discipline as
+    # classify_intent below (architecture principle #1), just one step
+    # earlier: a user who's already hit today's limit shouldn't cost so
+    # much as a single classification call. See usage_quota.py for why this
+    # is DB-backed and distinct from rate_limit.py's IP-keyed flood
+    # protection.
+    if not usage_quota.check_and_consume_daily_quota(user, db):
+        raise HTTPException(
+            status_code=429,
+            detail=(
+                f"Daily limit of {usage_quota.DAILY_TRIP_GENERATION_LIMIT} requests reached for "
+                "this account. Try again tomorrow."
+            ),
+        )
+
+    if trip_request.conversation_id:
+        conversation = (
+            db.query(models.Conversation)
+            .filter(models.Conversation.id == trip_request.conversation_id, models.Conversation.user_id == user.id)
+            .first()
+        )
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    else:
+        title = trip_request.prompt[:60] + ("..." if len(trip_request.prompt) > 60 else "")
+        conversation = models.Conversation(user_id=user.id, title=title)
+        db.add(conversation)
+        db.flush()
+
+    conversation_context = _build_conversation_context(conversation)
+
+    # Classify before doing anything expensive. This is what fixes messages
+    # getting nonsensical itinerary-shaped replies to plain questions, and
+    # is also what actually restricts the assistant to travel topics --
+    # off-topic requests never reach the LLM's itinerary/agent machinery at
+    # all, they get a fixed, non-LLM-generated decline.
+    intent, tour_guide_requested = llm_service.classify_intent(trip_request.prompt, conversation_context)
+
+    if intent == "off_topic":
+        return _handle_off_topic(db, conversation, trip_request)
+
+    if intent == "question":
+        return _handle_question(db, conversation, trip_request, tour_guide_requested)
+
+    # "new_trip" or "edit_trip" -- generate a full itinerary. See
+    # _handle_new_or_edit_trip's docstring for why "edit_trip" still
+    # regenerates the whole thing rather than surgically editing.
+    return _handle_new_or_edit_trip(db, user, conversation, trip_request, conversation_context)
 
 
 @router.get("", response_model=list[schemas.TripSummary])
