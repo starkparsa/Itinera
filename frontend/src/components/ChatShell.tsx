@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, Luggage } from "lucide-react";
@@ -33,6 +33,33 @@ const scrollPositionCache = new Map<number, number>();
 // instead of a network round trip. Written to on every successful fetch;
 // never read across a real page reload.
 const conversationCache = new Map<number, ConversationDetail>();
+
+const SIDEBAR_STORAGE_KEY = "itinera:sidebar-open";
+
+// useSyncExternalStore, not useState+useEffect -- same reasoning as
+// hooks/use-mobile.ts (also reading a client-only external source):
+// sidesteps both the react-hooks/set-state-in-effect lint error and the
+// hydration-mismatch flash that reading localStorage in a useState
+// initializer would cause, since React knows to render getServerSnapshot's
+// value during SSR/hydration and only switches to the real one afterward.
+function subscribeSidebarStorage(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  return () => window.removeEventListener("storage", onChange);
+}
+
+function getSidebarStorageSnapshot() {
+  try {
+    return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
+  } catch {
+    return false; // Private browsing / storage disabled -- just stays closed.
+  }
+}
+
+// No storage to read on the server -- collapsed by default, matching the
+// "nothing extra on screen until asked for it" Trip Hub v2 direction.
+function getSidebarServerSnapshot() {
+  return false;
+}
 
 // What a page (via the OpenConversation bridge, components/OpenConversation.tsx)
 // needs to tell the shell which conversation to show.
@@ -134,34 +161,30 @@ export default function ChatShell({
   // being remounted per page, the toggle already survives normal
   // navigation between "/" and "/trips/[tripId]" on its own.
   //
-  // Initial render always starts closed (matching the server-rendered HTML)
-  // and an effect flips it open right after mount if storage says so --
-  // reading localStorage in the initializer instead would make the client's
-  // first render disagree with the server's, which React flags as a
-  // hydration mismatch.
-  const [sidebarOpen, setSidebarOpenState] = useState(false);
-
-  useEffect(() => {
-    try {
-      if (window.localStorage.getItem("itinera:sidebar-open") === "true") {
-        setSidebarOpenState(true);
-      }
-    } catch {
-      // Private browsing / storage disabled -- just stays closed.
-    }
-  }, []);
+  // storedSidebarOpen (useSyncExternalStore, see the module-scope helpers
+  // above) reflects localStorage without needing an effect to sync it in --
+  // sidebarOpenOverride is null until the user actually toggles it *this*
+  // mount, at which point it takes precedence. Once toggled, the override
+  // sticks even if storedSidebarOpen changes later (e.g. another tab
+  // writing to the same key) -- same "read once, then it's this session's
+  // own state" behavior the old useState+useEffect version had.
+  const storedSidebarOpen = useSyncExternalStore(
+    subscribeSidebarStorage,
+    getSidebarStorageSnapshot,
+    getSidebarServerSnapshot,
+  );
+  const [sidebarOpenOverride, setSidebarOpenOverride] = useState<boolean | null>(null);
+  const sidebarOpen = sidebarOpenOverride ?? storedSidebarOpen;
 
   function setSidebarOpen(next: boolean | ((prev: boolean) => boolean)) {
-    setSidebarOpenState((prev) => {
-      const value = typeof next === "function" ? next(prev) : next;
-      try {
-        window.localStorage.setItem("itinera:sidebar-open", String(value));
-      } catch {
-        // Private browsing / storage disabled -- the toggle still works
-        // for this instance, it just won't survive navigation.
-      }
-      return value;
-    });
+    const value = typeof next === "function" ? next(sidebarOpen) : next;
+    setSidebarOpenOverride(value);
+    try {
+      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(value));
+    } catch {
+      // Private browsing / storage disabled -- the toggle still works
+      // for this instance, it just won't survive navigation.
+    }
   }
   // Real breakpoint check (not just a CSS class) -- deciding which of the
   // two presentations to *mount* has to happen in JS. A CSS-only "hide the
