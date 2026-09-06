@@ -1,11 +1,11 @@
 "use client";
 
-import { createContext, useContext, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, Luggage } from "lucide-react";
 import type { ConversationDetail, ConversationSummary, MessageOut, TripResponse } from "@/lib/types";
-import { deleteConversation, generateTrip, getConversation, listConversations } from "@/lib/backend";
+import { deleteConversation, listConversations } from "@/lib/backend";
 import Sidebar from "./Sidebar";
 import ChatMessage from "./ChatMessage";
 import ChatInput from "./ChatInput";
@@ -17,49 +17,9 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useIsMobile } from "@/hooks/use-mobile";
-
-// In-memory scroll-position cache, keyed by conversation id -- module scope,
-// not component state. Originally built to survive ChatApp remounting on
-// every route change between "/" and "/trips/[tripId]"; now that ChatShell
-// itself lives in a shared layout and doesn't remount for that anymore,
-// this is a smaller but still real optimization: scroll position for a
-// chat you've viewed earlier this session survives navigating away to
-// "/trips" (outside the shared layout) and back.
-const scrollPositionCache = new Map<number, number>();
-
-// In-memory cache of already-fetched conversations, keyed by id -- same
-// module-scope lifetime/reasoning as scrollPositionCache above. Revisiting
-// a chat previously opened this session renders instantly from here
-// instead of a network round trip. Written to on every successful fetch;
-// never read across a real page reload.
-const conversationCache = new Map<number, ConversationDetail>();
-
-const SIDEBAR_STORAGE_KEY = "itinera:sidebar-open";
-
-// useSyncExternalStore, not useState+useEffect -- same reasoning as
-// hooks/use-mobile.ts (also reading a client-only external source):
-// sidesteps both the react-hooks/set-state-in-effect lint error and the
-// hydration-mismatch flash that reading localStorage in a useState
-// initializer would cause, since React knows to render getServerSnapshot's
-// value during SSR/hydration and only switches to the real one afterward.
-function subscribeSidebarStorage(onChange: () => void) {
-  window.addEventListener("storage", onChange);
-  return () => window.removeEventListener("storage", onChange);
-}
-
-function getSidebarStorageSnapshot() {
-  try {
-    return window.localStorage.getItem(SIDEBAR_STORAGE_KEY) === "true";
-  } catch {
-    return false; // Private browsing / storage disabled -- just stays closed.
-  }
-}
-
-// No storage to read on the server -- collapsed by default, matching the
-// "nothing extra on screen until asked for it" Trip Hub v2 direction.
-function getSidebarServerSnapshot() {
-  return false;
-}
+import { useSidebarOpen } from "@/hooks/use-sidebar-open";
+import { useScrollRestore } from "@/hooks/use-scroll-restore";
+import { useConversationLoader } from "@/hooks/use-conversation-loader";
 
 // What a page (via the OpenConversation bridge, components/OpenConversation.tsx)
 // needs to tell the shell which conversation to show.
@@ -101,18 +61,6 @@ function latestExportableTrip(messages: MessageOut[]): TripResponse | null {
   return null;
 }
 
-// Covers both request shapes this component makes -- sending a prompt
-// (generateTrip) and loading a conversation (getConversation, from either a
-// sidebar click or the OpenConversation bridge's initial-mount call).
-// "submitting" carries the prompt so the pending bubble can echo it back;
-// "loading" has nothing to echo, so it renders skeleton bubbles instead.
-type PendingState = { kind: "idle" } | { kind: "submitting"; prompt: string } | { kind: "loading" };
-
-// A retryable error -- `retry` is whatever action produced the error,
-// closed over its original arguments, so the "Try again" button never has
-// to re-derive which of the two request shapes above failed.
-type ErrorState = { message: string; retry: () => void } | null;
-
 function ConversationSkeleton() {
   return (
     <div className="flex flex-col gap-4" aria-hidden>
@@ -141,15 +89,22 @@ export default function ChatShell({
   children?: React.ReactNode;
 }) {
   const [conversations, setConversations] = useState<ConversationSummary[]>(initialConversations);
-  const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
-  const [messages, setMessages] = useState<MessageOut[]>([]);
-  const [pending, setPending] = useState<PendingState>({ kind: "idle" });
-  const [error, setError] = useState<ErrorState>(null);
-  // Drives the [data-tour-guide-mode] accent override in globals.css --
-  // set from whatever the backend last reported for this conversation, so
-  // it reverts automatically the moment a load reflects the mode turning
-  // back off (e.g. after an edit/new-trip turn, or switching chats).
-  const [tourGuideMode, setTourGuideMode] = useState(false);
+  // See useConversationLoader's own docstring for the cache/generation-
+  // counter/pending-error rationale (extracted 2026-09 maintainability
+  // review).
+  const {
+    activeConversationId,
+    messages,
+    pending,
+    error,
+    tourGuideMode,
+    loadConversation,
+    startNewChat,
+    openConversation,
+    seedConversation,
+    invalidateConversation,
+    submitPrompt,
+  } = useConversationLoader();
   // Collapsed by default -- "nothing extra on screen until asked for it,"
   // per the Trip Hub v2 direction (decisions.md's UI styling entry). Same
   // boolean drives both presentations below (inline column on desktop, an
@@ -159,33 +114,10 @@ export default function ChatShell({
   // Persisted to localStorage as a secondary safety net (e.g. a hard
   // refresh) -- now that this shell lives in a shared layout instead of
   // being remounted per page, the toggle already survives normal
-  // navigation between "/" and "/trips/[tripId]" on its own.
-  //
-  // storedSidebarOpen (useSyncExternalStore, see the module-scope helpers
-  // above) reflects localStorage without needing an effect to sync it in --
-  // sidebarOpenOverride is null until the user actually toggles it *this*
-  // mount, at which point it takes precedence. Once toggled, the override
-  // sticks even if storedSidebarOpen changes later (e.g. another tab
-  // writing to the same key) -- same "read once, then it's this session's
-  // own state" behavior the old useState+useEffect version had.
-  const storedSidebarOpen = useSyncExternalStore(
-    subscribeSidebarStorage,
-    getSidebarStorageSnapshot,
-    getSidebarServerSnapshot,
-  );
-  const [sidebarOpenOverride, setSidebarOpenOverride] = useState<boolean | null>(null);
-  const sidebarOpen = sidebarOpenOverride ?? storedSidebarOpen;
-
-  function setSidebarOpen(next: boolean | ((prev: boolean) => boolean)) {
-    const value = typeof next === "function" ? next(sidebarOpen) : next;
-    setSidebarOpenOverride(value);
-    try {
-      window.localStorage.setItem(SIDEBAR_STORAGE_KEY, String(value));
-    } catch {
-      // Private browsing / storage disabled -- the toggle still works
-      // for this instance, it just won't survive navigation.
-    }
-  }
+  // navigation between "/" and "/trips/[tripId]" on its own. See
+  // useSidebarOpen's own docstring for the useSyncExternalStore/override
+  // precedence rationale (extracted 2026-09 maintainability review).
+  const [sidebarOpen, setSidebarOpen] = useSidebarOpen();
   // Real breakpoint check (not just a CSS class) -- deciding which of the
   // two presentations to *mount* has to happen in JS. A CSS-only "hide the
   // Sheet at md:" would still leave Base UI's Dialog open and trapping
@@ -194,166 +126,22 @@ export default function ChatShell({
   const router = useRouter();
   const pathname = usePathname();
 
-  // Scroll position handling for the message log -- see the layout effect
-  // below for the actual restore/jump-to-bottom logic.
-  const messageLogRef = useRef<HTMLDivElement>(null);
-  // Tracks which conversation the log was last scrolled for, so the effect
-  // can tell "just switched to a different chat" (restore where the user
-  // left it, or jump to the bottom if that's the first visit) apart from
-  // "same chat, a message was just sent/received" (always jump to the
-  // bottom for that one, regardless of any remembered position).
-  const scrolledForConversationRef = useRef<number | null>(null);
-
-  // Monotonically increasing per loadConversation() call -- lets a call
-  // tell whether it's still the most recent one by the time its async work
-  // resolves. Needed because React Strict Mode's dev-only double-invoke of
-  // effects (mount -> simulate-unmount -> mount again) fires the mount
-  // effect that calls loadConversation twice in a row; without this, both
-  // calls' results could apply, in either order, producing an inconsistent
-  // final state. Also naturally covers the general case of the user
-  // switching chats again before an earlier load finishes.
-  const loadGenerationRef = useRef(0);
+  // See useScrollRestore's own docstring for the restore/jump-to-bottom
+  // logic (extracted 2026-09 maintainability review).
+  const { messageLogRef, handleMessageLogScroll, invalidateScrollPosition } = useScrollRestore(
+    activeConversationId,
+    messages,
+    pending.kind,
+  );
 
   async function refreshConversationList() {
     setConversations(await listConversations());
   }
 
-  function applyConversationDetail(id: number, detail: ConversationDetail) {
-    setError(null);
-    setActiveConversationId(id);
-    setMessages(detail.messages);
-    setTourGuideMode(detail.tour_guide_mode);
-  }
-
-  // showLoading=false is used only for the immediate post-generate load in
-  // handleSubmit below -- that call already has its own "submitting" bubble
-  // on screen, so touching `pending` here would just flash it to a skeleton
-  // and back for no reason. Every other caller (sidebar click, the
-  // OpenConversation mount effect) leaves it true and gets the real
-  // loading state.
-  //
-  // A conversation already fetched this session (conversationCache above)
-  // renders immediately from that cached copy -- no loading skeleton, no
-  // network wait -- and then quietly re-fetches in the background to catch
-  // anything that changed (e.g. a refreshed weather forecast) without
-  // flashing a loading state for content already on screen.
-  //
-  // skipCache=true is for handleSubmit's post-send reload: generateTrip
-  // just changed this exact conversation server-side (a new message was
-  // added), so the cached copy is now known-stale -- rendering it first
-  // would flash the just-sent message away for a moment until the
-  // background revalidation above caught up.
-  async function loadConversation(id: number, opts: { showLoading?: boolean; skipCache?: boolean } = {}) {
-    const { showLoading = true, skipCache = false } = opts;
-    const myGeneration = ++loadGenerationRef.current;
-    const cached = skipCache ? undefined : conversationCache.get(id);
-
-    if (cached) {
-      applyConversationDetail(id, cached);
-      // Background revalidation -- deliberately not awaited, no pending
-      // state touched, and no error surfaced on failure: the cached
-      // content already on screen is a perfectly good result on its own,
-      // this is purely a "keep it fresh" best effort.
-      getConversation(id)
-        .then((fresh) => {
-          if (!fresh) return;
-          conversationCache.set(id, fresh);
-          // Only apply if no newer loadConversation call (a re-invoke from
-          // Strict Mode, or the user switching chats again) has started
-          // since this one began.
-          if (loadGenerationRef.current === myGeneration) applyConversationDetail(id, fresh);
-        })
-        .catch(() => {
-          // Stale cached content stays on screen; nothing to surface here.
-        });
-      return;
-    }
-
-    if (showLoading) setPending({ kind: "loading" });
-    try {
-      const detail = await getConversation(id);
-      if (loadGenerationRef.current !== myGeneration) return; // superseded -- discard
-      if (!detail) {
-        setError({ message: "Couldn't load that chat.", retry: () => loadConversation(id, opts) });
-        return;
-      }
-      conversationCache.set(id, detail);
-      applyConversationDetail(id, detail);
-    } finally {
-      if (showLoading && loadGenerationRef.current === myGeneration) setPending({ kind: "idle" });
-    }
-  }
-
-  // Restores scroll position on the message log whenever it has something
-  // new to show -- previously this was never touched, so switching chats
-  // (or reopening one after navigating away) left the log wherever it
-  // happened to be, usually scrolled to the top of a long conversation
-  // instead of the latest message. A layout effect (not a plain effect) so
-  // this runs before the browser paints the new content -- otherwise the
-  // wrong position would flash on screen for a frame first.
-  //
-  // Switching to a different conversation: restore its remembered scroll
-  // position (scrollPositionCache above, see the log's onScroll below) if
-  // it has one -- i.e. "where the user left it" -- otherwise this is the
-  // first time it's been opened this session, so jump straight to the
-  // latest message. Staying on the same conversation (a message was just
-  // sent or a reply arrived): always jump to the bottom, regardless of any
-  // remembered position -- a fresh message is exactly what a mid-scroll
-  // remembered position would otherwise hide.
-  useLayoutEffect(() => {
-    const el = messageLogRef.current;
-    if (!el || pending.kind === "loading") return;
-
-    const switchedConversation = scrolledForConversationRef.current !== activeConversationId;
-    scrolledForConversationRef.current = activeConversationId;
-
-    if (switchedConversation && activeConversationId != null) {
-      const stored = scrollPositionCache.get(activeConversationId);
-      el.scrollTop = stored ?? el.scrollHeight;
-    } else {
-      el.scrollTop = el.scrollHeight;
-    }
-  }, [messages, activeConversationId, pending.kind]);
-
-  function handleMessageLogScroll(e: React.UIEvent<HTMLDivElement>) {
-    if (activeConversationId != null) {
-      scrollPositionCache.set(activeConversationId, e.currentTarget.scrollTop);
-    }
-  }
-
-  function startNewChat() {
-    setActiveConversationId(null);
-    setMessages([]);
-    setError(null);
-    setTourGuideMode(false);
-  }
-
-  // Exposed via ChatShellContext -- the one entry point a page (through the
-  // OpenConversation bridge) uses to say "this is the conversation I want
-  // shown." null means the fresh "New chat" state.
-  function openConversation(id: number | null) {
-    if (id == null) {
-      startNewChat();
-    } else {
-      loadConversation(id);
-    }
-  }
-
-  // Applies a server-fetched conversation detail with zero client-side
-  // network call -- see ChatShellContextValue's comment above for why this
-  // exists. Still bumps loadGenerationRef so a concurrent/later
-  // loadConversation call (e.g. the user clicking a different chat before
-  // this one even finishes mounting) correctly supersedes it.
-  function seedConversation(id: number, detail: ConversationDetail) {
-    ++loadGenerationRef.current;
-    conversationCache.set(id, detail);
-    applyConversationDetail(id, detail);
-  }
-
   async function handleDelete(id: number) {
     await deleteConversation(id);
-    conversationCache.delete(id);
-    scrollPositionCache.delete(id);
+    invalidateConversation(id);
+    invalidateScrollPosition(id);
     if (activeConversationId === id) startNewChat();
     await refreshConversationList();
   }
@@ -401,26 +189,8 @@ export default function ChatShell({
     if (isMobile) setSidebarOpen(false);
   }
 
-  async function handleSubmit(prompt: string) {
-    setError(null);
-    setPending({ kind: "submitting", prompt });
-    try {
-      const result = await generateTrip(prompt, activeConversationId);
-      if (!result.ok || !result.data) {
-        setError({
-          message: result.error ?? "Couldn't reach the planner backend",
-          retry: () => handleSubmit(prompt),
-        });
-        return;
-      }
-      const newConversationId = result.data.conversation_id;
-      if (newConversationId) {
-        await loadConversation(newConversationId, { showLoading: false, skipCache: true });
-        await refreshConversationList();
-      }
-    } finally {
-      setPending({ kind: "idle" });
-    }
+  function handleSubmit(prompt: string) {
+    return submitPrompt(prompt, refreshConversationList);
   }
 
   // Initial conversation list comes from the server component (layout.tsx)
