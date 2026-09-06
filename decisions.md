@@ -18,6 +18,20 @@ itineraries, and lets off-topic requests short-circuit for free.
 `/questions` endpoint) becomes worth the split — not needed as of this
 writing.*
 
+**`generate_trip`'s three reply-path branches split into named helpers,
+2026-09-06 (PR #33) — `_handle_off_topic`/`_handle_question`/
+`_handle_new_or_edit_trip`, matching the file's own existing
+`_`-prefixed-module-level-helper convention.** Structural only — same
+routing/dispatch logic above, same behavior in every branch, no new
+entry point. Done as its own dedicated pass (planned with two Explore
+passes plus direct re-verification of every line-number/shared-variable
+claim against the actual file before editing), not folded into the
+broader 2026-09-06 codebase-cleanup pass, since this is the single most
+load-bearing function in the backend and deserved its own full
+before/after test run per branch rather than a bundled risk. *Revisit:
+if a fourth reply path is ever added, extract it the same way rather
+than growing one of the three existing branches to cover it.*
+
 **Three isolated tool-calling loops, not one shared one**
 (`agent_service.py`): currency (`gather_trip_context`, paused),
 conversational place-context (`answer_question_with_tools`), and
@@ -363,6 +377,61 @@ needs to open a specific conversation on load should follow this same
 "fetch server-side, seed directly" shape — falling back to
 `OpenConversation`'s client-fetch path (`openConversation(id)` with no
 `initialDetail`) reintroduces the exact double-round-trip this fixed.*
+
+**`ChatShell.tsx` split into three hooks, 2026-09-06 (PR #33) —
+`hooks/use-sidebar-open.ts`, `hooks/use-scroll-restore.ts`,
+`hooks/use-conversation-loader.ts`.** Was 578 lines (~6 separable
+concerns) after the 2026-09-05 chat-switch-bug fix packed several
+deliberate, hard-won fixes into one file. Deferred from the 2026-09-06
+codebase-cleanup pass to its own dedicated session specifically because
+of that fragility — any restructuring risked reintroducing the exact bug
+class it had just fixed. Conversation loading/caching and the pending/
+error state machine were kept in ONE hook (`use-conversation-loader.ts`)
+rather than split further, since `loadConversation` writes `pending`/
+`error` directly — a clean per-concern split would've meant passing
+setters bidirectionally between two hooks for no real benefit. Every
+load-bearing behavior from the 2026-09-05 fix (the Strict-Mode
+generation-counter guard, module-scope caches staying module-scope,
+`useSyncExternalStore`, `useLayoutEffect` timing, the
+`skipCache`+`showLoading` two-flag shape) moved verbatim. `ChatShell.tsx`
+is 349 lines now, and `ChatShellContext`'s public contract didn't change
+at all — no consumer needed edits. *Revisit: if any of these three hooks
+grows its own multiple concerns again, split further then — don't
+pre-split beyond what's actually coupled today.*
+
+**`GOOGLE_PLACES_API_KEY`/`PEXELS_API_KEY`/`TICKETMASTER_API_KEY` weren't
+forwarded into either Docker Compose file — found and fixed 2026-09-06.**
+Same class of gap `docker-compose.yml`'s own comments already recorded
+once for `GROQ_API_KEY`: a key set in `.env` silently never reached the
+backend container's environment, so `docker compose up` quietly ran with
+Places/Pexels/Ticketmaster disabled even with all three keys configured.
+Recurred because these three integrations shipped after that earlier fix
+and nobody re-checked the compose files against the growing `.env.example`
+list. *Revisit: whenever a new optional integration adds an env var,
+check both compose files' `environment:` blocks in the same PR — this is
+the second time this exact class of gap has shipped.*
+
+**`skills-lock.json` was tracked in git despite its own `.gitignore`
+entry saying it shouldn't be — found and fixed 2026-09-06.** Committed
+before the ignore rule existed; `.gitignore` doesn't retroactively
+untrack a file already in version control. Fixed with
+`git rm --cached skills-lock.json` — stays on disk, just no longer
+version-controlled.
+
+**A way to actually share a running instance without the full dev setup,
+2026-09-05/06 (PR #31) — `docker-compose.share.yml` + `.env.share.example`,
+pulling the images CI already publishes to GHCR instead of building from
+source.** Confirmed live (not assumed) that
+`ghcr.io/starkparsa/itinera-{backend,frontend}:latest` are both publicly
+pullable with no login, via a raw anonymous-token manifest fetch against
+the registry. Defaults `DATABASE_URL` to a local SQLite file so a friend
+needs nothing but Docker and one free Gemini key — no Neon account, no
+repo build step. This is deliberately a separate, lighter-weight thing
+from the real Cloud Run deployment tracked in
+`docs/deployment-readiness.md`, which is still not executed. *Revisit:
+if this compose file drifts from the main one's env vars again (as the
+Places/Pexels/Ticketmaster gap above did once already), fix both files
+in the same PR, not just the one someone happened to be testing.*
 
 **Never run `npx shadcn add <component>` directly in this repo — hand-port
 instead, 2026-09-04.** The installed CLI (against this project's

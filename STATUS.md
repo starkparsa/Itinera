@@ -31,7 +31,17 @@ route group, plus a small `OpenConversation.tsx` bridge each page uses to
 tell it which conversation to open — see `decisions.md`'s UI styling
 entries and `progress.md`'s 2026-09-05 entry for the full diagnosis
 (a real remount-and-repeated-fetch bug, confirmed via two DevTools
-Network-tab captures, not a React Strict Mode artifact)._
+Network-tab captures, not a React Strict Mode artifact). Updated again
+2026-09-05/06 (PR #31, #32) after a full-codebase maintainability audit
+(a short, low-risk list — dead code, duplicated logic, a couple of real
+config gaps — see `progress.md`'s 2026-09-05/06 entry) and adding
+`docker-compose.share.yml` for running the app from CI's published
+images with nothing but Docker installed. Updated once more 2026-09-06
+(PR #33) after splitting the two things that audit deliberately deferred:
+`generate_trip` into three named helper functions, and `ChatShell.tsx`
+into three hooks (`use-sidebar-open`, `use-scroll-restore`,
+`use-conversation-loader`) — both pure structural refactors, see
+`decisions.md`'s Architecture and UI styling entries._
 
 ## Where the project stands
 
