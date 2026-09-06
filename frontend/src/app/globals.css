@@ -154,14 +154,27 @@
   }
 }
 
+/* ChatApp.tsx's root wrapper (h-dvh + overflow-hidden) is meant to be the
+   only thing on the page that can ever scroll -- just its own inner
+   message-list region does, via its own overflow-y-auto. But that
+   contract only holds if html/body themselves can never grow taller than
+   the viewport and add a second, page-level scrollbar alongside it. They
+   previously only hid horizontal overflow (`overflow-x: hidden`) and used
+   `min-height: 100vh` on body, which lets vertical overflow through by
+   default -- so anything pushing the page even a hair past 100dvh (seen
+   live on the Trip Hub page, whose extra Weather/Saved Places column adds
+   more height budget than the plain chat) added a real outer scrollbar
+   next to the intended inner one. Fixed height (not min-height) plus
+   `overflow: hidden` on both closes that gap structurally instead of
+   relying on every page happening to fit exactly. */
 html,
 body {
+  height: 100%;
   max-width: 100vw;
-  overflow-x: hidden;
+  overflow: hidden;
 }
 
 body {
-  min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
