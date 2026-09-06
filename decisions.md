@@ -113,6 +113,54 @@ non-GA preview program at implementation time. Also the better
 architectural fit independent of that: pushing to a calendar is a
 deterministic user click, never a Gemini judgment call.
 
+## Database access control (RLS) — investigated 2026-09-06, not built
+
+User asked to enable Postgres row-level security on every table, with
+real per-user policies (no `USING (true)`). Investigated before writing
+any SQL: this app isn't Supabase-shaped — there's exactly one Postgres
+role for the whole backend (`DATABASE_URL`, one connection string, no
+per-request Postgres identity of any kind), and authorization is enforced
+entirely in the API layer today (`user_id == user.id` filters in every
+router, verified real — not cosmetic — in `docs/security-review.md`).
+
+Two real blockers found, not just friction:
+1. **The table owner bypasses RLS by default.** The backend's role owns
+   every table (created them via Alembic), so `ENABLE ROW LEVEL SECURITY`
+   alone would be a no-op — policies would exist and do nothing, a false
+   sense of security. `FORCE ROW LEVEL SECURITY` is needed to actually
+   apply policies to the owner.
+2. **A chicken-and-egg problem on `users` specifically.**
+   `auth.get_current_user` looks up (and sometimes auto-creates) a `users`
+   row *by `google_sub`*, before the app knows that user's internal id —
+   the exact id a naive `user_id`-keyed policy would need to already have
+   in a session variable. Forcing RLS on `users` keyed by id would break
+   login/auto-provisioning for every user, since the id being looked up
+   is unknown at query time. (Workable in principle — key the `users`
+   policy off `google_sub`, known from the verified JWT, and switch to
+   `user_id`-keyed policies once the row is resolved — but this needs a
+   real per-request session-variable mechanism, e.g. a SQLAlchemy
+   `after_begin` hook calling `set_config('app.current_user_id', ..., true)`
+   at the start of every transaction, tested against every request path.)
+
+Every table's ownership chain is otherwise unambiguous — `conversations`/
+`trips`/`google_calendar_credentials` have a direct `user_id`;
+`messages`/`itinerary_items`/`saved_places` trace to one via a single FK
+hop (`conversation_id`/`trip_id`). Nothing here is a modeling problem —
+it's exclusively the missing session-identity plumbing.
+
+Presented this to the user (blockers + the exact plumbing a real
+implementation needs) rather than either faking policies that would do
+nothing or forcing RLS in a way that would take the app down; user asked
+a clarifying question, then paused before choosing a path. **Status: no
+RLS enabled, no code changed — still enforced at the API layer only.**
+*Revisit: if/when this is picked back up, the plumbing above (dedicated
+session-identity mechanism, `google_sub`-keyed bootstrap policy on
+`users`, `user_id`-keyed policies everywhere else, `FORCE ROW LEVEL
+SECURITY` on all 7 tables) is the validated path — re-confirm test
+coverage (SQLite in `tests/` has no RLS concept at all, so this needs its
+own verification against real Postgres, not just the existing suite)
+before shipping it.*
+
 ## Place context: Wikipedia + Google Places
 
 **Wikipedia-only tool shipped first** (2026-08-27), scoped down from a

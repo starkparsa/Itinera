@@ -6,6 +6,65 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-06 — Secrets/RLS security pass (PR #35, #36)
+
+Four back-to-back security-focused requests, each investigated directly
+against source before any code changed:
+
+**Frontend secrets audit — clean, nothing to fix.** Checked for
+`NEXT_PUBLIC_*` vars (zero), hardcoded keys/static `Authorization`
+headers (none — the only `Bearer` sites mint a fresh per-request JWT
+server-side), direct frontend-to-third-party calls (none — every
+`fetch()` targets the app's own backend), and secret scoping (`AUTH_*`
+vars read only in `server-only`/`"use server"` files, never in any of the
+12 `"use client"` files). `next.config.ts` has no `env:` re-export block
+either. The architecture already does everything the request asked for.
+
+**Git-history secret audit — clean (PR #35).** `git log --all` across
+every branch, full history: no real `.env` file, and no hardcoded
+Google/Groq/AWS-key-shaped or private-key-header string, was ever
+committed at any point. Every revision of every tracked `.env.example`-
+style file held only placeholders. Found and fixed one real gap while
+checking: root `.gitignore`'s bare `.env` line only matched that exact
+filename, leaving `.env.local`/`.env.production`/`backend/.env.local`
+uncovered outside `frontend/.gitignore`. Broadened to `.env.*` (with
+negations for the two tracked example files) plus added common
+secret-file shapes (`*.pem`, `*.key`, `*credentials*.json`, etc.) not yet
+ignored at the root. No file had ever actually leaked — this closed a
+hole before it could be used.
+
+**Database key check — not applicable.** Asked to confirm the frontend
+only uses a Supabase-style anon/public key, never a service-role key.
+This app has no Supabase and no client-side database access of any kind
+— Postgres (Neon) is reachable only through the backend's own
+`DATABASE_URL`, read exclusively server-side. Nothing to move.
+
+**Row-level security — investigated, not built.** See `decisions.md`'s
+new "Database access control (RLS)" entry for the full reasoning: this
+app has a single Postgres role for the entire backend and no per-request
+Postgres identity, so naively enabling RLS would either do nothing
+(table owner bypasses it) or break every request (forcing it with no
+session-variable mechanism in place) — plus a genuine chicken-and-egg
+problem looking up a user's own row by `google_sub` before its `id` is
+known. Presented the real blockers and the validated path to a proper
+fix; user paused mid-decision rather than picking a path, so no schema or
+code change was made. Authorization stays enforced at the API layer only,
+same as today.
+
+## 2026-09-06 — Fix: `/login` shown to already-authenticated users (PR #36)
+
+Bug report: a signed-in user hitting `/login` directly (typed URL, stale
+bookmark, transient redirect) saw the sign-in form and stayed there,
+instead of bouncing to the app. Root cause: `app/login/page.tsx` had no
+session check at all — always rendered the form regardless of auth
+state. Fixed by making it an async server component that calls `auth()`
+and redirects to `/` when a session exists, mirroring
+`app/(chat)/layout.tsx`'s existing check in the opposite direction.
+`tsc`/`eslint` clean; verified live in the user's real, already-signed-in
+Chrome session (not just the sandboxed preview, which has no session of
+its own) — navigating to `/login` now lands on `/` directly, form never
+renders.
+
 ## 2026-09-06 — Split `generate_trip` and extracted `ChatShell.tsx` hooks (PR #33)
 
 The two "deliberate follow-ups" the codebase-cleanup pass below flagged
@@ -52,8 +111,9 @@ with no console errors.
 real regression net for the frontend half is `tsc`/`eslint`/`build` plus
 a written manual checklist (chat-switch flash, scroll restore per
 conversation, Strict Mode rapid-click safety, delete clearing both
-caches) — not yet run by an actual signed-in user as of this entry, since
-the agent can't complete Google OAuth itself.
+caches). **Closed 2026-09-06**: user ran the checklist themselves against
+a real signed-in session (the agent still can't complete Google OAuth
+itself) and confirmed everything works correctly.
 
 ## 2026-09-05/06 — Codebase-cleanup audit and cleanup (PR #31, #32)
 

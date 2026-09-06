@@ -36,12 +36,25 @@ Network-tab captures, not a React Strict Mode artifact). Updated again
 (a short, low-risk list — dead code, duplicated logic, a couple of real
 config gaps — see `progress.md`'s 2026-09-05/06 entry) and adding
 `docker-compose.share.yml` for running the app from CI's published
-images with nothing but Docker installed. Updated once more 2026-09-06
+images with nothing but Docker installed. Updated again 2026-09-06
 (PR #33) after splitting the two things that audit deliberately deferred:
 `generate_trip` into three named helper functions, and `ChatShell.tsx`
 into three hooks (`use-sidebar-open`, `use-scroll-restore`,
-`use-conversation-loader`) — both pure structural refactors, see
-`decisions.md`'s Architecture and UI styling entries._
+`use-conversation-loader`) — both pure structural refactors, verified
+both by CI and by the user manually against a real signed-in session
+(see `decisions.md`'s Architecture and UI styling entries). Updated once
+more 2026-09-06 after a four-part security pass: a frontend secrets audit
+and a full git-history secret scan both came back clean (PR #35 closed
+one real gap found while checking — root `.gitignore` didn't cover
+`.env.local`/`.env.production` variants); a Supabase-style anon-vs-
+service-role key check came back not-applicable (no Supabase, no
+client-side DB access exists at all); row-level security was
+investigated and found to need real session-identity plumbing this app
+doesn't have yet, so it was **not** enabled (see `decisions.md`'s new
+Database access control entry) — authorization stays enforced at the API
+layer only. Also fixed a real bug (PR #36): `/login` had no check for an
+already-authenticated user and would show the sign-in form instead of
+redirecting; verified live against the user's real signed-in session._
 
 ## Where the project stands
 
@@ -144,6 +157,14 @@ done — none of the three next candidates below depend on any of it:
   Native vs. PWA vs. native) not yet made.
 - **No user research behind the current UX direction** — built from
   feature docs and engineering history, not measured usage.
+- **Database has no row-level security** — a single Postgres role serves
+  the whole backend with no per-request Postgres identity, so
+  authorization is enforced entirely in the API layer (verified real,
+  not cosmetic). Enabling real per-user RLS needs new session-identity
+  plumbing this app doesn't have yet; investigated 2026-09-06 and
+  presented to the user, not yet decided on — see `decisions.md`'s
+  Database access control entry for the validated path if/when this is
+  picked back up.
 - CI on `main` is green — most recently, PR #29 (2026-09-05) caught a
   real `frontend-lint-and-build` failure before merge (ESLint's
   `react-hooks/set-state-in-effect` rule on a `localStorage` read; fixed
