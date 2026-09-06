@@ -323,6 +323,47 @@ trips standing alone) — structurally collision-proof rather than just
 unlikely to collide. *Revisit: never revert to the single coalesced-key
 form without re-reading why.*
 
+**Chat UI moved into a shared Next.js layout, 2026-09-05 (PR #29) —
+`ChatApp.tsx` (546 lines: sidebar, message log, composer, all state) split
+into `ChatShell.tsx` (the persistent shell) + a tiny `OpenConversation.tsx`
+bridge, via a new `app/(chat)/layout.tsx` route group wrapping both `/`
+and `/trips/[tripId]`.** Root cause this fixes: those two routes were
+previously direct children of the bare root layout with nothing shared
+between them, so every switch between them fully remounted the entire
+chat UI (sidebar included) and separately re-ran `auth()` + fully
+uncached backend fetches (each re-minting a JWT) — read by users as "the
+whole chat refreshing every time," and confirmed via a real DevTools
+Network-tab capture, not assumed. Next.js's App Router does not remount a
+shared layout on navigation between sibling routes under it, only the
+page segment that actually changed, which is the mechanism this relies
+on. `ChatShellContext` exposes `openConversation`/`seedConversation` so
+each page can tell the persistent shell which conversation to show
+without owning any chat-rendering logic itself. *Revisit: if `/trips`
+(the "Your Trips" list, deliberately left outside this route group since
+it doesn't use the chat UI at all) ever needs to share chrome with the
+other two, re-evaluate the group boundary then — don't assume it should
+just be folded in.*
+
+**Conversation detail fetched server-side, alongside trip data, instead
+of by the client after mount — 2026-09-05, same PR.** Confirmed via a
+second Network-tab capture (against a genuine production build, which
+rules out React Strict Mode's dev-only double-invoke as an explanation)
+that every chat switch did two separate slow round trips in sequence:
+`getTrip()` server-side, then a *second*, separate client-initiated
+`getConversation()` fetch only after the page had already mounted. Since
+`backend.ts`'s functions are Server Actions (`"use server"`), calling one
+directly from another Server Component (a page) runs it in the same
+request with no extra browser round trip — only calling it from a
+*client* component crosses the network. Fixed by having
+`trips/[tripId]/page.tsx` (and `(chat)/page.tsx` for the `?chat=` case)
+fetch `getConversation()` themselves and pass the result to
+`OpenConversation` as `initialDetail`, which a new `seedConversation`
+shell method applies with zero client fetch. *Revisit: any new page that
+needs to open a specific conversation on load should follow this same
+"fetch server-side, seed directly" shape — falling back to
+`OpenConversation`'s client-fetch path (`openConversation(id)` with no
+`initialDetail`) reintroduces the exact double-round-trip this fixed.*
+
 **Never run `npx shadcn add <component>` directly in this repo — hand-port
 instead, 2026-09-04.** The installed CLI (against this project's
 `base-nova` custom style, Base UI not Radix) wants to overwrite

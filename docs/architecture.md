@@ -259,21 +259,40 @@ call, the most common real misconfiguration in this flow.
 
 ## 6. Frontend: component and state ownership
 
+**Updated 2026-09-05 (PR #29)** — `ChatApp.tsx` (previously the sole
+owner of both page chrome and chat state) was split into a persistent
+`ChatShell.tsx` living in a shared layout, plus a small
+`OpenConversation.tsx` bridge each page uses to open a specific
+conversation. See `decisions.md`'s UI styling entries for why: `/` and
+`/trips/[tripId]` previously shared no layout, so switching between them
+fully remounted the whole chat UI and re-ran auth + conversation-list
+fetches on every navigation.
+
 ```mermaid
 flowchart TD
-    Page["app/page.tsx (Server Component)\nredirects to /login if unauthenticated,\nfetches initial conversation list"]
-    ChatApp["ChatApp.tsx (Client Component)\nowns: conversations, activeConversationId,\nmessages, pendingPrompt, error, tourGuideMode"]
+    Layout["app/(chat)/layout.tsx (Server Component)\nredirects to /login if unauthenticated,\nfetches conversation list ONCE --\nshared by both routes below, not\nremounted on navigation between them"]
+    HomePage["app/(chat)/page.tsx\nresolves ?chat=&lt;id&gt;,\nfetches getConversation() itself if set"]
+    TripPage["app/(chat)/trips/[tripId]/page.tsx\nfetches getTrip() + getConversation()"]
+    ChatShell["ChatShell.tsx (Client Component)\nowns: conversations, activeConversationId,\nmessages, pending, error, tourGuideMode,\nsidebarOpen -- persists across navigation\nbetween the two page types above"]
+    OpenConv["OpenConversation.tsx\ninvisible bridge -- tells ChatShell (via\nChatShellContext) which conversation to\nopen, with data already fetched when\navailable (seedConversation, zero extra\nclient fetch) or by id alone otherwise"]
     Sidebar["Sidebar.tsx\nconversation list, new chat,\nsign out"]
     ChatMessage["ChatMessage.tsx\nrenders one message bubble"]
     TripView["TripView.tsx\nrenders itinerary + weather\n+ agent findings for a message\nwith an attached Trip"]
     CalPush["CalendarPushButton.tsx\n('Export Plan')"]
     ChatInput["ChatInput.tsx\ntextarea + send"]
+    TripHubPanel["TripHubPanel.tsx\nWeather / Saved Places\n(Trip Hub page only)"]
 
-    Page --> ChatApp
-    ChatApp --> Sidebar
-    ChatApp --> ChatMessage
-    ChatApp --> ChatInput
-    ChatApp -->|topExportTrip| CalPush
+    Layout -->|renders, persists| ChatShell
+    ChatShell -->|renders as children| OpenConv
+    ChatShell -->|renders as children, Trip Hub only| TripHubPanel
+    HomePage -.->|is the children| OpenConv
+    TripPage -.->|is the children| OpenConv
+    TripPage -.->|is the children| TripHubPanel
+    OpenConv -->|openConversation / seedConversation| ChatShell
+    ChatShell --> Sidebar
+    ChatShell --> ChatMessage
+    ChatShell --> ChatInput
+    ChatShell -->|topExportTrip| CalPush
     ChatMessage --> TripView
     TripView --> CalPush
 
@@ -282,16 +301,32 @@ flowchart TD
         generateTrip
         getConversation
         listConversations
+        getTrip
         deleteConversation
         pushTripToCalendar
     end
 
-    ChatApp -.->|Server Actions| generateTrip
-    ChatApp -.-> getConversation
-    ChatApp -.-> listConversations
-    ChatApp -.-> deleteConversation
+    Layout -.->|Server Component call,\nno browser round trip| listConversations
+    TripPage -.->|Server Component call,\nno browser round trip| getTrip
+    TripPage -.-> getConversation
+    HomePage -.->|Server Component call,\nno browser round trip| getConversation
+    ChatShell -.->|Server Action,\ncrosses the network| generateTrip
+    ChatShell -.-> getConversation
+    ChatShell -.-> listConversations
+    ChatShell -.-> deleteConversation
     CalPush -.-> pushTripToCalendar
 ```
+
+The two dashed-arrow styles into `lib/backend.ts` matter: every function
+there is a Server Action (`"use server"`), but calling one directly from
+another Server Component (a page or layout) runs it in the same request
+with no extra browser round trip — only a *client* component calling it
+(as `ChatShell` does) actually crosses the network. `trips/[tripId]/page.tsx`
+and `(chat)/page.tsx` deliberately fetch `getConversation()` themselves
+and hand the result to `OpenConversation` as `initialDetail` specifically
+to take the cheap path; `OpenConversation` only falls back to
+`ChatShell`'s own client-side `openConversation(id)` (a real network
+fetch) when no such data was provided.
 
 `tourGuideMode` state (drives the amber accent override, see
 `globals.css`'s `[data-tour-guide-mode="true"]` block) is set from

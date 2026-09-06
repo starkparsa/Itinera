@@ -23,7 +23,15 @@ the sidebar on mobile, and a first accessibility pass (skip link,
 follow-up accessibility pass (announced status messages, a screen-reader
 speaker cue in chat, `aria-current` on the active conversation, a
 labeled composer) — see `decisions.md`'s UI styling entries and
-`progress.md`'s 2026-09-04 entries._
+`progress.md`'s 2026-09-04 entries. Updated again 2026-09-05 (PR #29)
+after fixing a real "chat switching looks like a full page reload" bug:
+`ChatApp.tsx` was split into a persistent `ChatShell.tsx` (sidebar,
+message log, composer) living in a new shared `app/(chat)/layout.tsx`
+route group, plus a small `OpenConversation.tsx` bridge each page uses to
+tell it which conversation to open — see `decisions.md`'s UI styling
+entries and `progress.md`'s 2026-09-05 entry for the full diagnosis
+(a real remount-and-repeated-fetch bug, confirmed via two DevTools
+Network-tab captures, not a React Strict Mode artifact)._
 
 ## Where the project stands
 
@@ -46,11 +54,11 @@ review, fixed as part of this integration). **Trip Hub v2 is live**: a
 collapsible conversation sidebar (closed by default) on the main chat, a
 new `/trips` page (real trip cards — status pill, day count, a real
 per-city photo), and a new `/trips/[tripId]` Trip Hub page (the existing
-chat reused via `ChatApp`'s new `initialConversationId`/`rightPanel`
-props, plus a collapsible data column with Weather and Saved Places
-cards) — the chat column there now fills whatever width the row gives it
-next to that panel, instead of sitting in a fixed-width column with dead
-space beside it. The earlier "City Passport" (travel-document/boarding-pass)
+chat UI reused via the persistent `ChatShell` component — see this file's
+2026-09-05 update below — plus a collapsible data column with Weather and
+Saved Places cards) — the chat column there now fills whatever width the
+row gives it next to that panel, instead of sitting in a fixed-width
+column with dead space beside it. The earlier "City Passport" (travel-document/boarding-pass)
 direction stays a rejected dead end, not touched. A same-day UI/UX pass
 added: a real confirm dialog before deleting a chat; a retryable
 error/loading state in `ChatApp` (`PendingState`/`ErrorState` unions,
@@ -126,5 +134,8 @@ done — none of the three next candidates below depend on any of it:
   Native vs. PWA vs. native) not yet made.
 - **No user research behind the current UX direction** — built from
   feature docs and engineering history, not measured usage.
-- CI on `main` is green (fixed a `pytest` import bug that had been broken
-  since 2026-08-31).
+- CI on `main` is green — most recently, PR #29 (2026-09-05) caught a
+  real `frontend-lint-and-build` failure before merge (ESLint's
+  `react-hooks/set-state-in-effect` rule on a `localStorage` read; fixed
+  with `useSyncExternalStore`, see `decisions.md`'s UI styling entries).
+  Backend CI has been green since a `pytest` import bug fixed 2026-08-31.

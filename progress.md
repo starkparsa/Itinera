@@ -6,6 +6,95 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-05 — Chat-switch "full reload" bug: shared layout + server-side conversation seeding (PR #29)
+
+User-reported: switching chats in the sidebar looked like a full page
+reload every time — a skeleton flash, scroll position resetting. Took
+several wrong turns before finding the real cause, worth recording
+honestly since each one seemed plausible and each one was live-tested,
+not assumed:
+
+1. **sessionStorage for scroll position** — implemented, reported "not
+   working." Verified the restore logic itself was correct via an
+   isolated React test harness (mount/unmount simulation matching real
+   navigation) before suspecting the storage layer; user's browser
+   (Brave, visible in a screenshot) plausibly blocks/throws on
+   `sessionStorage` under some shield settings.
+2. **In-memory `Map` instead of sessionStorage** — same "not working"
+   report. Root cause found by inspecting the actual render sequence:
+   `ChatApp` always started render with empty `messages`/
+   `activeConversationId`, filled in by a `useEffect` — which only fires
+   *after* first paint, guaranteeing one blank frame on every remount no
+   matter how fast the cache lookup was. Fixed with lazy `useState`
+   initializers seeded from the cache instead. Still reported "not
+   working."
+3. **The actual break came from a user-supplied DevTools Network-tab
+   screenshot**: all requests were type `fetch`, never `document` (ruling
+   out a real browser reload), but each conversation id showed **two
+   identical `backend.ts` fetches** back to back — the signature of React
+   Strict Mode's dev-only double-invoke of effects. This looked like the
+   answer, but wasn't the whole one.
+4. Two Explore agents dispatched in parallel confirmed the bigger,
+   real issue: `/` and `/trips/[tripId]` shared **no layout** — both were
+   direct children of the bare root `app/layout.tsx`, so every switch
+   between them fully remounted the entire chat UI (sidebar included) and
+   separately re-ran `auth()` + fully uncached (`cache: "no-store"`)
+   backend fetches, each re-minting a JWT via `mintBackendJwt()`, before
+   the page could even render.
+5. Fixed with a Next.js route group, `app/(chat)/layout.tsx`, shared by
+   `/` and `/trips/[tripId]` — App Router does not remount a shared layout
+   on navigation between sibling routes under it, only the page segment
+   that actually changed. `components/ChatApp.tsx` (546 lines: sidebar,
+   message log, composer, all state) was split into `ChatShell.tsx`
+   (moved into the persistent layout, effectively unchanged logic) and a
+   tiny `OpenConversation.tsx` bridge each page renders to tell the shell
+   which conversation to open, via a new `ChatShellContext`.
+6. **User re-tested against a genuine production build**
+   (`npm run build` + `node .next/standalone/server.js`, since this
+   project's `output: "standalone"` config means plain `next start`
+   doesn't work) and still saw "double loading" — which conclusively
+   ruled out Strict Mode (dev-only) as a real cause. A second Network-tab
+   screenshot showed the actual remaining shape: each chat switch did two
+   genuinely separate, slow (~1-2.4s each) round trips in sequence — the
+   page's own `getTrip()` (server-side), then a *second*, separate
+   client-initiated `getConversation()` fetch after the page had already
+   mounted. This had existed since before today's changes; nothing to do
+   with Strict Mode. Fixed by fetching `getConversation()` server-side, in
+   the same pass as `getTrip()`/the `?chat=` param, and handing the result
+   to `OpenConversation` as `initialDetail` — a new `seedConversation`
+   context method applies it directly with zero client fetch.
+7. Also fixed along the way: a **real double-scrollbar bug** (`html`/
+   `body` only ever hid horizontal overflow and used `min-height: 100vh`
+   on `body`, letting the Trip Hub page's extra Weather/Saved-Places
+   column push total height a hair past the viewport and add a second,
+   page-level scrollbar next to the message log's own intended one; fixed
+   with `height: 100%` + `overflow: hidden` on both) and a **backend gap**
+   (`GET /conversations` didn't expose each conversation's `trip_id`, so
+   the sidebar couldn't route a chat that already has a generated
+   itinerary straight to its real Trip Hub page — it always landed on the
+   plain chat view instead, one extra click away from Weather/Saved
+   Places).
+
+**A real CI catch, not just local testing**: the first push (PR #29)
+failed `frontend-lint-and-build` — ESLint's `react-hooks/set-state-in-effect`
+rule flagged the sidebar-open `localStorage` read (a `useState`+`useEffect`
+pair) as a hard error, missed locally because a plain `eslint .` run
+doesn't exit non-zero the same way CI's `npm run lint` step does. Fixed
+using the same pattern already established in `hooks/use-mobile.ts` for
+reading another client-only external source (`matchMedia`):
+`useSyncExternalStore` instead of `useState`+`useEffect` — no effect
+needed at all, and React handles the server/client hydration divergence
+internally rather than the manual "start false, flip true after mount"
+two-step it replaces.
+
+Verified: clean `tsc --noEmit` and `eslint` (only pre-existing, unrelated
+`<img>`/lint items carried over from `ChatApp.tsx`), a successful
+production build, a booted standalone production server with no console
+errors, and user-confirmed live in their real (authenticated) browser
+that chat switching no longer flashes/reloads. Two commits, one PR (#29,
+merged via a fast-forward merge, branch deleted after); CI green
+(`frontend-lint-and-build`, `lint-and-test`) before merge.
+
 ## 2026-09-04 — Real WCAG AA contrast check, second accessibility pass
 
 Follow-on to the four-group UI/UX review (below), same day: closed out
