@@ -95,11 +95,13 @@ class Trip(Base):
     # Indexed -- see Conversation.user_id's comment above.
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     # ondelete="SET NULL": deleting a conversation shouldn't be blocked by (or
-    # cascade-delete) trips it produced -- MySQL enforces FK constraints by
-    # default (unlike SQLite, which is why this only surfaced against a real
-    # database), so without this, deleting any conversation that has
-    # generated a trip raises an IntegrityError. The trip and its itinerary
-    # survive; it just becomes unlinked from the (now-gone) chat thread.
+    # cascade-delete) trips it produced -- Postgres (like the MySQL this
+    # project migrated off of, see decisions.md's Database entry) enforces
+    # FK constraints by default (unlike SQLite, which is why this only
+    # surfaced against a real database), so without this, deleting any
+    # conversation that has generated a trip raises an IntegrityError. The
+    # trip and its itinerary survive; it just becomes unlinked from the
+    # (now-gone) chat thread.
     # Indexed for the same reason as every other FK here -- looked up on
     # every question/edit turn (routers/trips.py's latest_trip/previous_trip
     # queries) and on every conversation reload.

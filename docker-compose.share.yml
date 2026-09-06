@@ -29,6 +29,14 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       GROQ_API_KEY: ${GROQ_API_KEY}
+      # All three optional -- Google Places (richer place details/nearby
+      # recommendations), Pexels (trip cover photos), and Ticketmaster
+      # (event discovery). Leave unset for Wikipedia-only place context,
+      # no photos, and no event discovery respectively -- the app runs
+      # fine without any of them.
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY}
+      PEXELS_API_KEY: ${PEXELS_API_KEY}
+      TICKETMASTER_API_KEY: ${TICKETMASTER_API_KEY}
       # Only needed for real Google sign-in / Calendar push -- see
       # .env.share.example. Without these the app still runs; every
       # sign-in attempt just fails at Google's own consent screen.

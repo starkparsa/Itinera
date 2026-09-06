@@ -67,6 +67,27 @@ THINKING_CONFIG = types.ThinkingConfig(thinking_level=types.ThinkingLevel.MINIMA
 _client: genai.Client | None = None
 
 
+def to_contents(chat_messages: list[dict], prompt: str) -> list[types.Content]:
+    """Converts this app's stored {"role","content"} message dicts into
+    Gemini Content objects, then appends the current turn's prompt as a
+    final user Content. Extracted from llm_service.py's
+    _call_gemini_chat and agent_service.py's qa tool-calling entry point,
+    which had this exact list comprehension duplicated between them
+    (found in a 2026-09 maintainability review) -- same reasoning as this
+    module's own extraction: one definition, not two that could drift.
+
+    Roles: stored messages use "user"/"assistant" (this app's convention);
+    Gemini's Content.role expects "user"/"model" -- "tool" is invalid here
+    (confirmed live) and "assistant" is not a recognized role either.
+    """
+    contents = [
+        types.Content(role=("model" if m["role"] == "assistant" else "user"), parts=[types.Part(text=m["content"])])
+        for m in chat_messages
+    ]
+    contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
+    return contents
+
+
 def get_client() -> genai.Client:
     """Constructed lazily (not at import time) so importing this module
     never fails just because GEMINI_API_KEY isn't set -- e.g. the test

@@ -253,18 +253,10 @@ def _call_gemini_chat(system_instruction: str, chat_messages: list[dict], prompt
     returns the plain-text answer. Test patch target:
     app.llm_service._call_gemini_chat.
 
-    Roles: stored messages use "user"/"assistant" (this app's convention);
-    Gemini's Content.role expects "user"/"model" -- "tool" is invalid here
-    (confirmed live) and "assistant" is not a recognized role either.
-
     Falls back to Groq on a Gemini quota failure -- see _call_gemini's
     docstring for why.
     """
-    contents = [
-        types.Content(role=("model" if m["role"] == "assistant" else "user"), parts=[types.Part(text=m["content"])])
-        for m in chat_messages
-    ]
-    contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
+    contents = gemini_client.to_contents(chat_messages, prompt)
 
     try:
         response = _get_client().models.generate_content(

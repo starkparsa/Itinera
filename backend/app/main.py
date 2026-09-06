@@ -28,11 +28,12 @@ retry_delay = 2  # seconds
 for attempt in range(max_retries):
     try:
         # Only ever creates missing *tables* -- harmless no-op against a DB
-        # that already has them (real dev/prod MySQL). Schema *changes* to
-        # existing tables (e.g. the google_sub column, see auth.py) go
-        # through Alembic (backend/alembic/) instead, run manually
-        # ("alembic upgrade head") -- this call staying here is what lets a
-        # fresh SQLite test DB or a brand-new MySQL instance still work with
+        # that already has them (real dev/prod Postgres on Neon, see
+        # decisions.md's Database entry). Schema *changes* to existing
+        # tables (e.g. the google_sub column, see auth.py) go through
+        # Alembic (backend/alembic/) instead, run manually ("alembic
+        # upgrade head") -- this call staying here is what lets a fresh
+        # SQLite test DB or a brand-new Postgres instance still work with
         # zero setup.
         Base.metadata.create_all(bind=engine)
         break
