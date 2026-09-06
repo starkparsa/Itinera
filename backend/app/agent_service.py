@@ -495,10 +495,6 @@ def answer_question_with_tools(
             f"only): {agent_context}\n"
         )
 
-    contents = [
-        types.Content(role=("model" if m["role"] == "assistant" else "user"), parts=[types.Part(text=m["content"])])
-        for m in chat_messages
-    ]
-    contents.append(types.Content(role="user", parts=[types.Part(text=prompt)]))
+    contents = gemini_client.to_contents(chat_messages, prompt)
 
     return _run_tool_loop(contents, system_instruction, tools.QA_TOOL_SCHEMAS, loop_name="qa_place_context")

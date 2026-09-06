@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class TripRequest(BaseModel):
@@ -20,8 +20,7 @@ class ItineraryItemOut(BaseModel):
     activity: str
     notes: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DayWeatherOut(BaseModel):
@@ -82,8 +81,7 @@ class TripSummary(BaseModel):
     photo_url: str | None = None
     photo_credit: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class SavedPlaceOut(BaseModel):
@@ -96,8 +94,7 @@ class SavedPlaceOut(BaseModel):
     rating: float | None = None
     price_level: str | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class MessageOut(BaseModel):
@@ -107,8 +104,7 @@ class MessageOut(BaseModel):
     trip: TripResponse | None = None
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ConversationSummary(BaseModel):
@@ -124,8 +120,7 @@ class ConversationSummary(BaseModel):
     # Hub page to go to.
     trip_id: int | None = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ConversationDetail(BaseModel):

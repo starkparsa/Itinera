@@ -51,6 +51,14 @@ services:
       # (see CLAUDE.md's Reliability decision row) was silently a no-op
       # under `docker compose up` even when a user set the key.
       GROQ_API_KEY: ${GROQ_API_KEY}
+      # Same class of gap as GROQ_API_KEY above, caught in a later cleanup
+      # pass: these three optional integrations (Google Places, Pexels
+      # trip photos, Ticketmaster event discovery -- all documented in
+      # .env.example) were never forwarded here either, so setting them in
+      # .env silently did nothing under `docker compose up`.
+      GOOGLE_PLACES_API_KEY: ${GOOGLE_PLACES_API_KEY}
+      PEXELS_API_KEY: ${PEXELS_API_KEY}
+      TICKETMASTER_API_KEY: ${TICKETMASTER_API_KEY}
       AUTH_BACKEND_SECRET: ${AUTH_BACKEND_SECRET}
       # Needed to refresh a user's Calendar access token (Phase D) --
       # google_calendar.py builds a real google-auth Credentials object

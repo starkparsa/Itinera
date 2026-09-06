@@ -22,6 +22,17 @@ import type { ConversationDetail, ConversationSummary, TripResponse, TripSummary
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
+// Shared by every function below that surfaces a network failure to its
+// caller (all but listConversations()/getConversation()/
+// deleteConversation(), which deliberately fail open/silent instead --
+// see their own comments) -- previously this exact ternary was
+// hand-rolled identically in 4 places (found in a 2026-09 maintainability
+// review), risking drift if the fallback message or condition ever needed
+// to change.
+function networkErrorMessage(exc: unknown): string {
+  return exc instanceof Error ? exc.message : "Couldn't reach the planner backend";
+}
+
 export async function listConversations(): Promise<ConversationSummary[]> {
   try {
     const res = await fetch(`${BACKEND_URL}/conversations`, {
@@ -58,7 +69,7 @@ export async function listTrips(): Promise<ListTripsResult> {
     if (!res.ok) return { ok: false, trips: [], error: `Backend returned ${res.status}` };
     return { ok: true, trips: await res.json() };
   } catch (exc) {
-    return { ok: false, trips: [], error: exc instanceof Error ? exc.message : "Couldn't reach the planner backend" };
+    return { ok: false, trips: [], error: networkErrorMessage(exc) };
   }
 }
 
@@ -83,7 +94,7 @@ export async function getTrip(tripId: number): Promise<GetTripResult> {
     if (!res.ok) return { ok: false, error: `Backend returned ${res.status}` };
     return { ok: true, data: await res.json() };
   } catch (exc) {
-    return { ok: false, error: exc instanceof Error ? exc.message : "Couldn't reach the planner backend" };
+    return { ok: false, error: networkErrorMessage(exc) };
   }
 }
 
@@ -139,7 +150,7 @@ export async function generateTrip(prompt: string, conversationId: number | null
 
     return { ok: true, data: await res.json() };
   } catch (exc) {
-    return { ok: false, error: exc instanceof Error ? exc.message : "Couldn't reach the planner backend" };
+    return { ok: false, error: networkErrorMessage(exc) };
   }
 }
 
@@ -169,6 +180,6 @@ export async function pushTripToCalendar(tripId: number): Promise<PushToCalendar
     const body = await res.json();
     return { ok: true, eventsCreated: body.events_created };
   } catch (exc) {
-    return { ok: false, error: exc instanceof Error ? exc.message : "Couldn't reach the planner backend" };
+    return { ok: false, error: networkErrorMessage(exc) };
   }
 }

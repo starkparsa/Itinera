@@ -137,6 +137,23 @@ npm run dev
 
 Open http://localhost:3000.
 
+**Option C — sharing with someone else, no build required:**
+
+```bash
+cp .env.share.example .env
+# fill in a free GEMINI_API_KEY at minimum
+docker compose -f docker-compose.share.yml up
+```
+
+Pulls the pre-built images CI already publishes to GHCR on every merge to
+`main` (`ghcr.io/starkparsa/itinera-{backend,frontend}:latest`, both
+public, no login needed) instead of building from source — useful for
+handing the app to someone who just wants to run it, with nothing but
+Docker installed (no Node, no Python, no dependency versions to match).
+Defaults to a local SQLite database (zero setup, no account) instead of
+requiring a Postgres connection string; see `.env.share.example` for the
+full list of what's optional vs. required.
+
 ### 3. Verify it's up
 
 - http://localhost:8000/docs loads the backend's interactive API docs.

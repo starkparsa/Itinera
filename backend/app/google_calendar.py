@@ -16,11 +16,10 @@ prompt consuming this output -- it's rendered straight to the UI.
 import os
 from datetime import datetime, timedelta
 
-from cryptography.fernet import Fernet, InvalidToken
+from cryptography.fernet import Fernet
 from google.auth.transport.requests import Request as GoogleAuthRequest
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 from sqlalchemy.orm import Session
 
 from . import calendar_export, models, weather_service
@@ -184,8 +183,6 @@ def push_trip_to_calendar(db: Session, user: models.User, trip: "models.Trip") -
 
 __all__ = [
     "CalendarNotConnectedError",
-    "HttpError",
-    "InvalidToken",
     "decrypt_token",
     "encrypt_token",
     "push_trip_to_calendar",
