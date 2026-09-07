@@ -242,9 +242,10 @@ date always wins, unchanged.
 reuses this same day's Saved Places plumbing exactly: `_run_tool_loop`'s
 raw tool-call results already flow up through `generate_itinerary`'s
 `result["found_places"]`, so `find_events` cost nothing extra to wire
-into that existing channel. *Revisit: `find_events` has no Trip Hub
-panel card yet (unlike Saved Places, which got one) — purely
-backend/conversational for now; adding one is the natural next step.*
+into that existing channel. *Revisit note updated 2026-09-07: a Trip Hub
+card was built and merged (PR #40) — see this file's "Four follow-on
+features" entry below for the approach (live per-trip fetch, 6h TTL, no
+new table).*
 
 **Ticketmaster's `keyword` param does literal name-matching, not genre
 matching — confirmed live, not assumed.** Searching `keyword="jazz"`
@@ -376,6 +377,133 @@ Completing sign-in itself needs the user's real Google credentials, which
 isn't something to automate. *Revisit: a real signed-in click-through
 (sign in, complete/skip onboarding, reload, confirm gating) is still
 outstanding and is the most valuable next verification step.*
+
+## Four follow-on features built, 2026-09-07 — PRs #39–42, merged
+
+Four gaps flagged after onboarding personalization shipped (this file's
+entry above) were scoped into one plan and built as four isolated
+branches/PRs, in this order, all now merged to `main` (after PR #43,
+below, fixed a broken `main` CI first).
+
+**1. Onboarding chip/tag visual polish (PR #39).** Replaced five
+`<select>`s and the interests checkbox group with a new interactive chip
+control (`components/ui/toggle-chip.tsx`) — a real, visually-hidden
+`<input type="checkbox"|"radio">` styled via a sibling `<span>` through
+Tailwind `peer-*` selectors, not a `<div onClick>` reimplementation, so
+keyboard/screen-reader behavior is native. `country_region` deliberately
+stays a plain `<select>` — 5 options plus a conditional "Other" text
+branch is what a select already does cleanly; chip-ifying it would add a
+6th chip that then reveals a text input, which reads as more awkward.
+No new state shape — chips plug into `OnboardingFlow`'s existing
+`set<K>`/`toggleInterest` setters unchanged.
+
+**2. Events Trip Hub card (PR #40).** `find_events` had worked
+conversationally since 2026-09-04 (this file's Event discovery entry
+above) but had no UI surface — this closes that gap, updating that
+entry's own "Revisit" note. **Chosen approach: live per-trip fetch
+cached on the `Trip` row with a 6h TTL, mirroring `weather_service.py`
+exactly** (`Trip.events_json`/`events_fetched_at`, new
+`events_service.py`) — not a new `SavedEvent` table. Reasoning: a
+`SavedPlace`-style table exists because places accumulate across a chat
+loop and need per-tool-call dedup; an Events card is one read per
+trip-page load, not something accumulated the same way. Not routed
+through the Gemini tool-calling loop, same "never a model judgment call"
+reasoning as weather. *Revisit: never, without re-examining the
+per-trip-fetch-vs-persisted-table tradeoff specifically.*
+
+**3. Auth-testing gap — closed with documentation, not new test
+infrastructure (PR #41).** "No real signed-in click-through has
+happened" (this file's entry above, and `STATUS.md`) turned out to be
+two different claims, only one of which was a real gap:
+`backend/tests/conftest.py`'s `override_auth()` fixture already fully
+mocks `get_current_user` for the automated suite — nothing to build
+there. The actual remaining gap, a genuine browser OAuth click-through,
+can't be meaningfully automated: this app's BFF architecture means
+FastAPI never talks to Google at all (only verifies a JWT Auth.js
+mints), and no E2E framework exists in this repo. Standing up Playwright
+plus an OAuth-mocking approach to test Google's own consent screen would
+be disproportionate for what it proves. **Decision: a human-run runbook**
+(`docs/manual-auth-testing.md`) is the deliverable, explicitly not a
+pytest fixture or an E2E suite — so this doesn't get re-litigated as a
+gap later. One legitimate small gap-filler landed alongside it: a real
+unit test on `mintBackendJwt.ts` (the actual signer, not a Google mock).
+*Revisit: only if this app ever adds a browser E2E framework for other
+reasons — then, and only then, is automating this specific flow worth
+reconsidering.*
+
+**4. Gamification: passport stamps + tiered badges (PR #42).** Builds
+the mechanic already confirmed in `docs/design-references.md` and
+declines the two ideas this file's Gamification-deferred entry below
+scoped out (shareable card, seasonal badges — still deferred, unchanged).
+Deliberately jumps ahead of Maps/routing in `STATUS.md`'s existing build
+order — a discussed, not silent, reordering.
+
+- **XP is derived, never incremented.** `UserStats.xp_points` is *set*
+  to `real_trip_count * 10` on every `GET /gamification/passport` call
+  (not incremented at a trip-generation hook), and achievement rows are
+  only inserted for codes that don't already have one — the whole
+  evaluation (`gamification_service.evaluate_and_award`) is idempotent
+  and safe to call on every request, with no double-award or
+  missed-award risk from calling it more than once. Simpler than the
+  originally-sketched "hook into trip generation" design (an earlier,
+  unbuilt plan draft) once it became clear a single read-time evaluation
+  point removes an entire class of double-counting bug for free.
+- **A real correctness bug found during implementation, not merely
+  planned around: `_handle_new_or_edit_trip` inserts a fresh `Trip` row
+  on *every* `new_trip` and `edit_trip` turn**, not just new trips (its
+  own docstring already said this, but nothing downstream depended on
+  the distinction until now). Without accounting for that, a
+  conversational "make it more relaxed" would inflate trip counts,
+  badges, and passport stamps every time someone tweaks an
+  already-planned trip. Fixed with a new `Trip.is_edit` column, set from
+  the already-classified intent at creation time; `stats_service.py`
+  filters on it everywhere. *Revisit: if `edit_trip` ever becomes a true
+  in-place edit instead of a new row (see this file's Architecture
+  section, `_handle_new_or_edit_trip`'s own docstring) this flag becomes
+  unnecessary — don't remove it without confirming that's actually
+  landed.*
+- **Countries-visited heuristic is a small, static, explicitly
+  non-exhaustive substring lookup** (`stats_service.CITY_OR_KEYWORD_TO_COUNTRY`,
+  ~40 entries) — never a geocoding API call (budget), never a guess for
+  an unrecognized destination (principle #7). Silently undercounts;
+  never overcounts. No disambiguation for ambiguous names (e.g.
+  "Georgia" the state vs. the country) — documented as a known
+  limitation in the module itself rather than solved.
+- **A real theming bug found and fixed while building this, not just
+  for this component**: Tailwind `dark:` utility classes silently never
+  apply anywhere in this app. This app's dark mode is OS-preference-driven
+  via `@media (prefers-color-scheme: dark)` (see the UI styling section
+  below), not a `.dark`-class toggle, which is what Tailwind's `dark:`
+  variant actually targets here (`@custom-variant dark (&:is(.dark *))`)
+  — so every `dark:`-prefixed class in this codebase (some pre-existed
+  in shadcn-generated files) has always been dead code. Fixed properly
+  for the new passport-stamp accents: 8 named `--stamp-*` CSS custom
+  properties (light values in `:root`, dark overrides in the existing
+  `prefers-color-scheme` block, registered in `@theme inline`), following
+  the exact pattern already established by `--chat-assistant-*` — not
+  `dark:` classes, which would have looked correct in a light-mode
+  screenshot and been silently broken for every real dark-mode user.
+  *Revisit: the pre-existing `dark:` classes elsewhere (`TripCard.tsx`,
+  `TripView.tsx`, and shadcn's own `badge.tsx`/`button.tsx`/`textarea.tsx`)
+  are the same dead pattern — not touched in this PR (out of scope), but
+  worth a dedicated cleanup pass if anyone is ever debugging why a
+  dark-mode style "isn't working."*
+
+**5. CI on `main` was found broken, separately, while opening these PRs
+(PR #43, not part of the four-feature plan).** Every one of the four PRs
+above failed CI in under 20 seconds — too fast to be a real test
+failure. Root cause: `main` itself had been red since PR #38 merged
+(`gh run list --branch main` confirmed it), two unrelated pre-existing
+issues neither caught before that merge — `npm ci`'s `ERESOLVE` (
+`vitest@5.0.0` peer-requires `@types/node@"^22.0.0 || >=24.0.0"`, but
+`package.json` had it pinned to `^20`, apparently never hit locally
+under `--legacy-peer-deps`) and an unsorted-import `ruff` failure in
+`tests/test_trips_router.py`. Both are pure fixes (a version bump plus
+`ruff --fix`), no behavior change. *Revisit: `npm ci`'s strict peer
+resolution caught something `npm install --legacy-peer-deps` didn't —
+worth checking new frontend dependencies with a real `npm ci` locally
+before merging, not just the more forgiving install flow used
+day-to-day.*
 
 ## UI styling
 
