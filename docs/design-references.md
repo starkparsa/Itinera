@@ -19,8 +19,13 @@ post-development review of what actually got built, not a mockup.
   citations in-page). **Onboarding is now built** (see `decisions.md`'s
   Onboarding personalization entry) — this artifact is the reference for
   the finalized 9-question set and field-to-schema mapping, not a
-  substitute for reading the real component. **Gamification is still
-  design-only, 0% built.**
+  substitute for reading the real component. **Gamification is now built
+  too** (PR #42, open as of 2026-09-07, not yet merged — see
+  `decisions.md`'s "Four follow-on features" entry): passport stamps and
+  the six-code Common→Legendary tier ladder both shipped roughly as
+  designed here, though the actual stamp visual (a tinted card, not a
+  literal stamp graphic) and badge tier colors are a first-pass
+  implementation choice, not verified against this mockup pixel-for-pixel.
 - **[Immersive Feature Upgrades](https://claude.ai/code/artifact/5313add6-e756-451d-a37a-c72569ab9939)**
   — an audit of the existing app's real features (traced to actual files)
   mapped against where personalization/gamification should integrate; 5

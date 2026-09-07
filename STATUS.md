@@ -79,15 +79,45 @@ detail, including what's still genuinely open (SMS sending, and a real
 signed-in click-through — verification stopped at the OAuth handshake
 itself, which needs the user's own Google credentials)._
 
+_Updated 2026-09-07 after building four follow-on gaps flagged by the
+onboarding pass above, as four isolated branches — **PRs #39–42, all
+open, none merged to `main` yet**: (1) onboarding's plain `<select>`/
+checkbox fields replaced with a real interactive chip control (PR #39);
+(2) an Events Trip Hub card, live per-trip Ticketmaster fetch cached on
+the `Trip` row with a 6h TTL, mirroring weather's existing pattern
+exactly (PR #40); (3) the auth-testing gap closed with
+`docs/manual-auth-testing.md`, a human-run runbook, plus a real unit
+test on the JWT signer — not new pytest/E2E infrastructure, since the
+backend half was already fully mocked (PR #41); (4) gamification
+(passport stamps + tiered badges) built for the first time, on the
+existing `/profile` page (PR #42) — see `decisions.md`'s new "Four
+follow-on features" entry for the full detail on all four, including two
+real bugs caught during implementation: a `Trip.is_edit` correctness fix
+(every `edit_trip` turn was silently going to inflate trip counts/badges
+the same way a new trip would) and a real dark-mode theming bug
+(Tailwind `dark:` classes silently never apply in this app at all — this
+app's dark mode is media-query-driven, not `.dark`-class-driven — fixed
+with real CSS custom properties for the new stamp accents). **PR #40 must
+merge before PR #42** — #42's migration chains after #40's.
+
+Separately, while opening these PRs, found and fixed **`main`'s CI itself
+was broken** (PR #43, also open) — every PR above was failing CI in
+under 20 seconds on two pre-existing issues from PR #38's merge, unrelated
+to any of the four features: an `npm ci` `ERESOLVE` conflict
+(`@types/node` pinned too old for `vitest@5`) and an unsorted-import
+`ruff` failure. Recommend merging #43 first, since it's what's actually
+blocking the other four PRs' CI from going green._
+
 ## Where the project stands
 
 **Product**: a chat-driven AI trip planner. Describe a trip, get a
 day-by-day itinerary, refine it conversationally, export it to Google
 Calendar. Full scope (weather, place context, calendar push, per-user
-accounts) — done. **Onboarding personalization is now live** (see below).
+accounts) — done. **Onboarding personalization is live**, and its
+chip/tag visual polish, an Events Trip Hub card, and gamification
+(passport stamps, tiered badges) are all **built but sitting in open,
+unmerged PRs** (#39/#40/#42 — see this file's 2026-09-07 update above).
 Maps/routing, flights, hotels, cross-trip memory — not started.
-Gamification (passport stamps, tiered badges) is fully designed
-(three rounds of mockups, see `docs/design-references.md`) but 0% built.
 
 **Backend**: FastAPI + SQLAlchemy, Postgres on Neon. Every request goes
 through one router (`POST /trips/generate`) — see `decisions.md`'s
@@ -132,10 +162,12 @@ hand-built toast system (`components/ui/toast.tsx`, this app's first
 ambient-notification primitive) confirming a successful save, and this
 frontend's first-ever automated test suite (Vitest + React Testing
 Library) all shipped in the same pass — see `decisions.md`'s Onboarding
-personalization entry for the full detail. Current onboarding fields are
-still plain `<select>`/checkbox controls, not the approved chip/tag
-visual design — that polish pass hasn't happened yet. No native/PWA app
-exists yet.
+personalization entry for the full detail. The chip/tag visual polish
+pass on onboarding fields is now built (PR #39, open, not merged) — a
+real interactive chip control (`components/ui/toggle-chip.tsx`), not
+just a styling change. The `/profile` page also now has a passport-
+stamps-and-badges section (PR #42, open, not merged, gamification). No
+native/PWA app exists yet.
 
 **LLM**: Gemini API (`gemini-3.5-flash-lite`), Groq as an automatic
 fallback on rate-limit only. Not wired into the agentic tool-calling
@@ -160,10 +192,11 @@ plain Q&A).
 | Google Calendar push ("Export Plan") | Live |
 | Currency conversion (`gather_trip_context`/`convert_currency`) | **Paused** — product decision, not a bug. Kill switch: `AGENT_TOOL_CALLING_ENABLED` |
 | Groq fallback | Live, verified |
-| Onboarding personalization (`UserProfile`, `OnboardingFlow`, `/profile`) | Live — feeds `generate_itinerary`'s prompt; visual chip/tag polish still pending |
-| Toast notifications (`components/ui/toast.tsx`) | Live — only consumer so far is onboarding's save confirmation |
+| Onboarding personalization (`UserProfile`, `OnboardingFlow`, `/profile`) | Live — feeds `generate_itinerary`'s prompt; visual chip/tag polish built, **[PR #39](https://github.com/starkparsa/Itinera/pull/39) open, not merged** |
+| Toast notifications (`components/ui/toast.tsx`) | Live — consumers now onboarding's save confirmation and (once merged) gamification's badge-unlock notice |
+| Events Trip Hub card | Built — **[PR #40](https://github.com/starkparsa/Itinera/pull/40) open, not merged**; live per-trip fetch, 6h TTL, no new table |
 | SMS trip-day reminders | Not built — `mobile_number` is collected, sending needs an external provider evaluated against a real free tier first |
-| Gamification (passport stamps, tiered badges) | Not built — fully designed, see `docs/design-references.md` |
+| Gamification (passport stamps, tiered badges) | Built — **[PR #42](https://github.com/starkparsa/Itinera/pull/42) open, not merged** (depends on PR #40 merging first) |
 | Flights (tracking/predicting/booking) | Not built — no backend data source exists at all; deep-link booking scoped, price tracking blocked on a verified free data source |
 | Hotels | Not built |
 | Maps/routing | Not built — planned around Google's Maps MCP server |
@@ -172,28 +205,30 @@ plain Q&A).
 
 ## Next action
 
-Trip Hub v2, Saved Places, Pexels trip photos, Ticketmaster event
-discovery, the frontend UI/UX + accessibility/contrast pass, and
-onboarding personalization are all done — none of the three build-order
-candidates below depend on any of it, and onboarding was intentional new
-scope alongside this list, not a reordering of it (see `decisions.md`'s
-Onboarding personalization entry). Two candidates that fall directly out
-of today's onboarding work, tracked here rather than silently dropped: a
-real signed-in click-through of `OnboardingFlow` (verification stopped at
-the OAuth handshake, which needs the user's own Google credentials), and
-the visual chip/tag polish pass on the onboarding fields (currently plain
-`<select>`/checkboxes). Neither blocks the three below:
+**Merge the five open PRs**, in this order: #43 first (fixes CI on
+`main` itself — every other PR is failing CI on these same two
+pre-existing issues, not their own diffs), then #39/#40/#41 in any
+order, then #42 last (its migration chains after #40's). Once merged,
+this file's "Live vs. paused" table above should be re-edited to drop
+the "PR open, not merged" qualifiers.
+
+After that, none of the three build-order candidates below depend on
+any of this session's four-feature work — gamification was an
+intentional, discussed jump ahead of Maps/routing in this order, not a
+silent reorder (see `decisions.md`'s "Four follow-on features" entry).
+One item still open from the onboarding pass, not resolved by any of the
+four: a real signed-in click-through of `OnboardingFlow` — a documented
+runbook now exists (`docs/manual-auth-testing.md`, PR #41) but actually
+running it needs the user's own Google credentials, still not
+automatable. Doesn't block the three below:
 1. Build-order item 4: Maps/routing (planned around Google's Maps MCP
    server — the specific server/pricing/auth details need re-confirming
    live before writing code, per `decisions.md`'s Maps/routing entry).
 2. Resolve the flight price-tracking data-source question
    (Travelpayouts/Aviasales — unverified). Flight tracking is the one
    Trip Hub card still with zero backend data behind it.
-3. No frontend surface for events exists yet — `find_events` and
-   event-anchored dates are backend/conversational only so far (same as
-   Saved Places was before its Trip Hub panel card); a dedicated Events
-   card on the Trip Hub page, mirroring Saved Places', is the natural
-   next step whenever that's wanted.
+3. ~~No frontend surface for events exists yet~~ — resolved by PR #40
+   above (open, not merged).
 
 ## Known blockers / open items
 
@@ -204,7 +239,9 @@ the visual chip/tag polish pass on the onboarding fields (currently plain
 - **A real signed-in click-through of onboarding hasn't happened** —
   everything up to the OAuth handshake was verified live against real
   running servers; completing sign-in needs the user's own Google
-  credentials, which isn't something to automate.
+  credentials, which isn't something to automate. `docs/manual-auth-testing.md`
+  (PR #41, open) is now the documented runbook for actually doing this —
+  the blocker is running it, not knowing how.
 - **Flight tracking has no backend data source at all** — the one Trip
   Hub card still genuinely unbuilt, not merely unwired.
 - **Google OAuth consent screen is still in "Testing" status** — caps
@@ -223,12 +260,18 @@ the visual chip/tag polish pass on the onboarding fields (currently plain
   presented to the user, not yet decided on — see `decisions.md`'s
   Database access control entry for the validated path if/when this is
   picked back up.
-- CI on `main` is green — most recently, PR #29 (2026-09-05) caught a
-  real `frontend-lint-and-build` failure before merge (ESLint's
+- **CI on `main` was red as of 2026-09-07, since PR #38's merge** — an
+  `npm ci` `ERESOLVE` conflict (`@types/node` pinned too old for
+  `vitest@5`) and an unsorted-import `ruff` failure, neither caught
+  before that merge (both slipped through because a local `npm install
+  --legacy-peer-deps` doesn't enforce the same strict peer resolution
+  `npm ci` does). Found while opening PRs #39–42 above — every one
+  failed CI in under 20 seconds on these same two issues, not their own
+  diffs. **Fix is PR #43, open, not yet merged — merge this one first.**
+  Before this, CI on `main` had been green since PR #29 (2026-09-05)
+  caught a real `frontend-lint-and-build` failure before merge (ESLint's
   `react-hooks/set-state-in-effect` rule on a `localStorage` read; fixed
-  with `useSyncExternalStore`, see `decisions.md`'s UI styling entries).
-  Backend CI has been green since a `pytest` import bug fixed 2026-08-31.
-  `frontend-lint-and-build` now also runs `npm run test` (Vitest) as of
-  2026-09-06 — the frontend's first automated tests, verified to actually
-  pass under a clean `npm ci` install (not just the local dev environment)
-  before being wired in.
+  with `useSyncExternalStore`, see `decisions.md`'s UI styling entries),
+  and backend CI had been green since a `pytest` import bug fixed
+  2026-08-31. `frontend-lint-and-build` has run `npm run test` (Vitest)
+  since 2026-09-06.

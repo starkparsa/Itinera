@@ -6,6 +6,102 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-07 — Four follow-on features built (PRs #39–42), plus a broken-main-CI fix (PR #43)
+
+Planned as one pass covering four gaps flagged after 2026-09-06's
+onboarding personalization session (below), built and verified as four
+isolated branches/PRs, in build order. **None merged yet as of this
+entry** — see `STATUS.md` for current merge status.
+
+**PR #39 — onboarding chip/tag visual polish.** New
+`components/ui/toggle-chip.tsx`: a real, visually-hidden
+`<input type="checkbox"|"radio">` styled via a sibling `<span>` through
+Tailwind `peer-*` selectors, replacing five `<select>`s and the
+interests checkbox group. Verified visually in the Browser pane against
+a temporary local debug route (removed before commit) — clicked through
+single-select exclusivity and multi-select toggling directly, not just
+trusted the CSS. `country_region` deliberately kept as a plain
+`<select>` (5 options + a conditional "Other" branch — a select still
+handles that better than a chip would).
+
+**PR #40 — Events Trip Hub card.** `find_events` had worked
+conversationally since 2026-09-04 but had no UI. Chose a live per-trip
+fetch cached on `Trip.events_json`/`events_fetched_at` with a 6h TTL —
+mirrors `weather_service.py`'s existing pattern exactly, deliberately
+not a new `SavedPlace`-style table (this is one read per page load, not
+something accumulated across a chat loop). New `events_service.py`,
+`schemas.EventOut`, a third card in `TripHubPanel.tsx`. Verified the
+migration both directions (upgrade + downgrade) against an isolated
+pre-migration SQLite DB, same discipline as every migration this project
+has shipped.
+
+**PR #41 — auth-testing gap closed with documentation, not new test
+code.** Investigated the "no real signed-in click-through" item and
+found it was two different claims: `backend/tests/conftest.py` already
+fully mocks auth for the automated suite (nothing to build there); the
+real gap is a genuine browser OAuth click-through, which this app's BFF
+architecture (FastAPI never talks to Google) and lack of any E2E
+framework make disproportionate to automate. Wrote
+`docs/manual-auth-testing.md` as a human-run runbook instead, plus one
+legitimate small gap-filler: a real unit test on `mintBackendJwt.ts`
+(hit a jsdom/`jose`-webapi cross-realm `Uint8Array` incompatibility
+verifying it — fixed with a `// @vitest-environment node` pragma on that
+one test file, since it has no actual DOM dependency).
+
+**PR #42 — gamification (passport stamps + tiered badges), 0% built
+before this.** Two new tables (`UserStats`, `UserAchievement`), new
+`stats_service.py`/`gamification_service.py`/`passport_service.py`, new
+`GET /gamification/passport`, a new `PassportBadges.tsx` section on the
+existing `/profile` page. Two real bugs found and fixed during
+implementation, not just planned around:
+- `_handle_new_or_edit_trip` inserts a fresh `Trip` row on *every*
+  `new_trip` and `edit_trip` turn, not just new trips — without
+  accounting for that, gamification's trip counts/badges/stamps would
+  have inflated every time someone conversationally tweaked an
+  already-planned trip. Fixed with a new `Trip.is_edit` column, set from
+  the already-classified intent at creation time.
+- Built the stamp-accent UI, took one look in the Browser pane, and the
+  tiles were pastel-light regardless of the OS dark-mode setting.
+  Traced it to `globals.css`'s `@custom-variant dark (&:is(.dark *))` —
+  this app's dark mode is `prefers-color-scheme`-driven, not a
+  `.dark`-class toggle, so Tailwind's `dark:` utility prefix has *never*
+  actually applied anywhere in this codebase (confirmed several
+  pre-existing, silently-dead `dark:` classes already sitting in
+  `TripCard.tsx`/`TripView.tsx`/shadcn's generated `badge.tsx` etc.).
+  Fixed properly for the new work: 8 named `--stamp-*` CSS custom
+  properties following the exact pattern `--chat-assistant-*` already
+  established (light values in `:root`, dark overrides in the existing
+  media-query block, registered in `@theme inline`). Re-verified in the
+  Browser pane under both `resize_window`-emulated light and dark
+  `colorScheme` — confirmed distinct, legible tiles in both.
+Also simplified the XP design mid-build: rather than incrementing
+`xp_points` at a trip-generation hook (the originally-sketched, unbuilt
+design), `evaluate_and_award` *sets* it from real trip count on every
+`GET /gamification/passport` call — removes an entire class of
+double-award-on-repeated-call risk for free, at no cost to the feature.
+
+**PR #43 — main's CI was found broken while opening the four PRs
+above.** Every one failed CI in under 20 seconds — too fast to be a real
+test failure. `gh run list --branch main` confirmed `main` itself had
+been red since PR #38 merged: an `npm ci` `ERESOLVE` conflict
+(`@types/node` pinned to `^20`, but `vitest@5.0.0` peer-requires
+`^22`/`>=24` — apparently never hit locally under
+`npm install --legacy-peer-deps`, only under CI's strict `npm ci`) and
+an unsorted-import `ruff` failure in `tests/test_trips_router.py`.
+Bumped `@types/node` to `^22` (matching `ci.yml`'s own Node version),
+regenerated `package-lock.json` with a real `npm install`, verified a
+real `npm ci` now succeeds against it (previously failed), and
+`ruff --fix`'d the import block. Neither issue was introduced by any of
+the four feature PRs — both predate this session entirely.
+
+**What's left, honestly:** all five PRs above are open, none merged.
+Merge order matters: #43 first (unblocks the other four's CI), then
+#39/#40/#41 in any order, then #42 last (its migration chains after
+#40's). Once merged, `STATUS.md`'s "PR open, not merged" qualifiers need
+removing. The visual chip design, stamp accent colors, and badge tier
+mapping are all first-pass choices, not a separate design-review round —
+worth a quick look once live before considering them final.
+
 ## 2026-09-06 — Onboarding personalization built end to end
 
 Design first (three rounds of mockups, research-informed — see
