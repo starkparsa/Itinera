@@ -19,6 +19,7 @@ export default function TripHubPanel({ trip }: { trip: TripResponse }) {
   const hasWeather = trip.weather.length > 0;
   const arrival = trip.weather[0];
   const hasSavedPlaces = trip.saved_places.length > 0;
+  const hasEvents = trip.events.length > 0;
 
   return (
     <aside
@@ -72,7 +73,32 @@ export default function TripHubPanel({ trip }: { trip: TripResponse }) {
             </div>
           )}
 
-          {!hasWeather && !hasSavedPlaces && (
+          {hasEvents && (
+            <div className="rounded-lg border bg-background p-3">
+              <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Events during your trip ({trip.events.length})
+              </p>
+              <ul className="mt-1.5 flex flex-col gap-1.5">
+                {trip.events.map((event) => (
+                  <li key={event.event_id ?? event.name} className="text-sm">
+                    <a
+                      href={event.url ?? undefined}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex flex-col gap-0.5 hover:underline"
+                    >
+                      <span className="truncate font-medium">{event.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {[event.date, event.time, event.venue].filter(Boolean).join(" · ")}
+                      </span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {!hasWeather && !hasSavedPlaces && !hasEvents && (
             <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">
               — nothing fetched yet —
             </p>

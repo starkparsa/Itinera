@@ -12,6 +12,7 @@ from .. import (
     calendar_export,
     date_resolver,
     event_planning,
+    events_service,
     google_calendar,
     llm_service,
     models,
@@ -695,6 +696,7 @@ def get_trip(trip_id: int, user: models.User = Depends(get_current_user), db: Se
         raise HTTPException(status_code=404, detail="Trip not found")
 
     weather_out = weather_service.get_or_refresh_trip_weather(trip, trip.items)
+    events_out = events_service.get_or_refresh_trip_events(trip)
     db.commit()
 
     return schemas.TripResponse(
@@ -705,6 +707,7 @@ def get_trip(trip_id: int, user: models.User = Depends(get_current_user), db: Se
         weather=[schemas.DayWeatherOut(**w) for w in weather_out],
         start_date=trip.start_date,
         saved_places=[schemas.SavedPlaceOut.model_validate(p) for p in trip.saved_places],
+        events=[schemas.EventOut(**e) for e in events_out],
     )
 
 
