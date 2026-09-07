@@ -15,8 +15,10 @@ export it to Google Calendar.
 
 Plus `docs/architecture.md` (system diagrams), `docs/deployment-guide.md`
 / `docs/deployment-readiness.md` (deploy prep, not yet executed),
-`docs/security-review.md` (manual security pass findings), and
-`docs/design-references.md` (published UI/UX mockups).
+`docs/security-review.md` (manual security pass findings),
+`docs/design-references.md` (published UI/UX mockups), and
+`docs/manual-auth-testing.md` (the real signed-in OAuth click-through --
+a human-run runbook, not automated, and deliberately so).
 
 `CLAUDE.md` still exists, deliberately slim — it's the file Claude Code
 auto-loads as project instructions at the start of every session, so it
