@@ -28,6 +28,22 @@ export interface SavedPlaceOut {
   price_level: string | null;
 }
 
+// Mirrors schemas.EventOut -- a real Ticketmaster event for the trip's
+// destination/date window (events_service.py). All fields optional --
+// Ticketmaster doesn't guarantee every field for every event.
+export interface EventOut {
+  event_id: string | null;
+  name: string | null;
+  date: string | null;
+  time: string | null;
+  venue: string | null;
+  segment: string | null;
+  genre: string | null;
+  price_min: number | null;
+  price_max: number | null;
+  url: string | null;
+}
+
 export interface TripResponse {
   trip_id: number | null;
   destination: string | null;
@@ -39,6 +55,7 @@ export interface TripResponse {
   weather: DayWeatherOut[];
   start_date: string | null; // ISO date, or null if unresolved -- gates .ics export
   saved_places: SavedPlaceOut[];
+  events: EventOut[];
 }
 
 export interface MessageOut {

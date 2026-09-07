@@ -772,6 +772,44 @@ def test_get_trip_by_id_includes_weather():
     assert fetched.json()["weather"] == fake_weather
 
 
+def test_get_trip_by_id_includes_events():
+    fake_events = [
+        {"event_id": "1", "name": "Fado Night", "date": "2026-08-31", "time": "20:00:00", "venue": "Alfama Hall",
+         "segment": "Music", "genre": "World", "price_min": 15.0, "price_max": 40.0, "url": "https://example.com/e/1"},
+    ]
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]),
+    ):
+        created = client.post("/trips/generate", json={"prompt": "weekend in Austin starting 2026-08-30"})
+    trip_id = created.json()["trip_id"]
+
+    with (
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]),
+        patch("app.routers.trips.events_service.get_or_refresh_trip_events", return_value=fake_events),
+    ):
+        fetched = client.get(f"/trips/{trip_id}")
+
+    assert fetched.json()["events"] == fake_events
+
+
+def test_get_trip_by_id_events_default_to_empty_list():
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]),
+    ):
+        created = client.post("/trips/generate", json={"prompt": "weekend in Austin starting 2026-08-30"})
+    trip_id = created.json()["trip_id"]
+
+    # No Ticketmaster key configured in tests -- events_service's own
+    # short-circuit returns [] without a network call, same real-world
+    # unconfigured path exercised in test_events_service.py.
+    with patch("app.routers.trips.weather_service.get_or_refresh_trip_weather", return_value=[]):
+        fetched = client.get(f"/trips/{trip_id}")
+
+    assert fetched.json()["events"] == []
+
+
 def test_conversation_reload_includes_weather():
     fake_weather = [
         {"day_number": 1, "date": "2026-08-30", "temp_min": 14.0, "temp_max": 22.5, "temp_min_f": 57.2, "temp_max_f": 72.5, "condition": "Clear sky"},
