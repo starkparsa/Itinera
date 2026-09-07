@@ -2,9 +2,10 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 import { auth } from "@/auth";
-import { getProfile } from "@/lib/backend";
+import { getProfile, getPassport } from "@/lib/backend";
 import RouteErrorState from "@/components/RouteErrorState";
 import ProfileEditorButton from "@/components/onboarding/ProfileEditorButton";
+import PassportBadges from "@/components/gamification/PassportBadges";
 
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
   return (
@@ -21,7 +22,7 @@ export default async function ProfilePage() {
     redirect("/login");
   }
 
-  const profile = await getProfile();
+  const [profile, passport] = await Promise.all([getProfile(), getPassport()]);
 
   return (
     <main id="main-content" className="mx-auto flex w-full max-w-2xl flex-1 flex-col px-4 py-6 md:px-8">
@@ -73,6 +74,11 @@ export default async function ProfilePage() {
               <Field label="Accessibility needs" value={profile.accessibility_needs} />
               <Field label="On your list" value={profile.bucket_list_countries.join(", ")} />
             </div>
+          </section>
+
+          <section className="flex flex-col gap-4">
+            <h2 className="text-sm font-semibold text-muted-foreground">Your passport</h2>
+            <PassportBadges passport={passport} />
           </section>
         </div>
       )}
