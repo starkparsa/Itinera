@@ -243,9 +243,9 @@ reuses this same day's Saved Places plumbing exactly: `_run_tool_loop`'s
 raw tool-call results already flow up through `generate_itinerary`'s
 `result["found_places"]`, so `find_events` cost nothing extra to wire
 into that existing channel. *Revisit note updated 2026-09-07: a Trip Hub
-card was built (PR #40, open pending merge) — see this file's "Four
-follow-on features" entry below for the approach (live per-trip fetch,
-6h TTL, no new table).*
+card was built and merged (PR #40) — see this file's "Four follow-on
+features" entry below for the approach (live per-trip fetch, 6h TTL, no
+new table).*
 
 **Ticketmaster's `keyword` param does literal name-matching, not genre
 matching — confirmed live, not assumed.** Searching `keyword="jazz"`
@@ -378,13 +378,12 @@ isn't something to automate. *Revisit: a real signed-in click-through
 (sign in, complete/skip onboarding, reload, confirm gating) is still
 outstanding and is the most valuable next verification step.*
 
-## Four follow-on features built, 2026-09-07 — PRs #39–42, open pending merge
+## Four follow-on features built, 2026-09-07 — PRs #39–42, merged
 
 Four gaps flagged after onboarding personalization shipped (this file's
 entry above) were scoped into one plan and built as four isolated
-branches/PRs, in this order. **As of this writing none are merged to
-`main` yet** — this entry documents what was built and decided, not a
-claim that any of it is live; see `STATUS.md` for merge status.
+branches/PRs, in this order, all now merged to `main` (after PR #43,
+below, fixed a broken `main` CI first).
 
 **1. Onboarding chip/tag visual polish (PR #39).** Replaced five
 `<select>`s and the interests checkbox group with a new interactive chip

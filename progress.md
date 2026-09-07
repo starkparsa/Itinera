@@ -10,8 +10,10 @@ see [`decisions.md`](decisions.md); for where things stand right now, see
 
 Planned as one pass covering four gaps flagged after 2026-09-06's
 onboarding personalization session (below), built and verified as four
-isolated branches/PRs, in build order. **None merged yet as of this
-entry** — see `STATUS.md` for current merge status.
+isolated branches/PRs, in build order, then merged the same day —
+PR #43's CI fix first, then #39/#40/#41, then #42 last (its migration
+chained after #40's). Each branch was updated with `main` and its own
+CI reverified green immediately before merging.
 
 **PR #39 — onboarding chip/tag visual polish.** New
 `components/ui/toggle-chip.tsx`: a real, visually-hidden
@@ -94,13 +96,15 @@ real `npm ci` now succeeds against it (previously failed), and
 `ruff --fix`'d the import block. Neither issue was introduced by any of
 the four feature PRs — both predate this session entirely.
 
-**What's left, honestly:** all five PRs above are open, none merged.
-Merge order matters: #43 first (unblocks the other four's CI), then
-#39/#40/#41 in any order, then #42 last (its migration chains after
-#40's). Once merged, `STATUS.md`'s "PR open, not merged" qualifiers need
-removing. The visual chip design, stamp accent colors, and badge tier
-mapping are all first-pass choices, not a separate design-review round —
-worth a quick look once live before considering them final.
+**All five PRs merged same-day.** One real merge conflict surfaced along
+the way: PR #42's `models.py` conflicted with PR #40's, since both add
+new `Trip` columns near the same spot (`events_json`/`events_fetched_at`
+vs. `is_edit`) — resolved by keeping both, re-verified (374 backend
+tests, 24 frontend tests, a single clean Alembic head) before merging.
+**What's left, honestly:** the visual chip design, stamp accent colors,
+and badge tier mapping are all first-pass choices, not a separate
+design-review round — worth a quick look now that they're live, before
+considering them final.
 
 ## 2026-09-06 — Onboarding personalization built end to end
 
