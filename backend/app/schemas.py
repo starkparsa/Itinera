@@ -1,6 +1,14 @@
+import re
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Loose on purpose -- catches a name typed into the phone field or similar
+# nonsense, not meant to validate real dialing-plan correctness (that's
+# what actually sending an SMS would tell you, and this app doesn't send
+# one yet).
+_PHONE_RE = re.compile(r"^\+?[0-9\s().-]{7,20}$")
+MAX_PLAUSIBLE_AGE = 120
 
 
 class TripRequest(BaseModel):
@@ -121,6 +129,74 @@ class ConversationSummary(BaseModel):
     trip_id: int | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ProfileUpdate(BaseModel):
+    """Partial update -- every field optional, since the onboarding form is
+    fully skippable and Profile -> Edit preferences reuses this same shape
+    for a single-field change.
+
+    display_name isn't a UserProfile column -- it's User.display_name
+    (Google-sourced), included here so the "what should we call you"
+    account-details question can go through the same single PUT rather
+    than a second endpoint. The router writes it to the User row, not
+    UserProfile.
+    """
+
+    display_name: str | None = None
+    mobile_number: str | None = Field(default=None, max_length=30)
+    date_of_birth: date | None = None
+    country_region: str | None = Field(default=None, max_length=100)
+    travel_frequency: str | None = None
+    pace: str | None = None
+    budget_tier: str | None = None
+    interests: list[str] | None = None
+    travel_companions: str | None = None
+    typical_trip_length_days: int | None = None
+    dietary_needs: str | None = None
+    accessibility_needs: str | None = None
+    bucket_list_countries: list[str] | None = None
+    additional_preferences: str | None = None
+
+    @field_validator("mobile_number")
+    @classmethod
+    def _validate_mobile_number(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        if not _PHONE_RE.match(value):
+            raise ValueError("Doesn't look like a valid phone number")
+        return value
+
+    @field_validator("date_of_birth")
+    @classmethod
+    def _validate_date_of_birth(cls, value: date | None) -> date | None:
+        if value is None:
+            return value
+        today = date.today()
+        if value > today:
+            raise ValueError("Date of birth can't be in the future")
+        if today.year - value.year > MAX_PLAUSIBLE_AGE:
+            raise ValueError("Date of birth is implausibly far in the past")
+        return value
+
+
+class ProfileOut(BaseModel):
+    display_name: str | None = None
+    mobile_number: str | None = None
+    date_of_birth: date | None = None
+    country_region: str | None = None
+    travel_frequency: str | None = None
+    pace: str | None = None
+    budget_tier: str | None = None
+    interests: list[str] = []
+    travel_companions: str | None = None
+    typical_trip_length_days: int | None = None
+    dietary_needs: str | None = None
+    accessibility_needs: str | None = None
+    bucket_list_countries: list[str] = []
+    additional_preferences: str | None = None
+    onboarding_completed_at: datetime | None = None
+    onboarding_skipped_at: datetime | None = None
 
 
 class ConversationDetail(BaseModel):

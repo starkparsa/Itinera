@@ -288,3 +288,11 @@ desktop.ini
 # not here) -- an artifact of where a command was run, not a real dependency
 # of this repo.
 skills-lock.json
+
+# Scratch HTML mockups authored while designing a feature (e.g. via
+# Claude Artifacts) before/alongside implementation -- the published
+# Artifact links in docs/design-references.md are the real reference,
+# not this local working copy. Keeping raw design HTML out of the
+# tracked source matches this repo's existing convention (a markdown
+# pointer file to hosted artifacts, not committed mockup source).
+design-scratch/

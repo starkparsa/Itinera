@@ -19,7 +19,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from .database import Base, engine
 from .rate_limit import limiter
-from .routers import auth, conversations, trips
+from .routers import auth, conversations, profile, trips
 
 # Retry logic to wait for database to be ready
 max_retries = 10
@@ -68,7 +68,7 @@ ALLOWED_ORIGINS = [origin.strip() for origin in _allowed_origins_env.split(",") 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -85,6 +85,7 @@ app.add_middleware(SlowAPIMiddleware)
 app.include_router(trips.router)
 app.include_router(conversations.router)
 app.include_router(auth.router)
+app.include_router(profile.router)
 
 
 @app.get("/health")

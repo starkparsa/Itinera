@@ -26,6 +26,7 @@ rather than being deleted.
 ## Stack
 
 - **Frontend**: Next.js (App Router, TypeScript), Tailwind v4 + shadcn/ui.
+  Tested with Vitest + React Testing Library.
 - **Backend**: FastAPI + SQLAlchemy.
 - **Database**: Postgres, hosted on [Neon](https://neon.tech) (free tier,
   no card) — local dev and prod point at the same kind of managed
@@ -175,6 +176,16 @@ pytest -v
 
 Tests use an in-memory SQLite database and mock the Gemini calls, so no
 live Postgres instance or `GEMINI_API_KEY` is needed to run them.
+
+```bash
+cd frontend
+npm install
+npm run test
+```
+
+Vitest + React Testing Library, `jsdom` environment — no dev server or
+backend needed. Introduced 2026-09-06 alongside `OnboardingFlow`; not
+every component has coverage yet.
 
 ## Database migrations
 

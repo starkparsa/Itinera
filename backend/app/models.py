@@ -178,6 +178,58 @@ class SavedPlace(Base):
     trip = relationship("Trip", back_populates="saved_places")
 
 
+class UserProfile(Base):
+    """Onboarding answers used to personalize itinerary generation (see
+    llm_service.generate_itinerary's user_profile_note). One row per user,
+    created on first GET/PUT /profile rather than at signup -- every field
+    is nullable since the onboarding form is fully skippable. interests and
+    bucket_list_countries are JSON-encoded lists stored as Text, matching
+    Trip.weather_json's existing small-JSON-blob convention rather than a
+    child table for values nothing ever filters on individually.
+    additional_preferences holds the optional "a few more things" answers
+    (climate, pets, language, noise) as freeform text -- deliberately
+    unstructured until real usage shows one is worth its own column.
+    """
+    __tablename__ = "user_profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True)
+
+    # Account-details fields -- each tied to a real, committed feature
+    # rather than collected speculatively: mobile_number for SMS trip-day
+    # reminders (that sending feature is separate future work -- this
+    # column just gives it somewhere to read from), date_of_birth for
+    # age-bracket personalization (see routers/trips.py's
+    # _age_bracket, wired into the itinerary prompt below). country_region
+    # is a plain locale hint, no feature-gate needed to justify it.
+    mobile_number = Column(String(30), nullable=True)
+    date_of_birth = Column(Date, nullable=True)
+    country_region = Column(String(100), nullable=True)
+
+    travel_frequency = Column(String(30), nullable=True)
+    pace = Column(String(20), nullable=True)
+    budget_tier = Column(String(20), nullable=True)
+    interests = Column(Text, nullable=True)
+    travel_companions = Column(String(30), nullable=True)
+    typical_trip_length_days = Column(Integer, nullable=True)
+    dietary_needs = Column(Text, nullable=True)
+    accessibility_needs = Column(Text, nullable=True)
+    bucket_list_countries = Column(Text, nullable=True)
+    additional_preferences = Column(Text, nullable=True)
+
+    # Two separate timestamps (not one "onboarding_done" bool) so the
+    # frontend can tell "actually finished" from "chose to skip" apart --
+    # both gate the onboarding prompt off, but only the former means the
+    # form was actually filled in.
+    onboarding_completed_at = Column(DateTime, nullable=True)
+    onboarding_skipped_at = Column(DateTime, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("User")
+
+
 class GoogleCalendarCredential(Base):
     """One row per user who has granted the Calendar OAuth scope (Phase D,
     see CLAUDE.md decision log, "Auth" row) -- separate from login, which

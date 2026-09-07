@@ -18,7 +18,7 @@
 
 import "server-only";
 import { backendAuthHeader } from "./authHeader";
-import type { ConversationDetail, ConversationSummary, TripResponse, TripSummary } from "./types";
+import type { ConversationDetail, ConversationSummary, Profile, ProfileUpdate, TripResponse, TripSummary } from "./types";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
@@ -148,6 +148,66 @@ export async function generateTrip(prompt: string, conversationId: number | null
       return { ok: false, error: body.detail ?? `Backend returned ${res.status}` };
     }
 
+    return { ok: true, data: await res.json() };
+  } catch (exc) {
+    return { ok: false, error: networkErrorMessage(exc) };
+  }
+}
+
+// Fails open to null, same reasoning as getConversation() above -- this
+// gates whether the onboarding flow shows at all (see app/(chat)/layout.tsx),
+// and showing it unnecessarily on a network blip is worse than skipping it
+// for one page load.
+export async function getProfile(): Promise<Profile | null> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/profile`, {
+      cache: "no-store",
+      headers: await backendAuthHeader(),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export interface UpdateProfileResult {
+  ok: boolean;
+  data?: Profile;
+  error?: string;
+}
+
+export async function updateProfile(update: ProfileUpdate): Promise<UpdateProfileResult> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/profile`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", ...(await backendAuthHeader()) },
+      body: JSON.stringify(update),
+      cache: "no-store",
+    });
+
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { ok: false, error: body.detail ?? `Backend returned ${res.status}` };
+    }
+
+    return { ok: true, data: await res.json() };
+  } catch (exc) {
+    return { ok: false, error: networkErrorMessage(exc) };
+  }
+}
+
+export async function skipOnboarding(): Promise<UpdateProfileResult> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/profile/onboarding/skip`, {
+      method: "POST",
+      headers: await backendAuthHeader(),
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { ok: false, error: body.detail ?? `Backend returned ${res.status}` };
+    }
     return { ok: true, data: await res.json() };
   } catch (exc) {
     return { ok: false, error: networkErrorMessage(exc) };

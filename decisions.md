@@ -282,6 +282,101 @@ via `Conversation.agent_context` and chat history). Needs pgvector (see
 Database entry) and real design work; don't pull forward without a
 specific reason.
 
+## Onboarding personalization & account details — live, 2026-09-06
+
+**`UserProfile`, 1:1 with `User`, mirrors `GoogleCalendarCredential`'s
+shape** (unique FK, no separate index — the unique constraint already is
+one). Every field nullable; the onboarding form is fully skippable, so a
+partially-filled profile is the normal case, not an edge case.
+`interests`/`bucket_list_countries` are JSON-encoded `Text`, matching
+`Trip.weather_json`'s existing small-blob convention rather than a child
+table for values nothing filters on individually. Two migrations, both
+purely additive — no existing table touched.
+
+**Personalization reaches the prompt through the same append pattern
+`answer_question`'s `agent_context` already uses**, not a new mechanism:
+`_build_user_profile_note` (`routers/trips.py`) builds a short string from
+only the fields actually set, threaded into `generate_itinerary`/
+`_generate_chunk`'s existing `context_parts`, with the same "use to
+influence choices, don't invent facts" caution already applied there.
+`llm_service.py` stays free of any DB import — the note is built in
+`routers/trips.py` and passed in as a plain string, preserving a boundary
+that already existed before this feature.
+
+**Account-details fields (name, mobile, date of birth, country) are each
+tied to a real, committed use, not collected speculatively** — this was
+a real correction mid-build: the fields were first scoped out entirely
+(no consuming feature existed), then reintroduced once genuine features
+were committed to. `date_of_birth` feeds a real, live feature: coarse
+age-bracket personalization (`_age_bracket`, real date arithmetic against
+today's actual date — CLAUDE.md principle #6 — never an LLM guess).
+`mobile_number` does not yet have its sending feature built — see the SMS
+entry below. `display_name` isn't a `UserProfile` column at all; it's
+`User.display_name`, written through the same single `PUT /profile` call
+so the "what should we call you" question doesn't need a second endpoint
+(a blank submission never clears the real name — only a non-empty value
+overwrites it).
+
+**Validation lives in the Pydantic schema, not a separate layer** — a
+phone-shape regex and a date-of-birth bounds check (`not future`, `not
+over 120 years`) on `ProfileUpdate`, mirrored client-side in
+`OnboardingFlow.tsx` as a courtesy (catch it before a round trip); the
+backend validator is what's actually authoritative. No mirrored
+client-side schema beyond that — Pydantic's own 422 was judged sufficient
+for a 3-input form with no exotic types.
+
+**Toast notifications: hand-built, not a library** (`components/ui/toast.tsx`)
+— a `ToastProvider`/`useToast` context mounted once at the app root, real
+`role="status"`/`aria-live="polite"` announcement, auto-dismiss.
+Itinera's first-ever ambient-notification primitive; every future
+celebration/confirmation moment (a badge earned, an export succeeding)
+routes through this one component instead of each feature inventing its
+own. First real consumer: onboarding's save confirmation.
+
+**`/profile` page, and `OnboardingFlow` reused for editing** — the
+original design called for the same onboarding component to serve both
+the first-login gate and a later "Profile → Edit preferences" page; the
+first build shipped only the gate, leaving `/profile` referenced in a
+docstring but not actually reachable from anywhere. Closed by adding a
+`mode: "onboarding" | "edit"` prop (edit mode: "Cancel" instead of "Skip
+for now", never calls the skip endpoint) and a real `/profile` route,
+linked from the sidebar.
+
+**Frontend test framework introduced for the first time**: Vitest +
+React Testing Library (`vitest.config.mts`, `vitest.setup.ts`), chosen
+over Jest for faster startup and native Vite/TS handling with no separate
+transform config. Nothing in this frontend had an automated test before
+this — `OnboardingFlow`'s form/validation/step logic and the new toast
+component are the first two files with real coverage (12 tests).
+
+**Real bug found and fixed: native `<select>` popups unreadable in dark
+mode.** Every select in the onboarding form inherited the app's
+dark-mode text color while its native OS dropdown popup still rendered
+on a light background — unselected options went light-on-white, nearly
+invisible (caught from a user screenshot, not a code review). Fixed with
+one shared utility, `[color-scheme:light]` on the field class every
+select already used — verified as a real compiled CSS rule in the
+production bundle, not just present in source, plus a regression test.
+
+**SMS trip-day reminders — explicitly not built.** `mobile_number` exists
+because a real feature (SMS reminders) was committed to, but the sending
+pipeline itself needs an external provider, a real `$0`-tier check (per
+CLAUDE.md's budget constraint), a scheduling mechanism this app has no
+equivalent of yet, and opt-in UX — genuinely separate, larger scope, not
+something to bundle into a form field. *Revisit: when a specific SMS
+provider's free tier has been live-verified, the same way Travelpayouts/
+Aviasales still needs to be for flight tracking.*
+
+**Manual end-to-end verification stops at the real OAuth handshake.**
+Both dev servers were started for real, live-verified: the backend's own
+Swagger UI lists all three `/profile` endpoints, `/`, `/trips`, and
+`/profile` all correctly redirect an unauthenticated request to `/login`,
+and a real unauthenticated `GET /profile` returns a genuine 401.
+Completing sign-in itself needs the user's real Google credentials, which
+isn't something to automate. *Revisit: a real signed-in click-through
+(sign in, complete/skip onboarding, reload, confirm gating) is still
+outstanding and is the most valuable next verification step.*
+
 ## UI styling
 
 **Tailwind CSS v4 + shadcn/ui**, replacing ~350 lines of hand-written CSS
@@ -703,3 +798,33 @@ weren't yet covered at the repo root either. *Revisit: if a real
 `backend/.env` distinct from the root `.env` is ever introduced, confirm
 it's still covered — it is today (unanchored root patterns match at any
 depth), but re-check after any future `.gitignore` restructuring.*
+
+## Gamification: shareable passport card + seasonal badges — considered, deferred
+
+While designing the onboarding/gamification mockups (see
+`docs/design-references.md`), a round of UX research into
+Duolingo/Strava/badge-design literature surfaced two real ideas that
+didn't make the cut for the current design, kept here so they aren't
+silently lost:
+
+- **A one-way shareable passport card** (a read-only link/image of a
+  user's passport-stamp collection) — a cheap echo of Strava's kudos/
+  social-proof effect (apps with social features show meaningfully
+  longer engagement) without needing a followers/friends graph Itinera
+  doesn't have and isn't in scope to build.
+- **Seasonal/limited-time badges** layered on top of the permanent
+  Common→Legendary tier ladder — mirrors Strava's two-tier structure
+  (permanent capability badges + event-bound badges), which sustains
+  engagement across different user types.
+
+Both are legitimate, research-backed ideas — not rejected on merit, just
+out of scope for the current build (no social graph, no $0-budget path
+to "seasonal" content generation yet). Revisit if/when a social or
+sharing surface is ever considered for Itinera.
+
+The same research pass also confirmed the earlier call to skip a streak
+mechanic (see this file's UI/gamification entries in
+`docs/design-references.md`): loss-aversion streaks reliably backfire
+without a genuine daily-use loop underneath them ("streak creep" —
+users optimize for not-losing rather than the actual goal), which
+Itinera doesn't have.

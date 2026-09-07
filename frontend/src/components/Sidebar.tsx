@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Plus, Trash2 } from "lucide-react";
 import type { ConversationSummary } from "@/lib/types";
 import { signOutAction } from "@/lib/authActions";
@@ -102,6 +103,9 @@ export default function Sidebar({
             <span className="truncate text-xs text-muted-foreground" title={userEmail}>
               {userEmail}
             </span>
+            <Link href="/profile" className="text-xs text-muted-foreground hover:text-foreground hover:underline">
+              Your profile
+            </Link>
             <Button variant="outline" size="sm" onClick={() => signOutAction()}>
               Sign out
             </Button>

@@ -5,6 +5,38 @@ implemented UI (the code is), but the working references for design
 discussion and iteration. All links are private Claude Artifacts/Design
 canvases, viewable only by the account that published them.
 
+## Onboarding & gamification design, 2026-09-06
+
+Four artifacts, in the order they were produced — the last one is a
+post-development review of what actually got built, not a mockup.
+
+- **[Trip Memory & Milestones](https://claude.ai/code/artifact/d3ea2269-c073-4ed3-8328-deeee474e9e6)**
+  — six rounds of iteration ending in the confirmed design: a 4-step
+  grouped onboarding form (Account details → Trip style → Habits &
+  logistics → Goals) with fade/skeleton transitions between saves, and a
+  gamification profile page (passport stamps + tiered badges,
+  research-informed against Duolingo/Strava/goal-gradient literature —
+  citations in-page). **Onboarding is now built** (see `decisions.md`'s
+  Onboarding personalization entry) — this artifact is the reference for
+  the finalized 9-question set and field-to-schema mapping, not a
+  substitute for reading the real component. **Gamification is still
+  design-only, 0% built.**
+- **[Immersive Feature Upgrades](https://claude.ai/code/artifact/5313add6-e756-451d-a37a-c72569ab9939)**
+  — an audit of the existing app's real features (traced to actual files)
+  mapped against where personalization/gamification should integrate; 5
+  mockups, a working toast-component demo, and a hand-built data-flow
+  diagram. Identified the toast-system gap this later got built to close.
+- **[Responsive Design Audit](https://claude.ai/code/artifact/e9209e41-93f9-4907-aad2-f4c239a09f8d)**
+  — a live, genuinely resizable demo (a real iframe with real `@media`
+  breakpoints, not three static screenshots) proving the gamification
+  profile mockup reflows correctly from 375px to 1440px.
+- **[Onboarding Feature Review](https://claude.ai/code/artifact/29d313b2-3fa1-42ab-b3c6-c024e784bbec)**
+  — a metrics-grounded review of the real build (Steps 1–4b at the time),
+  every number read from `git diff --numstat` and real test runs, not
+  estimated. Superseded in places by `decisions.md`'s fuller Onboarding
+  personalization entry, written after the "leave nothing behind" pass
+  that followed this review.
+
 ## Current direction: Trip Hub v2, 2026-09-03
 
 **[Trip Hub Direction](https://claude.ai/code/artifact/3dbae3ae-5bdc-433a-bb84-6f7252cbbeac)**

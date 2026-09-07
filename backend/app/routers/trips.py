@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import date
 
@@ -304,6 +305,49 @@ def _handle_question(
     return schemas.TripResponse(conversation_id=conversation.id, reply=reply_text)
 
 
+def _age_bracket(date_of_birth: date | None) -> str | None:
+    """Coarse bracket, never an exact age -- real date arithmetic against
+    today's real date (CLAUDE.md principle #6: never let the LLM do date
+    math), not a guess."""
+    if date_of_birth is None:
+        return None
+    today = date.today()
+    age = today.year - date_of_birth.year - ((today.month, today.day) < (date_of_birth.month, date_of_birth.day))
+    for ceiling, label in ((18, "under 18"), (25, "18-24"), (35, "25-34"), (45, "35-44"), (55, "45-54"), (65, "55-64")):
+        if age < ceiling:
+            return label
+    return "65+"
+
+
+def _build_user_profile_note(profile: models.UserProfile | None) -> str:
+    """Only the fields that actually shape itinerary content -- frequency,
+    trip length, and bucket-list countries inform other features, not what
+    goes into a single trip. Only set fields are included, so a
+    mostly-skipped profile yields a short or empty note, not a padded
+    template."""
+    if profile is None:
+        return ""
+    parts = []
+    age_bracket = _age_bracket(profile.date_of_birth)
+    if age_bracket:
+        parts.append(f"age group: {age_bracket}")
+    if profile.pace:
+        parts.append(f"pace: {profile.pace}")
+    if profile.budget_tier:
+        parts.append(f"budget: {profile.budget_tier}")
+    if profile.interests:
+        interests = ", ".join(json.loads(profile.interests))
+        if interests:
+            parts.append(f"interests: {interests}")
+    if profile.travel_companions:
+        parts.append(f"usually travels: {profile.travel_companions}")
+    if profile.dietary_needs:
+        parts.append(f"dietary needs: {profile.dietary_needs}")
+    if profile.accessibility_needs:
+        parts.append(f"accessibility needs: {profile.accessibility_needs}")
+    return "; ".join(parts)
+
+
 def _handle_new_or_edit_trip(
     db: Session,
     user: models.User,
@@ -345,11 +389,15 @@ def _handle_new_or_edit_trip(
     if previous_trip and previous_trip.items:
         previous_total_days = max(item.day_number for item in previous_trip.items)
 
+    profile = db.query(models.UserProfile).filter(models.UserProfile.user_id == user.id).first()
+    user_profile_note = _build_user_profile_note(profile)
+
     try:
         result = llm_service.generate_itinerary(
             trip_request.prompt,
             requested_days=trip_request.days,
             conversation_context=conversation_context,
+            user_profile_note=user_profile_note,
             # Reuse currency/place-context findings gathered earlier in this
             # chat instead of re-running the agent steps on every edit turn.
             # A falsy value (None, or "" -- e.g. from a Q&A-first
