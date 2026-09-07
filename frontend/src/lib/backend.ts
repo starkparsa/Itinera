@@ -18,7 +18,15 @@
 
 import "server-only";
 import { backendAuthHeader } from "./authHeader";
-import type { ConversationDetail, ConversationSummary, Profile, ProfileUpdate, TripResponse, TripSummary } from "./types";
+import type {
+  ConversationDetail,
+  ConversationSummary,
+  Passport,
+  Profile,
+  ProfileUpdate,
+  TripResponse,
+  TripSummary,
+} from "./types";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
@@ -211,6 +219,22 @@ export async function skipOnboarding(): Promise<UpdateProfileResult> {
     return { ok: true, data: await res.json() };
   } catch (exc) {
     return { ok: false, error: networkErrorMessage(exc) };
+  }
+}
+
+// Fails open to null, same reasoning as getProfile() above -- the profile
+// page's passport section just doesn't render on a network blip rather than
+// showing a broken/misleading state.
+export async function getPassport(): Promise<Passport | null> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/gamification/passport`, {
+      cache: "no-store",
+      headers: await backendAuthHeader(),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
   }
 }
 
