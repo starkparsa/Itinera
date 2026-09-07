@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { useToast } from "@/components/ui/toast";
+import { ChipGroup, ChipOption } from "@/components/ui/toggle-chip";
 import { updateProfile, skipOnboarding } from "@/lib/backend";
 import type { Profile, ProfileUpdate } from "@/lib/types";
 
@@ -31,6 +32,48 @@ const INTEREST_OPTIONS = [
 ];
 
 const COUNTRY_OPTIONS = ["United States", "Canada", "United Kingdom", "India", "Other"];
+
+// Single-select chip fields: { label, value } pairs where `value` is what
+// gets stored in FormState/sent to the backend -- the blank-string option
+// mirrors each field's old <select>'s unselected default text.
+const TRAVEL_FREQUENCY_OPTIONS = [
+  { label: "Unsure", value: "" },
+  { label: "Once in a while", value: "Once in a while" },
+  { label: "A few times a year", value: "A few times a year" },
+  { label: "Every chance I get", value: "Every chance I get" },
+];
+
+const PACE_OPTIONS = [
+  { label: "Depends on the trip", value: "" },
+  { label: "Leisurely", value: "Leisurely" },
+  { label: "Balanced", value: "Balanced" },
+  { label: "Packed", value: "Packed" },
+];
+
+const BUDGET_TIER_OPTIONS = [
+  { label: "Depends", value: "" },
+  { label: "Keep it affordable", value: "Keep it affordable" },
+  { label: "Mid-range comfort", value: "Mid-range comfort" },
+  { label: "Treat-myself trips", value: "Treat-myself trips" },
+];
+
+const TRAVEL_COMPANIONS_OPTIONS = [
+  { label: "Varies", value: "" },
+  { label: "Solo", value: "Solo" },
+  { label: "Partner", value: "Partner" },
+  { label: "Family with kids", value: "Family with kids" },
+  { label: "Friends", value: "Friends" },
+  { label: "Multi-generational group", value: "Multi-generational group" },
+];
+
+// "Skip this one" stores "" the same way the old <select>'s blank default
+// option did, distinct from the field never being touched (which stays
+// undefined and PUT /profile's exclude_unset leaves alone). Every other
+// chip's value is the label itself, matching TRIP_LENGTH_DAYS's keys.
+const TRIP_LENGTH_OPTIONS = [
+  { label: "Skip this one", value: "" },
+  ...Object.keys(TRIP_LENGTH_DAYS).map((label) => ({ label, value: label })),
+];
 
 // Mirrors backend/app/schemas.py's _PHONE_RE and MAX_PLAUSIBLE_AGE exactly
 // -- client-side is a courtesy (catch it before a round trip), the backend
@@ -295,73 +338,110 @@ export default function OnboardingFlow({
 
         {step === 2 && (
           <div className="flex flex-col gap-4">
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
+            <div className="flex flex-col gap-1.5 text-sm font-medium">
               How often are you usually traveling?
-              <select className={fieldClass} value={form.travel_frequency} onChange={(e) => set("travel_frequency", e.target.value)}>
-                <option value="">Unsure</option>
-                <option>Once in a while</option>
-                <option>A few times a year</option>
-                <option>Every chance I get</option>
-              </select>
-            </label>
+              <ChipGroup legend="How often are you usually traveling?">
+                {TRAVEL_FREQUENCY_OPTIONS.map(({ label, value }) => (
+                  <ChipOption
+                    key={label}
+                    type="radio"
+                    name="travel_frequency"
+                    checked={form.travel_frequency === value}
+                    onChange={() => set("travel_frequency", value)}
+                  >
+                    {label}
+                  </ChipOption>
+                ))}
+              </ChipGroup>
+            </div>
 
             <div className="flex flex-col gap-1.5 text-sm font-medium">
               What kind of trips light you up? (pick all that apply)
-              <div className="flex flex-wrap gap-x-4 gap-y-2 font-normal text-sm">
+              <ChipGroup legend="What kind of trips light you up?">
                 {INTEREST_OPTIONS.map((option) => (
-                  <label key={option} className="flex items-center gap-1.5">
-                    <input type="checkbox" checked={form.interests.includes(option)} onChange={() => toggleInterest(option)} />
+                  <ChipOption
+                    key={option}
+                    type="checkbox"
+                    checked={form.interests.includes(option)}
+                    onChange={() => toggleInterest(option)}
+                  >
                     {option}
-                  </label>
+                  </ChipOption>
                 ))}
-              </div>
+              </ChipGroup>
             </div>
 
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
+            <div className="flex flex-col gap-1.5 text-sm font-medium">
               When you&rsquo;re there, what pace feels right?
-              <select className={fieldClass} value={form.pace} onChange={(e) => set("pace", e.target.value)}>
-                <option value="">Depends on the trip</option>
-                <option>Leisurely</option>
-                <option>Balanced</option>
-                <option>Packed</option>
-              </select>
-            </label>
+              <ChipGroup legend="When you're there, what pace feels right?">
+                {PACE_OPTIONS.map(({ label, value }) => (
+                  <ChipOption
+                    key={label}
+                    type="radio"
+                    name="pace"
+                    checked={form.pace === value}
+                    onChange={() => set("pace", value)}
+                  >
+                    {label}
+                  </ChipOption>
+                ))}
+              </ChipGroup>
+            </div>
           </div>
         )}
 
         {step === 3 && (
           <div className="flex flex-col gap-4">
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
+            <div className="flex flex-col gap-1.5 text-sm font-medium">
               What&rsquo;s your comfort zone for spending?
-              <select className={fieldClass} value={form.budget_tier} onChange={(e) => set("budget_tier", e.target.value)}>
-                <option value="">Depends</option>
-                <option>Keep it affordable</option>
-                <option>Mid-range comfort</option>
-                <option>Treat-myself trips</option>
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Who do you usually travel with?
-              <select className={fieldClass} value={form.travel_companions} onChange={(e) => set("travel_companions", e.target.value)}>
-                <option value="">Varies</option>
-                <option>Solo</option>
-                <option>Partner</option>
-                <option>Family with kids</option>
-                <option>Friends</option>
-                <option>Multi-generational group</option>
-              </select>
-            </label>
-
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              How long are your trips, typically?
-              <select className={fieldClass} value={form.trip_length_label} onChange={(e) => set("trip_length_label", e.target.value)}>
-                <option value="">Skip this one</option>
-                {Object.keys(TRIP_LENGTH_DAYS).map((label) => (
-                  <option key={label}>{label}</option>
+              <ChipGroup legend="What's your comfort zone for spending?">
+                {BUDGET_TIER_OPTIONS.map(({ label, value }) => (
+                  <ChipOption
+                    key={label}
+                    type="radio"
+                    name="budget_tier"
+                    checked={form.budget_tier === value}
+                    onChange={() => set("budget_tier", value)}
+                  >
+                    {label}
+                  </ChipOption>
                 ))}
-              </select>
-            </label>
+              </ChipGroup>
+            </div>
+
+            <div className="flex flex-col gap-1.5 text-sm font-medium">
+              Who do you usually travel with?
+              <ChipGroup legend="Who do you usually travel with?">
+                {TRAVEL_COMPANIONS_OPTIONS.map(({ label, value }) => (
+                  <ChipOption
+                    key={label}
+                    type="radio"
+                    name="travel_companions"
+                    checked={form.travel_companions === value}
+                    onChange={() => set("travel_companions", value)}
+                  >
+                    {label}
+                  </ChipOption>
+                ))}
+              </ChipGroup>
+            </div>
+
+            <div className="flex flex-col gap-1.5 text-sm font-medium">
+              How long are your trips, typically?
+              <ChipGroup legend="How long are your trips, typically?">
+                {TRIP_LENGTH_OPTIONS.map(({ label, value }) => (
+                  <ChipOption
+                    key={label}
+                    type="radio"
+                    name="trip_length_label"
+                    checked={form.trip_length_label === value}
+                    onChange={() => set("trip_length_label", value)}
+                  >
+                    {label}
+                  </ChipOption>
+                ))}
+              </ChipGroup>
+            </div>
 
             <label className="flex flex-col gap-1.5 text-sm font-medium">
               Any food preferences or needs we should plan around?
