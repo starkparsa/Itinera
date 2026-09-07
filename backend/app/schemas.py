@@ -68,6 +68,10 @@ class TripResponse(BaseModel):
     # once the whole module has loaded, same as any other in-module
     # forward ref.
     saved_places: list["SavedPlaceOut"] = []
+    # Real Ticketmaster events for the trip's destination/date window (see
+    # events_service.py) -- empty when there's no destination, Ticketmaster
+    # isn't configured, or nothing matched, never fabricated.
+    events: list["EventOut"] = []
 
 
 class TripSummary(BaseModel):
@@ -90,6 +94,26 @@ class TripSummary(BaseModel):
     photo_credit: str | None = None
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class EventOut(BaseModel):
+    """A real, bookable event (Ticketmaster, via tools.find_events /
+    events_service.py) for a trip's destination and date window -- see
+    routers/trips.py's get_trip. All fields optional: Ticketmaster doesn't
+    guarantee every field is populated for every event (e.g. price ranges
+    are often absent), and this schema passes through only what's there
+    rather than inventing a placeholder."""
+
+    event_id: str | None = None
+    name: str | None = None
+    date: str | None = None
+    time: str | None = None
+    venue: str | None = None
+    segment: str | None = None
+    genre: str | None = None
+    price_min: float | None = None
+    price_max: float | None = None
+    url: str | None = None
 
 
 class SavedPlaceOut(BaseModel):

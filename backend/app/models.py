@@ -128,6 +128,13 @@ class Trip(Base):
     photo_url = Column(String(500), nullable=True)
     photo_credit = Column(String(255), nullable=True)  # "Photographer Name" -- Pexels' attribution ask
     photo_fetched_at = Column(DateTime, nullable=True)
+    # Cached events list (events_service.py, Ticketmaster via tools.find_events)
+    # as a small JSON blob, plus when it was fetched -- same TTL-cache shape as
+    # weather_json/weather_fetched_at above (event listings go stale on their
+    # own schedule -- sellouts, cancellations -- so unlike the photo pair,
+    # this one does drive a refetch once stale).
+    events_json = Column(Text, nullable=True)
+    events_fetched_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="trips")
