@@ -6,6 +6,81 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-06 — Onboarding personalization built end to end
+
+Design first (three rounds of mockups, research-informed — see
+`docs/design-references.md`), then real code, built incrementally with a
+review gate after each step rather than as one large change:
+
+**Step 1 — data model.** `UserProfile` (1:1 with `User`, mirrors
+`GoogleCalendarCredential`'s shape), one migration. Verified by applying
+it against a simulated pre-migration database, not just by reading it.
+
+**Step 2 — `GET/PUT /profile`, `POST /profile/onboarding/skip`.** Caught
+one real thing during review: the JSON encode/decode for the two
+list-valued fields was duplicated across two functions — collapsed into
+one `JSON_LIST_FIELDS` tuple before calling the step done.
+
+**Step 3 — wired into `generate_itinerary`'s prompt.** Same append
+pattern `answer_question`'s `agent_context` already uses. Caught a real
+regression during verification: an existing test asserted the *exact*
+kwargs `generate_itinerary` is called with, and the new parameter broke
+it — fixed the assertion rather than loosening it.
+
+**Step 4 — `OnboardingFlow`.** A status report claimed an "Account
+details form (name, mobile, DOB, country)" was built and confirmed; it
+wasn't — re-checked directly against `OnboardingFlow.tsx`'s actual step
+list and `UserProfile`'s actual columns before accepting that claim, and
+corrected the record rather than planning on top of it. Once corrected,
+the fields were built for real — but only after their purpose was
+committed to first (SMS reminders for `mobile_number`, age-bracket
+personalization for `date_of_birth`), not collected speculatively.
+
+**Then a "leave nothing behind" pass**, closing every gap raised along
+the way: real phone/DOB validation (client courtesy + authoritative
+server-side Pydantic validators), consent copy on the sensitive fields, a
+hand-built toast system (`components/ui/toast.tsx` — this app's first
+ambient-notification primitive, `role="status"`/`aria-live="polite"`), a
+real `/profile` page reusing `OnboardingFlow` in a new `mode="edit"`
+(closing a real dead end — `/profile` was referenced in a schema
+docstring but unreachable from anywhere in the app), and a frontend test
+framework stood up from scratch (Vitest + React Testing Library — nothing
+in this frontend had automated tests before today), with 12 tests
+covering the new form/validation/toast logic. Wired `npm run test` into
+`frontend-lint-and-build` in CI — verified first under a clean `npm ci`
+in an isolated directory, since the local dev install had needed
+`--legacy-peer-deps` and CI's strict install needed checking separately.
+
+**Real bug found from a user screenshot, not a code review**: every
+`<select>` in the onboarding form was rendering nearly-invisible
+light-gray-on-white options in dark mode. Root cause: a `<select>`
+inherits the page's dark-mode text color, but its native OS dropdown
+popup still renders on a light background — `color-scheme` isn't
+inherited into that popup the way normal CSS is. Fixed with one shared
+utility (`[color-scheme:light]` on the field class every select already
+used), confirmed as a real compiled CSS rule in the production bundle
+(not just present in source) by grepping the built `.next` output, plus a
+regression test.
+
+**Verified, not assumed, throughout**: 345 backend tests passing
+(324 → 345 across the whole build), 12 new frontend tests, `tsc`/`eslint`
+clean, a real production `next build`, and both dev servers actually
+started (not just imagined) to confirm live: the backend's own Swagger UI
+lists all three `/profile` endpoints, `/`/`/trips`/`/profile` all
+correctly redirect an unauthenticated request to `/login`, and a real
+unauthenticated `GET /profile` returns a genuine 401 with a clear
+message.
+
+**What's still genuinely open, not silently dropped**: SMS sending itself
+(needs an external provider, evaluated against a real free tier first —
+same posture as the still-unverified Travelpayouts/Aviasales flight-data
+question); the visual chip/tag polish pass on the onboarding fields
+(currently plain `<select>`/checkboxes); and a real signed-in
+click-through of the whole flow, which stops at the OAuth handshake
+itself since that needs the user's own Google credentials. See
+`decisions.md`'s new Onboarding personalization entry for the full
+reasoning behind every choice above.
+
 ## 2026-09-06 — Secrets/RLS security pass (PR #35, #36)
 
 Four back-to-back security-focused requests, each investigated directly

@@ -236,6 +236,42 @@ def test_agent_context_is_surfaced_in_result_and_prompt():
     assert "near-freezing" in captured_prompts[1]
 
 
+def test_user_profile_note_is_folded_into_the_chunk_prompt():
+    meta = TripMeta(destination="Lisbon", total_days=3)
+    chunk = _chunk([(i, "explore") for i in range(1, 4)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary(
+            "3 days in Lisbon", user_profile_note="pace: relaxed; interests: food, museums",
+        )
+
+    # Not in the meta prompt (1st call) -- destination/length inference has
+    # no use for it; must be in the chunk prompt (2nd call).
+    assert "relaxed" not in captured_prompts[0]
+    assert "relaxed" in captured_prompts[1]
+    assert "food, museums" in captured_prompts[1]
+
+
+def test_empty_user_profile_note_adds_nothing_to_the_prompt():
+    meta = TripMeta(destination="Lisbon", total_days=3)
+    chunk = _chunk([(i, "explore") for i in range(1, 4)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary("3 days in Lisbon")
+
+    assert "stated preferences" not in captured_prompts[1]
+
+
 def test_previous_total_days_is_folded_into_the_meta_prompt_as_a_soft_fact():
     # Regression test: a follow-up with no day-count language at all ("I
     # want to experience the artsy miami") after a real 5-day trip was

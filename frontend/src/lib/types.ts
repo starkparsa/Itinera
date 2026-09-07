@@ -75,6 +75,47 @@ export interface ConversationSummary {
   trip_id: number | null;
 }
 
+// Mirrors schemas.ProfileOut -- onboarding answers used to personalize
+// itinerary generation (see backend/app/models.py's UserProfile).
+export interface Profile {
+  display_name: string | null;
+  mobile_number: string | null;
+  date_of_birth: string | null; // ISO date
+  country_region: string | null;
+  travel_frequency: string | null;
+  pace: string | null;
+  budget_tier: string | null;
+  interests: string[];
+  travel_companions: string | null;
+  typical_trip_length_days: number | null;
+  dietary_needs: string | null;
+  accessibility_needs: string | null;
+  bucket_list_countries: string[];
+  additional_preferences: string | null;
+  onboarding_completed_at: string | null;
+  onboarding_skipped_at: string | null;
+}
+
+// Mirrors schemas.ProfileUpdate -- every field optional, since the
+// onboarding form is fully skippable and a single-field edit from Profile
+// reuses this same shape.
+export interface ProfileUpdate {
+  display_name?: string | null;
+  mobile_number?: string | null;
+  date_of_birth?: string | null; // ISO date
+  country_region?: string | null;
+  travel_frequency?: string | null;
+  pace?: string | null;
+  budget_tier?: string | null;
+  interests?: string[] | null;
+  travel_companions?: string | null;
+  typical_trip_length_days?: number | null;
+  dietary_needs?: string | null;
+  accessibility_needs?: string | null;
+  bucket_list_countries?: string[] | null;
+  additional_preferences?: string | null;
+}
+
 export interface ConversationDetail {
   id: number;
   title: string;

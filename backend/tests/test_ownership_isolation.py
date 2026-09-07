@@ -154,3 +154,18 @@ def test_trip_request_body_no_longer_accepts_a_user_id_field():
         # If user_id in the body still had any effect, this trip would
         # belong to user_b instead and this would be 200.
         assert client.get(f"/trips/{created.json()['trip_id']}").status_code == 404
+
+
+def test_profile_is_scoped_to_the_authenticated_user():
+    user_a = _make_user("user-a")
+    user_b = _make_user("user-b")
+
+    with _act_as(user_a):
+        client.put("/profile", json={"pace": "packed"})
+    with _act_as(user_b):
+        client.put("/profile", json={"pace": "relaxed"})
+
+    with _act_as(user_a):
+        assert client.get("/profile").json()["pace"] == "packed"
+    with _act_as(user_b):
+        assert client.get("/profile").json()["pace"] == "relaxed"

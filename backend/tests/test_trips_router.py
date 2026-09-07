@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from unittest.mock import patch
 
 import pytest
@@ -10,7 +10,7 @@ from app import date_resolver, models
 from app.auth import get_current_user
 from app.database import Base, SessionLocal, engine, get_db
 from app.main import app
-from app.routers.trips import MAX_CONTEXT_CHARS, _build_conversation_context
+from app.routers.trips import MAX_CONTEXT_CHARS, _age_bracket, _build_conversation_context, _build_user_profile_note
 
 client = TestClient(app)
 
@@ -87,8 +87,48 @@ def test_generate_trip_forwards_requested_days_to_llm_service():
 
     mock_generate.assert_called_once_with(
         "a month in Japan", requested_days=30, conversation_context="", cached_agent_context=None,
-        previous_total_days=None,
+        previous_total_days=None, user_profile_note="",
     )
+
+
+def test_generate_trip_forwards_user_profile_note_when_profile_exists():
+    db = SessionLocal()
+    try:
+        user = models.User(google_sub=TEST_GOOGLE_SUB, email="test-user@example.com")
+        db.add(user)
+        db.flush()
+        db.add(models.UserProfile(user_id=user.id, pace="relaxed", budget_tier="mid"))
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY) as mock_generate:
+        client.post("/trips/generate", json={"prompt": "weekend in Lisbon"})
+
+    assert mock_generate.call_args.kwargs["user_profile_note"] == "pace: relaxed; budget: mid"
+
+
+def test_age_bracket_handles_a_birthday_not_yet_reached_this_year():
+    today = date.today()
+    # Turns 30 tomorrow -- still 29 today, so this must not round up early.
+    not_yet_30 = date(today.year - 30, today.month, today.day) + timedelta(days=1)
+    assert _age_bracket(not_yet_30) == "25-34"
+
+
+def test_age_bracket_handles_a_birthday_already_passed_this_year():
+    today = date.today()
+    just_turned_30 = date(today.year - 30, today.month, today.day) - timedelta(days=1)
+    assert _age_bracket(just_turned_30) == "25-34"
+
+
+def test_age_bracket_none_when_no_date_of_birth():
+    assert _age_bracket(None) is None
+
+
+def test_user_profile_note_includes_age_bracket():
+    profile = models.UserProfile(date_of_birth=date(1990, 1, 1))
+    note = _build_user_profile_note(profile)
+    assert "age group:" in note
 
 
 def test_generate_trip_surfaces_note_from_llm_result():

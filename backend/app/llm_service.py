@@ -409,7 +409,7 @@ def _infer_trip_meta(
     return destination, total_days
 
 
-def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: int, end_day: int, covered_activities: list[str], trip_context: str, conversation_context: str) -> list[dict]:
+def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: int, end_day: int, covered_activities: list[str], trip_context: str, conversation_context: str, user_profile_note: str = "") -> list[dict]:
     covered_note = ""
     if covered_activities:
         recent = ", ".join(covered_activities[-15:])
@@ -420,6 +420,16 @@ def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: i
         context_parts.append(f"Earlier in this conversation: {conversation_context}")
     if trip_context:
         context_parts.append(f"Relevant context gathered ahead of time: {trip_context}")
+    if user_profile_note:
+        # Stated preferences from onboarding, not agent-gathered fact --
+        # kept as its own line so the model can't confuse "the traveler
+        # said they like X" with "we verified X is true", same caution
+        # answer_question already applies to agent_context.
+        context_parts.append(
+            f"Traveler's stated preferences (use to influence choices like "
+            f"pace and activity type; do not treat as facts about the "
+            f"destination or invent specifics beyond what's given): {user_profile_note}"
+        )
     context_note = ("\n".join(context_parts) + "\n") if context_parts else ""
 
     chunk_prompt = CHUNK_INSTRUCTIONS_TEMPLATE.format(
@@ -445,6 +455,7 @@ def generate_itinerary(
     conversation_context: str = "",
     cached_agent_context: str | None = None,
     previous_total_days: int | None = None,
+    user_profile_note: str = "",
 ) -> dict:
     """Calls Gemini and returns a complete itinerary, generating it in
     day-range chunks so trip length doesn't degrade output quality.
@@ -465,6 +476,12 @@ def generate_itinerary(
 
     previous_total_days: see _infer_trip_meta's docstring -- threaded
     straight through, unused here beyond that.
+
+    user_profile_note: short plain-text summary of the traveler's
+    onboarding answers (pace, interests, dietary/accessibility needs,
+    etc.), or "" if they set none -- built by the caller (routers/trips.py)
+    from UserProfile, not looked up here, so this module stays free of any
+    DB dependency. Threaded into every chunk call, same as trip_context.
 
     The agentic tool-calling steps (agent_service.py: currency conversion,
     paused, and place-context via Wikipedia, added 2026-08-29) and the
@@ -513,7 +530,7 @@ def generate_itinerary(
 
     for start_day in range(1, total_days + 1, CHUNK_SIZE_DAYS):
         end_day = min(start_day + CHUNK_SIZE_DAYS - 1, total_days)
-        chunk_days = _generate_chunk(prompt, destination, total_days, start_day, end_day, covered_activities, trip_context, conversation_context)
+        chunk_days = _generate_chunk(prompt, destination, total_days, start_day, end_day, covered_activities, trip_context, conversation_context, user_profile_note)
         all_days.extend(chunk_days)
         for day in chunk_days:
             for item in day.get("items", []):

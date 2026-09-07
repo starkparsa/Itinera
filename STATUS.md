@@ -54,15 +54,40 @@ doesn't have yet, so it was **not** enabled (see `decisions.md`'s new
 Database access control entry) — authorization stays enforced at the API
 layer only. Also fixed a real bug (PR #36): `/login` had no check for an
 already-authenticated user and would show the sign-in form instead of
-redirecting; verified live against the user's real signed-in session._
+redirecting; verified live against the user's real signed-in session.
+Updated again 2026-09-06 after building onboarding personalization end to
+end: a `UserProfile` table (two additive migrations), `GET/PUT /profile`
++ `POST /profile/onboarding/skip`, real prompt-injection wiring into
+`generate_itinerary`, and a 4-step `OnboardingFlow` dialog (Account
+details → Trip style → Habits & logistics → Goals) gated in
+`app/(chat)/layout.tsx`. A mid-build correction: account-details fields
+(mobile, DOB, country) were first scoped out entirely for having no real
+consumer, then rebuilt once genuine features were committed to (DOB now
+drives real age-bracket personalization; SMS reminders remain deferred,
+sending needs an external provider). Followed by a "leave nothing
+behind" pass: real phone/DOB validation (client + authoritative
+server-side), a hand-built toast system (Itinera's first ambient-
+notification primitive), a real `/profile` page reusing `OnboardingFlow`
+in edit mode (closing a dead end — the page was referenced in a
+docstring but unreachable), and this frontend's first-ever automated test
+suite (Vitest + React Testing Library, 12 tests). Caught and fixed one
+real bug along the way: every onboarding `<select>` was unreadable in
+dark mode (native popup rendering light-on-white) — one shared CSS fix,
+verified compiled into the production bundle, plus a regression test.
+See `decisions.md`'s new Onboarding personalization entry for the full
+detail, including what's still genuinely open (SMS sending, and a real
+signed-in click-through — verification stopped at the OAuth handshake
+itself, which needs the user's own Google credentials)._
 
 ## Where the project stands
 
 **Product**: a chat-driven AI trip planner. Describe a trip, get a
 day-by-day itinerary, refine it conversationally, export it to Google
 Calendar. Full scope (weather, place context, calendar push, per-user
-accounts) — done. Maps/routing, flights, hotels, cross-trip memory — not
-started.
+accounts) — done. **Onboarding personalization is now live** (see below).
+Maps/routing, flights, hotels, cross-trip memory — not started.
+Gamification (passport stamps, tiered badges) is fully designed
+(three rounds of mockups, see `docs/design-references.md`) but 0% built.
 
 **Backend**: FastAPI + SQLAlchemy, Postgres on Neon. Every request goes
 through one router (`POST /trips/generate`) — see `decisions.md`'s
@@ -97,7 +122,20 @@ in light-mode tour-guide mode (the copper accent was darkened from
 `oklch(0.58 0.15 55)` to `oklch(0.45 0.15 55)`) — plus a second
 accessibility pass (announced status messages, a screen-reader speaker
 cue in chat, `aria-current` on the active conversation, a labeled
-composer). No native/PWA app exists yet.
+composer). **Onboarding personalization is live**: a 4-step
+`OnboardingFlow` dialog (Account details → Trip style → Habits &
+logistics → Goals) gates on first login (`app/(chat)/layout.tsx`), saves
+through `PUT /profile`, and is reused unchanged in edit mode from the new
+`/profile` page (linked from the sidebar) — one component, two entry
+points, per the original design intent. Real phone/DOB validation, a
+hand-built toast system (`components/ui/toast.tsx`, this app's first
+ambient-notification primitive) confirming a successful save, and this
+frontend's first-ever automated test suite (Vitest + React Testing
+Library) all shipped in the same pass — see `decisions.md`'s Onboarding
+personalization entry for the full detail. Current onboarding fields are
+still plain `<select>`/checkbox controls, not the approved chip/tag
+visual design — that polish pass hasn't happened yet. No native/PWA app
+exists yet.
 
 **LLM**: Gemini API (`gemini-3.5-flash-lite`), Groq as an automatic
 fallback on rate-limit only. Not wired into the agentic tool-calling
@@ -122,6 +160,10 @@ plain Q&A).
 | Google Calendar push ("Export Plan") | Live |
 | Currency conversion (`gather_trip_context`/`convert_currency`) | **Paused** — product decision, not a bug. Kill switch: `AGENT_TOOL_CALLING_ENABLED` |
 | Groq fallback | Live, verified |
+| Onboarding personalization (`UserProfile`, `OnboardingFlow`, `/profile`) | Live — feeds `generate_itinerary`'s prompt; visual chip/tag polish still pending |
+| Toast notifications (`components/ui/toast.tsx`) | Live — only consumer so far is onboarding's save confirmation |
+| SMS trip-day reminders | Not built — `mobile_number` is collected, sending needs an external provider evaluated against a real free tier first |
+| Gamification (passport stamps, tiered badges) | Not built — fully designed, see `docs/design-references.md` |
 | Flights (tracking/predicting/booking) | Not built — no backend data source exists at all; deep-link booking scoped, price tracking blocked on a verified free data source |
 | Hotels | Not built |
 | Maps/routing | Not built — planned around Google's Maps MCP server |
@@ -131,8 +173,16 @@ plain Q&A).
 ## Next action
 
 Trip Hub v2, Saved Places, Pexels trip photos, Ticketmaster event
-discovery, and the frontend UI/UX + accessibility/contrast pass are all
-done — none of the three next candidates below depend on any of it:
+discovery, the frontend UI/UX + accessibility/contrast pass, and
+onboarding personalization are all done — none of the three build-order
+candidates below depend on any of it, and onboarding was intentional new
+scope alongside this list, not a reordering of it (see `decisions.md`'s
+Onboarding personalization entry). Two candidates that fall directly out
+of today's onboarding work, tracked here rather than silently dropped: a
+real signed-in click-through of `OnboardingFlow` (verification stopped at
+the OAuth handshake, which needs the user's own Google credentials), and
+the visual chip/tag polish pass on the onboarding fields (currently plain
+`<select>`/checkboxes). Neither blocks the three below:
 1. Build-order item 4: Maps/routing (planned around Google's Maps MCP
    server — the specific server/pricing/auth details need re-confirming
    live before writing code, per `decisions.md`'s Maps/routing entry).
@@ -147,6 +197,14 @@ done — none of the three next candidates below depend on any of it:
 
 ## Known blockers / open items
 
+- **SMS trip-day reminders need an external provider evaluated against a
+  real free tier** — `mobile_number` is collected (a real, committed
+  feature), but sending itself, a scheduling mechanism, and opt-in UX are
+  all separate, larger scope not yet started.
+- **A real signed-in click-through of onboarding hasn't happened** —
+  everything up to the OAuth handshake was verified live against real
+  running servers; completing sign-in needs the user's own Google
+  credentials, which isn't something to automate.
 - **Flight tracking has no backend data source at all** — the one Trip
   Hub card still genuinely unbuilt, not merely unwired.
 - **Google OAuth consent screen is still in "Testing" status** — caps
@@ -170,3 +228,7 @@ done — none of the three next candidates below depend on any of it:
   `react-hooks/set-state-in-effect` rule on a `localStorage` read; fixed
   with `useSyncExternalStore`, see `decisions.md`'s UI styling entries).
   Backend CI has been green since a `pytest` import bug fixed 2026-08-31.
+  `frontend-lint-and-build` now also runs `npm run test` (Vitest) as of
+  2026-09-06 — the frontend's first automated tests, verified to actually
+  pass under a clean `npm ci` install (not just the local dev environment)
+  before being wired in.

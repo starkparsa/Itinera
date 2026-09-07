@@ -1,7 +1,8 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
-import { listConversations } from "@/lib/backend";
+import { getProfile, listConversations } from "@/lib/backend";
 import ChatShell from "@/components/ChatShell";
+import OnboardingFlow from "@/components/onboarding/OnboardingFlow";
 
 // Shared by "/" (page.tsx) and "/trips/[tripId]" (trips/[tripId]/page.tsx)
 // via this (chat) route group -- the parenthesized segment doesn't appear
@@ -29,11 +30,20 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
     redirect("/login");
   }
 
-  const conversations = await listConversations();
+  const [conversations, profile] = await Promise.all([listConversations(), getProfile()]);
+  // getProfile() fails open to null (see backend.ts) -- treated the same as
+  // "already handled" here, so a network blip never shows onboarding on top
+  // of an otherwise-broken page load.
+  const showOnboarding = profile !== null && !profile.onboarding_completed_at && !profile.onboarding_skipped_at;
 
   return (
-    <ChatShell initialConversations={conversations} userEmail={session.user.email ?? null}>
-      {children}
-    </ChatShell>
+    <>
+      {showOnboarding && profile && (
+        <OnboardingFlow initialProfile={profile} userEmail={session.user.email ?? null} />
+      )}
+      <ChatShell initialConversations={conversations} userEmail={session.user.email ?? null}>
+        {children}
+      </ChatShell>
+    </>
   );
 }
