@@ -322,3 +322,45 @@ button {
     @apply font-sans;
   }
 }
+
+/*
+ * "Dusk City" login background -- login/page.tsx (via LoginCard.tsx).
+ * A fixed brand moment: the literal dusk sky the palette is named after,
+ * built from this app's own two named hues (indigo 265°, copper 55°) as
+ * a real gradient + inline SVG skyline, not a stock photo. Deliberately
+ * NOT theme-reactive (no dark:/media override here) -- unlike every
+ * other token in this file, this one is meant to look the same for every
+ * visitor regardless of their light/dark preference, the same way a
+ * branded hero image would. The card floating on top of it still uses
+ * the real --card/--foreground/etc. tokens, so its own light/dark
+ * behavior is untouched.
+ */
+.dusk-login-bg {
+  background:
+    radial-gradient(60% 40% at 78% 12%, oklch(0.78 0.15 70 / 55%) 0%, oklch(0.78 0.15 70 / 0%) 70%),
+    linear-gradient(180deg,
+      oklch(0.22 0.07 265) 0%,
+      oklch(0.32 0.09 275) 22%,
+      oklch(0.46 0.11 320) 42%,
+      oklch(0.56 0.13 20) 60%,
+      oklch(0.66 0.15 55) 78%,
+      oklch(0.74 0.14 70) 100%);
+}
+.dusk-login-stars {
+  background-image:
+    radial-gradient(1.6px 1.6px at 12% 10%, #fff, transparent),
+    radial-gradient(1.4px 1.4px at 24% 6%, #fff, transparent),
+    radial-gradient(1.8px 1.8px at 38% 14%, #fff, transparent),
+    radial-gradient(1.3px 1.3px at 52% 7%, #fff, transparent),
+    radial-gradient(1.5px 1.5px at 65% 11%, #fff, transparent),
+    radial-gradient(1.3px 1.3px at 8% 18%, #fff, transparent),
+    radial-gradient(1.7px 1.7px at 30% 20%, #fff, transparent),
+    radial-gradient(1.4px 1.4px at 46% 18%, #fff, transparent),
+    radial-gradient(1.3px 1.3px at 90% 9%, #fff, transparent),
+    radial-gradient(1.6px 1.6px at 82% 21%, #fff, transparent);
+  background-repeat: no-repeat;
+  opacity: 0.85;
+}
+.dusk-login-vignette {
+  background: radial-gradient(60% 50% at 50% 58%, rgba(0, 0, 0, 0.32) 0%, rgba(0, 0, 0, 0) 68%);
+}
