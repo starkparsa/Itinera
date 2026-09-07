@@ -6,6 +6,73 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-07 — Login page redesigned end to end (PR #45)
+
+Requested twice with the same wrong premise: a traditional email/
+password login page with a "Sign Up" CTA, then a full redesign brief
+adding Facebook login, "Forgot Password?", wrong-password error states.
+Both times, checked the real code first (`backend/app/auth.py`,
+`login/page.tsx`) before designing anything — this app has only Google
+OAuth, no password system, no separate signup flow to link a button to.
+Asked the user directly each time rather than silently building a
+fictional second auth flow or reversing that architecture decision.
+
+**Pass 1 — copy only.** One line under the existing button: "New here?
+Signing in with Google creates your account automatically." Shipped,
+verified in the Browser pane across viewports/color schemes.
+
+**Pass 2 — full visual redesign, mockup first.** Built and published a
+design-exploration artifact ("Dusk City Login") showing a Login/Signup
+chip-tab toggle, Google/Facebook/email options, all requested error and
+loading states, and a spec sheet (color tokens, type scale, component
+inventory) — explicitly labeled as not wired to a backend. Approved,
+then integrated for real: new `LoginCard.tsx` (client component) +
+`login/actions.ts` (splits the real Google server action out of the
+now-server-only `page.tsx` so the client component can call it).
+Facebook and email/password got full visual treatment but every
+interaction (click, submit, forgot-password) honestly toasts "isn't
+available yet" — no fake success, no fabricated "wrong password" error.
+
+**Pass 3 — background, on request.** Added a "Dusk City" gradient +
+inline SVG skyline (this app's own indigo/copper hues, no photo asset)
+to the mockup first, got it approved, then ported the same CSS/SVG into
+the real page. Deliberately fixed regardless of light/dark mode — a
+brand moment, not a themed surface.
+
+**Declined**: a follow-up ask to swap that background for live Pexels
+photos. Technically buildable (this app already has a working Pexels
+integration for trip photos), but would need a new *public*
+unauthenticated backend endpoint (`/login` has no session yet) plus a
+real third-party dependency on the one page that should never be
+allowed to break. Presented the tradeoff, user chose to keep Dusk City.
+
+**Two real bugs, caught by actually testing, not eyeballing:**
+- Opened the integrated page at a short viewport and found the card's
+  overflow content (email form, gamification hint, switcher line) was
+  completely unreachable — this app's `globals.css` sets
+  `overflow: hidden` on `html`/`body` for `ChatApp`'s own single-scroll
+  contract, and that rule doesn't know `/login` is a different kind of
+  page. Fixed by giving `/login` its own `h-screen`/`overflow-y-auto`
+  scroll region.
+- Wrote `LoginCard.test.tsx` (10 tests) and two failed in a way that
+  looked like a test bug at first: the email-submit and invalid-email
+  tests couldn't find the expected validation text at all. Traced it to
+  the submit `Button` never actually triggering the wrapping
+  `<form onSubmit>` — this app's `Button` wraps a `@base-ui/react`
+  primitive, and `type="submit"` apparently doesn't reliably forward
+  through it to a real native submit control. Fixed by dropping the
+  `<form>` and wiring the button via `onClick` directly, matching
+  `OnboardingFlow.tsx`'s own established convention (checked: every
+  save/continue action there already avoids native form submission the
+  same way). All 10 tests passed after the fix; full suite stayed green
+  (34 passed) throughout.
+
+**Verified**: full frontend suite (34 passed), `tsc --noEmit` clean,
+lint clean, and manual checks in the Browser pane — desktop/mobile
+viewports, light/dark color schemes, chip-tab toggling, the Facebook
+toast, and the scroll fix (confirmed `scrollHeight > clientHeight` and
+that previously-unreachable content was actually reachable).
+
 ## 2026-09-07 — Four follow-on features built (PRs #39–42), plus a broken-main-CI fix (PR #43)
 
 Planned as one pass covering four gaps flagged after 2026-09-06's

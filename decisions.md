@@ -505,6 +505,73 @@ worth checking new frontend dependencies with a real `npm ci` locally
 before merging, not just the more forgiving install flow used
 day-to-day.*
 
+## Login page redesign — live, 2026-09-07 (PR #45)
+
+**Corrected the premise before building anything, twice.** Both the
+initial "add a Sign Up CTA" request and the later full redesign brief
+assumed a traditional email/password login-vs-signup split (password
+fields, "Forgot Password?", wrong-password error states, a separate
+signup flow to link to). This app has none of that — Google OAuth is
+the only auth method (see this file's Auth entry), and one button
+already handles both new and returning users identically
+(`backend/app/auth.py`'s `get_current_user` auto-provisions a `User`
+row the first time it sees a new `google_sub`). Confirmed direction
+with the user before designing or coding either time, rather than
+silently building a fictional second auth flow or quietly reversing
+the "Google OAuth only" decision.
+
+**What actually shipped, in three passes on one PR:**
+1. A copy-only fix: one reassuring line under the button ("New here?
+   Signing in with Google creates your account automatically").
+2. A full visual redesign — approved first as a mockup artifact
+   (Login/Signup chip-tab toggle, Google/Facebook/email options,
+   error/loading states, a spec sheet), then integrated for real.
+   Facebook and email/password are drawn to full visual parity but
+   **honestly toast "isn't available yet" on every interaction**
+   (click, submit, forgot-password) rather than faking a successful
+   sign-in or fabricating a "wrong password" error — nothing here
+   pretends to work. Google remains the one real, wired method.
+3. A "Dusk City" background, added per follow-up feedback: a gradient
+   + inline SVG skyline built from this app's own two named hues
+   (indigo 265°, copper 55°) — no photo asset, so nothing to license
+   or host. Deliberately **not** theme-reactive, unlike every other
+   token in this app — a fixed brand moment for this one screen,
+   the same way a hero image would be, while the card floating on it
+   still fully respects real light/dark tokens. *Revisit: never,
+   without re-examining the fixed-vs-reactive-background tradeoff
+   specifically.*
+
+**Declined a follow-up request to replace that background with live
+Pexels photos.** Technically buildable (`pexels_service.py` already
+proves the pattern for trip photos) but would have meant a new
+*public*, unauthenticated backend endpoint — `/login` is the one page
+in this app with no session yet — plus a real third-party dependency
+and rate-limit exposure on the single most reliability-critical page
+in the app. Confirmed with the user to keep the zero-dependency Dusk
+City background instead. *Revisit: only if a specific, scoped version
+of this (not the full original Phase 1–3 brief) is explicitly
+requested again — the architectural objection (new public endpoint)
+would need addressing either way.*
+
+**Two real bugs found during integration, not just planned around:**
+- This app's `globals.css` sets `overflow: hidden` on `html`/`body`
+  (intentional, so `ChatApp`'s own inner region is the only thing that
+  scrolls) — unpatched, that rule would have trapped `/login`'s content
+  with no way to reach it once the card (email form open, gamification
+  hint, switcher line) grew taller than a short viewport. Fixed by
+  giving the login page its own `h-screen`/`overflow-y-auto` region,
+  the same one-scroll-region-per-page contract, just scoped to this
+  page instead of `ChatApp`'s.
+- The email "submit" button relied on native `<form onSubmit>`, but
+  this app's `Button` wraps a `@base-ui/react` primitive that doesn't
+  reliably forward `type="submit"` through to a real submit control —
+  caught by two failing tests, not by eyeballing. Fixed by switching to
+  the `onClick`-only convention `OnboardingFlow.tsx` already
+  established (every save/continue action there is wired via `onClick`
+  on a `Button`, never native form submission). *Revisit: don't rely on
+  native `<form onSubmit>` + a submit-type `Button` anywhere else in
+  this app without verifying it actually fires first.*
+
 ## UI styling
 
 **Tailwind CSS v4 + shadcn/ui**, replacing ~350 lines of hand-written CSS

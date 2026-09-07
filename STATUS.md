@@ -110,6 +110,34 @@ from PR #38's merge, unrelated to any of the four features: an
 `npm ci` `ERESOLVE` conflict (`@types/node` pinned too old for
 `vitest@5`) and an unsorted-import `ruff` failure._
 
+_Updated again 2026-09-07 (PR #45) after redesigning and rebuilding
+`/login` end to end. Requested as a traditional email/password
+login-vs-signup page; corrected before building anything, since this
+app has only Google OAuth (no password system, no separate signup
+flow — one button already handles both, see `decisions.md`'s Auth
+entry). Landed in three passes on the same PR: (1) a small
+copy-only fix (a reassuring line clarifying Google sign-in also
+creates the account); (2) a full visual redesign approved first as a
+mockup artifact, then integrated for real — a new `LoginCard.tsx`
+with a Login/Signup chip-tab toggle (reusing `toggle-chip.tsx` from
+onboarding), Google (real), and Facebook/email-password drawn to
+visual parity but honestly toasting "not available yet" rather than
+faking a login, since neither has a backend; (3) a "Dusk City"
+background (gradient + inline SVG skyline, this app's own two named
+hues, no photo asset) added per follow-up feedback, then deliberately
+kept over a later request to swap it for live Pexels photos — declined
+to avoid a new public unauthenticated backend endpoint and a
+third-party dependency on the app's most reliability-critical page.
+Two real bugs caught during integration: this app's global
+`overflow: hidden` on `html`/`body` would have trapped the login
+card's own overflow content on a short viewport (fixed by giving the
+page its own `h-screen`/`overflow-y-auto` scroll region); and the
+email "submit" button relied on native `<form onSubmit>`, which this
+app's `Button` primitive doesn't reliably forward — fixed by switching
+to the `onClick`-only convention `OnboardingFlow.tsx` already
+established. See `decisions.md`'s new Login page redesign entry for
+the full detail._
+
 ## Where the project stands
 
 **Product**: a chat-driven AI trip planner. Describe a trip, get a
@@ -190,6 +218,7 @@ plain Q&A).
 | Trip photos (Pexels, "{destination} skyline at night" first, plain name as fallback) | Live, billed-free tier — key set |
 | Your Trips / Trip Hub pages (`/trips`, `/trips/[tripId]`) | Live |
 | Google OAuth login + per-user data isolation | Live (needs a real `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` to actually sign in) |
+| Redesigned `/login` page (Login/Signup toggle, Dusk City background) | Live ([PR #45](https://github.com/starkparsa/Itinera/pull/45)) — Google is the only real auth method; Facebook/email fields are visual parity only, honestly toast "not available yet" |
 | Google Calendar push ("Export Plan") | Live |
 | Currency conversion (`gather_trip_context`/`convert_currency`) | **Paused** — product decision, not a bug. Kill switch: `AGENT_TOOL_CALLING_ENABLED` |
 | Groq fallback | Live, verified |
