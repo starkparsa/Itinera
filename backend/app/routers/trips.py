@@ -354,6 +354,7 @@ def _handle_new_or_edit_trip(
     conversation: models.Conversation,
     trip_request: schemas.TripRequest,
     conversation_context: str,
+    intent: str,
 ) -> schemas.TripResponse:
     """"new_trip" or "edit_trip" -- generate a full itinerary. Note:
     "edit_trip" currently still regenerates the whole thing (with
@@ -361,6 +362,12 @@ def _handle_new_or_edit_trip(
     surgically editing specific days -- true diff-based editing is a
     bigger feature for another time. Extracted verbatim from
     generate_trip's fallthrough branch (2026-09 maintainability review).
+
+    `intent` is only used to set the new Trip row's is_edit flag (see
+    models.Trip's comment) -- gamification's stats_service reads that flag
+    to keep trip_count/badges/passport stamps meaning "trips actually
+    planned," not inflated by a conversational tweak to one already-
+    generated trip.
     """
     # Explicitly talking about planning again turns persistent tour-guide
     # mode back off -- unconditional, regardless of tour_guide_requested
@@ -466,6 +473,7 @@ def _handle_new_or_edit_trip(
         destination=result.get("destination", "Unknown"),
         prompt=trip_request.prompt,
         start_date=start_date,
+        is_edit=(intent == "edit_trip"),
     )
     db.add(trip)
 
@@ -593,7 +601,7 @@ def generate_trip(
     # "new_trip" or "edit_trip" -- generate a full itinerary. See
     # _handle_new_or_edit_trip's docstring for why "edit_trip" still
     # regenerates the whole thing rather than surgically editing.
-    return _handle_new_or_edit_trip(db, user, conversation, trip_request, conversation_context)
+    return _handle_new_or_edit_trip(db, user, conversation, trip_request, conversation_context, intent)
 
 
 @router.get("", response_model=list[schemas.TripSummary])

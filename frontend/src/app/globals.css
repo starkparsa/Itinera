@@ -61,6 +61,26 @@
   --chat-assistant-bg: var(--card);
   --chat-assistant-border: var(--border);
   --chat-assistant-fg: var(--card-foreground);
+
+  /*
+   * Passport stamp accents (gamification, PassportBadges.tsx) -- one
+   * subtle bg/border/fg triple per passport_service.STAMP_PALETTE name,
+   * same low-chroma tint shape as --chat-assistant-*'s copper values
+   * above, just spread across 8 hues so different destinations' stamps
+   * read as visually distinct. Defined as CSS custom properties (not
+   * Tailwind `dark:` utility classes) specifically because this app's
+   * dark mode is OS-preference-driven via the media query below, not a
+   * `.dark` class toggle -- see that block's own comment for why `dark:`
+   * utilities silently don't apply here.
+   */
+  --stamp-indigo-bg: oklch(0.965 0.03 265); --stamp-indigo-border: oklch(0.87 0.07 265); --stamp-indigo-fg: oklch(0.32 0.09 265);
+  --stamp-copper-bg: oklch(0.965 0.03 55); --stamp-copper-border: oklch(0.87 0.07 55); --stamp-copper-fg: oklch(0.32 0.09 55);
+  --stamp-teal-bg: oklch(0.965 0.03 195); --stamp-teal-border: oklch(0.87 0.07 195); --stamp-teal-fg: oklch(0.32 0.09 195);
+  --stamp-amber-bg: oklch(0.965 0.03 80); --stamp-amber-border: oklch(0.87 0.07 80); --stamp-amber-fg: oklch(0.32 0.09 80);
+  --stamp-rose-bg: oklch(0.965 0.03 20); --stamp-rose-border: oklch(0.87 0.07 20); --stamp-rose-fg: oklch(0.32 0.09 20);
+  --stamp-violet-bg: oklch(0.965 0.03 300); --stamp-violet-border: oklch(0.87 0.07 300); --stamp-violet-fg: oklch(0.32 0.09 300);
+  --stamp-emerald-bg: oklch(0.965 0.03 150); --stamp-emerald-border: oklch(0.87 0.07 150); --stamp-emerald-fg: oklch(0.32 0.09 150);
+  --stamp-sky-bg: oklch(0.965 0.03 230); --stamp-sky-border: oklch(0.87 0.07 230); --stamp-sky-fg: oklch(0.32 0.09 230);
 }
 
 /*
@@ -98,6 +118,15 @@
     --sidebar-accent-foreground: oklch(0.985 0 0);
     --sidebar-border: oklch(1 0 0 / 10%);
     --sidebar-ring: oklch(0.72 0.16 266);
+
+    --stamp-indigo-bg: oklch(0.32 0.05 265); --stamp-indigo-border: oklch(0.48 0.09 265); --stamp-indigo-fg: oklch(0.9 0.06 265);
+    --stamp-copper-bg: oklch(0.32 0.05 55); --stamp-copper-border: oklch(0.48 0.09 55); --stamp-copper-fg: oklch(0.9 0.06 55);
+    --stamp-teal-bg: oklch(0.32 0.05 195); --stamp-teal-border: oklch(0.48 0.09 195); --stamp-teal-fg: oklch(0.9 0.06 195);
+    --stamp-amber-bg: oklch(0.32 0.05 80); --stamp-amber-border: oklch(0.48 0.09 80); --stamp-amber-fg: oklch(0.9 0.06 80);
+    --stamp-rose-bg: oklch(0.32 0.05 20); --stamp-rose-border: oklch(0.48 0.09 20); --stamp-rose-fg: oklch(0.9 0.06 20);
+    --stamp-violet-bg: oklch(0.32 0.05 300); --stamp-violet-border: oklch(0.48 0.09 300); --stamp-violet-fg: oklch(0.9 0.06 300);
+    --stamp-emerald-bg: oklch(0.32 0.05 150); --stamp-emerald-border: oklch(0.48 0.09 150); --stamp-emerald-fg: oklch(0.9 0.06 150);
+    --stamp-sky-bg: oklch(0.32 0.05 230); --stamp-sky-border: oklch(0.48 0.09 230); --stamp-sky-fg: oklch(0.9 0.06 230);
   }
   html {
     color-scheme: dark;
@@ -198,6 +227,30 @@ button {
   --color-chat-assistant-bg: var(--chat-assistant-bg);
   --color-chat-assistant-border: var(--chat-assistant-border);
   --color-chat-assistant-fg: var(--chat-assistant-fg);
+  --color-stamp-indigo-bg: var(--stamp-indigo-bg);
+  --color-stamp-indigo-border: var(--stamp-indigo-border);
+  --color-stamp-indigo-fg: var(--stamp-indigo-fg);
+  --color-stamp-copper-bg: var(--stamp-copper-bg);
+  --color-stamp-copper-border: var(--stamp-copper-border);
+  --color-stamp-copper-fg: var(--stamp-copper-fg);
+  --color-stamp-teal-bg: var(--stamp-teal-bg);
+  --color-stamp-teal-border: var(--stamp-teal-border);
+  --color-stamp-teal-fg: var(--stamp-teal-fg);
+  --color-stamp-amber-bg: var(--stamp-amber-bg);
+  --color-stamp-amber-border: var(--stamp-amber-border);
+  --color-stamp-amber-fg: var(--stamp-amber-fg);
+  --color-stamp-rose-bg: var(--stamp-rose-bg);
+  --color-stamp-rose-border: var(--stamp-rose-border);
+  --color-stamp-rose-fg: var(--stamp-rose-fg);
+  --color-stamp-violet-bg: var(--stamp-violet-bg);
+  --color-stamp-violet-border: var(--stamp-violet-border);
+  --color-stamp-violet-fg: var(--stamp-violet-fg);
+  --color-stamp-emerald-bg: var(--stamp-emerald-bg);
+  --color-stamp-emerald-border: var(--stamp-emerald-border);
+  --color-stamp-emerald-fg: var(--stamp-emerald-fg);
+  --color-stamp-sky-bg: var(--stamp-sky-bg);
+  --color-stamp-sky-border: var(--stamp-sky-border);
+  --color-stamp-sky-fg: var(--stamp-sky-fg);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

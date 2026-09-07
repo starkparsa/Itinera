@@ -116,6 +116,39 @@ export interface ProfileUpdate {
   additional_preferences?: string | null;
 }
 
+// Mirrors schemas.PassportStampOut/AchievementOut/PassportOut -- gamification
+// (see backend/app/routers/gamification.py). accent is a
+// passport_service.STAMP_PALETTE name, not a hex value -- the frontend maps
+// it to real color tokens.
+export interface PassportStamp {
+  trip_id: number;
+  destination: string;
+  accent: string;
+  created_at: string;
+}
+
+export interface Achievement {
+  code: string;
+  label: string;
+  description: string;
+  tier: "Common" | "Rare" | "Epic" | "Legendary";
+  earned_at: string;
+}
+
+export interface Passport {
+  level: number;
+  xp_points: number;
+  trip_count: number;
+  distinct_destinations: number;
+  countries_visited: string[];
+  stamps: PassportStamp[];
+  achievements: Achievement[];
+  // Codes awarded during the request that produced this Passport -- only
+  // meaningful right after the fetch that returned it, never re-derived
+  // from a stale copy.
+  newly_unlocked: string[];
+}
+
 export interface ConversationDetail {
   id: number;
   title: string;

@@ -19,7 +19,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from .database import Base, engine
 from .rate_limit import limiter
-from .routers import auth, conversations, profile, trips
+from .routers import auth, conversations, gamification, profile, trips
 
 # Retry logic to wait for database to be ready
 max_retries = 10
@@ -86,6 +86,7 @@ app.include_router(trips.router)
 app.include_router(conversations.router)
 app.include_router(auth.router)
 app.include_router(profile.router)
+app.include_router(gamification.router)
 
 
 @app.get("/health")

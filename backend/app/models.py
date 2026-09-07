@@ -1,6 +1,17 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, Date, DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 
 from .database import Base
@@ -128,6 +139,18 @@ class Trip(Base):
     photo_url = Column(String(500), nullable=True)
     photo_credit = Column(String(255), nullable=True)  # "Photographer Name" -- Pexels' attribution ask
     photo_fetched_at = Column(DateTime, nullable=True)
+    # True for a Trip row created by an edit_trip turn (a conversational
+    # regeneration of an already-planned trip -- see routers/trips.py's
+    # _handle_new_or_edit_trip, which handles both intents but currently
+    # always inserts a fresh row rather than editing in place, per that
+    # function's own docstring). Lets stats_service.compute_trip_stats
+    # count only trips someone actually, newly planned -- gamification's
+    # trip_count/badges/passport stamps would otherwise inflate every time
+    # a trip gets conversationally tweaked. Server-side default so
+    # existing rows (all predating this column) come back False -- the
+    # honest reading for historical data, since there's no way to
+    # reconstruct which of them were actually edits.
+    is_edit = Column(Boolean, nullable=False, default=False, server_default="0")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     owner = relationship("User", back_populates="trips")
@@ -251,5 +274,44 @@ class GoogleCalendarCredential(Base):
     access_token_expires_at = Column(DateTime, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("User")
+
+
+class UserStats(Base):
+    """1:1 with User -- xp_points only. Level is always computed
+    (gamification_service.level_for_xp: 1 + xp_points // 100), never
+    stored, so a future level-formula tweak doesn't need a backfill
+    migration. Row is created lazily on first XP award (mirrors
+    UserProfile's get-or-create-on-first-access pattern), not at signup.
+    """
+    __tablename__ = "user_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, unique=True, index=True)
+    xp_points = Column(Integer, nullable=False, default=0)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    owner = relationship("User")
+
+
+class UserAchievement(Base):
+    """One row per (user, achievement code) actually earned. Idempotent
+    awarding relies on the unique constraint below, not an application-
+    level dedup check -- contrast with SavedPlace, which dedups in Python
+    because "the same place" isn't naturally unique-constrainable the same
+    way "this user already has this achievement code" is. Tier (Common/
+    Rare/Epic/Legendary) and display copy are a static lookup keyed by
+    `code` in gamification_service.ACHIEVEMENT_DEFINITIONS, not a stored
+    column -- avoids a migration if a tier or description is rebalanced.
+    """
+    __tablename__ = "user_achievements"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    code = Column(String(50), nullable=False)
+    earned_at = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (UniqueConstraint("user_id", "code", name="uq_user_achievements_user_code"),)
 
     owner = relationship("User")

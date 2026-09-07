@@ -209,3 +209,42 @@ class ConversationDetail(BaseModel):
     # Message has no trip attached at all; this is the frontend's only way
     # to know whether to show tour-guide-mode styling (see CLAUDE.md).
     tour_guide_mode: bool
+
+
+class PassportStampOut(BaseModel):
+    """One per real (non-edit-regenerated) Trip row -- see
+    stats_service.compute_trip_stats' is_edit filtering. accent is a
+    passport_service.STAMP_PALETTE name, not a hex value, so the frontend
+    controls the actual color tokens."""
+
+    trip_id: int
+    destination: str
+    accent: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AchievementOut(BaseModel):
+    code: str
+    label: str
+    description: str
+    tier: str
+    earned_at: datetime
+
+
+class PassportOut(BaseModel):
+    """GET /gamification/passport's full response -- level is always
+    computed (gamification_service.level_for_xp), never stored.
+    newly_unlocked lists only codes awarded during *this* request (see
+    gamification_service.evaluate_and_award), so the frontend can toast
+    "badge unlocked" without re-showing it on every later visit."""
+
+    level: int
+    xp_points: int
+    trip_count: int
+    distinct_destinations: int
+    countries_visited: list[str]
+    stamps: list[PassportStampOut]
+    achievements: list[AchievementOut]
+    newly_unlocked: list[str] = []
