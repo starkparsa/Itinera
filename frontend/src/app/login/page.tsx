@@ -32,6 +32,16 @@ export default async function LoginPage() {
           Continue with Google
         </Button>
       </form>
+      {/* This app has no separate signup flow -- Google OAuth unifies both
+          (see backend/app/auth.py: get_current_user auto-provisions a User
+          row the first time it sees a new google_sub). A distinct "Sign Up"
+          button here would trigger the identical action as "Log In", which
+          reads as broken rather than helpful -- this line answers the same
+          "am I in the right place" question new users have, honestly. */}
+      <p className="max-w-xs text-sm text-muted-foreground">
+        New here? Signing in with Google creates your account automatically --
+        no separate sign-up needed.
+      </p>
     </div>
   );
 }
