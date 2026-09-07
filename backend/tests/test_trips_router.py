@@ -10,7 +10,12 @@ from app import date_resolver, models
 from app.auth import get_current_user
 from app.database import Base, SessionLocal, engine, get_db
 from app.main import app
-from app.routers.trips import MAX_CONTEXT_CHARS, _age_bracket, _build_conversation_context, _build_user_profile_note
+from app.routers.trips import (
+    MAX_CONTEXT_CHARS,
+    _age_bracket,
+    _build_conversation_context,
+    _build_user_profile_note,
+)
 
 client = TestClient(app)
 
