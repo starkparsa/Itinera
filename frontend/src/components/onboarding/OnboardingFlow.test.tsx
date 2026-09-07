@@ -56,17 +56,34 @@ describe("OnboardingFlow", () => {
     expect(screen.getByText("maya@example.com")).toBeInTheDocument();
   });
 
-  it("every select forces a light color-scheme, so its native popup stays readable in dark mode", () => {
-    // Regression guard: without this, a <select> in dark mode inherits the
-    // app's light text color while its native dropdown popup still renders
-    // on an OS-native white background -- unselected options end up
+  it("every remaining select/date field forces a light color-scheme, so its native popup stays readable in dark mode", () => {
+    // Regression guard: without this, a <select>/date input in dark mode
+    // inherits the app's light text color while its native popup still
+    // renders on an OS-native white background -- unselected options end up
     // light-on-white, nearly invisible (a real bug, caught by inspection).
+    // Most fields are chips now (Feature 1) and don't need this fix at all
+    // (no native popup involved) -- country_region (still a <select>, a
+    // deliberate choice) and date_of_birth are what's left to guard.
     renderFlow();
-    const selects = document.querySelectorAll("select");
-    expect(selects.length).toBeGreaterThan(0);
-    selects.forEach((select) => {
-      expect(select.className).toContain("[color-scheme:light]");
-    });
+    const country = document.querySelector("select") as HTMLSelectElement;
+    expect(country).toBeInTheDocument();
+    expect(country.className).toContain("[color-scheme:light]");
+    const dob = document.querySelector('input[type="date"]') as HTMLInputElement;
+    expect(dob.className).toContain("[color-scheme:light]");
+  });
+
+  it("single-select chip fields render as real radios, wired to the same setter as before", async () => {
+    renderFlow();
+    fireEvent.click(continueButton()); // step 1 -> 2
+    fireEvent.click(screen.getByRole("radio", { name: "Leisurely" }));
+
+    fireEvent.click(continueButton()); // 2 -> 3
+    fireEvent.click(continueButton()); // 3 -> 4
+    fireEvent.click(screen.getByRole("button", { name: "Save preferences" }));
+
+    await waitFor(() => expect(updateProfile).toHaveBeenCalledTimes(1));
+    const payload = vi.mocked(updateProfile).mock.calls[0][0];
+    expect(payload.pace).toBe("Leisurely");
   });
 
   it("blocks Continue on an invalid mobile number", () => {
