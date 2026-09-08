@@ -2,6 +2,7 @@ import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .. import models, schemas
@@ -21,8 +22,18 @@ def _get_or_create_profile(db: Session, user: models.User) -> models.UserProfile
     if profile is None:
         profile = models.UserProfile(user_id=user.id)
         db.add(profile)
-        db.commit()
-        db.refresh(profile)
+        try:
+            db.commit()
+        except IntegrityError:
+            # Lost a race with another concurrent request that inserted the
+            # same user's profile between our SELECT and INSERT -- roll back
+            # our failed insert and re-fetch the row the other request made.
+            db.rollback()
+            profile = (
+                db.query(models.UserProfile).filter(models.UserProfile.user_id == user.id).first()
+            )
+        else:
+            db.refresh(profile)
     return profile
 
 
