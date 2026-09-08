@@ -17,6 +17,24 @@ MAX_PLAUSIBLE_AGE = 120
 _EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 MIN_PASSWORD_LENGTH = 8
 
+# Deliberately small and static (no external wordlist dependency, per this
+# app's $0-budget/no-new-dependency-for-a-one-line-check posture) -- these
+# are specifically the well-known weak passwords that would otherwise pass
+# the character-class checks below (e.g. "Password1!" satisfies "has an
+# uppercase letter, a digit, a special character" while being one of the
+# first guesses in any real credential-stuffing attempt). Checked
+# case-insensitively against the raw password, not a substring match.
+_COMMON_WEAK_PASSWORDS = frozenset(
+    {
+        "password1!", "password123!", "password!1", "passw0rd!",
+        "qwerty123!", "qwerty1!", "welcome1!", "welcome123!",
+        "admin123!", "admin1!", "letmein1!", "iloveyou1!",
+        "monkey123!", "dragon123!", "sunshine1!", "princess1!",
+        "football1!", "baseball1!", "trustno1!", "abc12345!",
+        "changeme1!", "changeme123!",
+    }
+)
+
 
 class RegisterRequest(BaseModel):
     email: str
@@ -47,6 +65,8 @@ class RegisterRequest(BaseModel):
             raise ValueError("Password must include a number.")
         if not re.search(r"[^A-Za-z0-9]", value):
             raise ValueError("Password must include a special character.")
+        if value.lower() in _COMMON_WEAK_PASSWORDS:
+            raise ValueError("That password is too common. Choose something less guessable.")
         return value
 
 

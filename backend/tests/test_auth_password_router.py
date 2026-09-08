@@ -92,6 +92,43 @@ def test_login_on_a_google_only_account_gets_a_distinct_honest_message():
     assert "different sign-in method" in resp.json()["detail"]
 
 
+def test_register_rejects_a_well_known_weak_password_despite_passing_complexity():
+    # "Password1!" satisfies every character-class rule (uppercase, digit,
+    # special char) but is one of the first guesses in any real
+    # credential-stuffing attempt -- the blacklist catches what the
+    # complexity rules alone don't.
+    resp = client.post("/auth/register", json={"email": "jordan@example.com", "password": "Password1!"})
+    assert resp.status_code == 422
+
+
+def test_register_blacklist_check_is_case_insensitive():
+    resp = client.post("/auth/register", json={"email": "jordan@example.com", "password": "PASSWORD1!"})
+    assert resp.status_code == 422
+
+
+def test_register_logs_a_successful_signup(caplog):
+    with caplog.at_level("INFO", logger="app.routers.auth"):
+        client.post("/auth/register", json={"email": "jordan@example.com", "password": VALID_PASSWORD})
+    assert any("Signup succeeded" in r.message for r in caplog.records)
+    # Never the password, even on a log line about a successful signup.
+    assert not any(VALID_PASSWORD in r.message for r in caplog.records)
+
+
+def test_login_logs_success_and_never_logs_the_password(caplog):
+    client.post("/auth/register", json={"email": "jordan@example.com", "password": VALID_PASSWORD})
+    with caplog.at_level("INFO", logger="app.routers.auth"):
+        client.post("/auth/login", json={"email": "jordan@example.com", "password": VALID_PASSWORD})
+    assert any("Login succeeded" in r.message for r in caplog.records)
+    assert not any(VALID_PASSWORD in r.message for r in caplog.records)
+
+
+def test_login_logs_a_failed_attempt_without_logging_the_password(caplog):
+    with caplog.at_level("INFO", logger="app.routers.auth"):
+        client.post("/auth/login", json={"email": "jordan@example.com", "password": "Wrong-Password1"})
+    assert any("Login failed" in r.message for r in caplog.records)
+    assert not any("Wrong-Password1" in r.message for r in caplog.records)
+
+
 def test_login_is_rate_limited_after_repeated_attempts():
     client.post("/auth/register", json={"email": "jordan@example.com", "password": VALID_PASSWORD})
     responses = [
