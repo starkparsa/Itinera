@@ -14,8 +14,8 @@ explicit decision not to build session/security logic in-house.
 
 Extended 2026-09-07 (login page redesign) to also carry a `provider`
 claim, since Auth.js now has more than one way to establish a session
-(Google, and email/password via a Credentials provider -- Facebook is
-next). `sub`'s *meaning* depends on `provider`: for "google" it's still
+(Google, and email/password via a Credentials provider). `sub`'s
+*meaning* depends on `provider`: for "google" it's still
 Google's OIDC subject, matched against User.google_sub exactly as before;
 for "credentials" it's this app's own internal User.id (already known --
 routers/auth.py's /auth/login just confirmed the account exists), matched
@@ -74,8 +74,8 @@ def get_current_user(
             raise HTTPException(status_code=401, detail="Account not found")
         return user
 
-    # "google" (and, once wired, "facebook") -- auto-provision on first
-    # sight of a new OAuth identity, the original Phase-C behavior.
+    # "google" -- auto-provision on first sight of a new OAuth identity,
+    # the original Phase-C behavior.
     user = db.query(models.User).filter(models.User.google_sub == sub).first()
     if user is None:
         user = models.User(google_sub=sub, email=email or f"{sub}@users.noreply.google.com")

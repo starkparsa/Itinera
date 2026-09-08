@@ -64,12 +64,6 @@ describe("LoginCard", () => {
     await waitFor(() => expect(onGoogleSignIn).toHaveBeenCalledTimes(1));
   });
 
-  it("Facebook has no real backend yet -- it toasts instead of pretending to sign in", async () => {
-    renderCard();
-    fireEvent.click(screen.getByRole("button", { name: /Continue with Facebook/ }));
-    await waitFor(() => expect(screen.getByText("Facebook sign-in isn't available yet")).toBeInTheDocument());
-  });
-
   it("Continue with email reveals the email/password form", () => {
     renderCard();
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
