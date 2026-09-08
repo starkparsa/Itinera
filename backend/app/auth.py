@@ -26,6 +26,7 @@ import os
 
 from fastapi import Depends, Header, HTTPException
 from jose import JWTError, jwt
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from . import models
@@ -67,19 +68,34 @@ def get_current_user(
 
     if provider == "credentials":
         try:
-            user = db.query(models.User).filter(models.User.id == int(sub)).first()
+            user_id = int(sub)
         except ValueError:
             raise HTTPException(status_code=401, detail="Invalid subject claim")
+        user = db.query(models.User).filter(models.User.id == user_id).first()
         if user is None:
             raise HTTPException(status_code=401, detail="Account not found")
-        return user
+    else:
+        # "google" -- auto-provision on first sight of a new OAuth identity,
+        # the original Phase-C behavior.
+        user = db.query(models.User).filter(models.User.google_sub == sub).first()
+        if user is None:
+            user = models.User(google_sub=sub, email=email or f"{sub}@users.noreply.google.com")
+            db.add(user)
+            db.flush()  # visible to the rest of this request before the route's own commit
 
-    # "google" -- auto-provision on first sight of a new OAuth identity,
-    # the original Phase-C behavior.
-    user = db.query(models.User).filter(models.User.google_sub == sub).first()
-    if user is None:
-        user = models.User(google_sub=sub, email=email or f"{sub}@users.noreply.google.com")
-        db.add(user)
-        db.flush()  # visible to the rest of this request before the route's own commit
+    # Row-level security identity (see decisions.md's "Database access
+    # control (RLS)" entry). Every table but `users` is policy-scoped to
+    # user_id -- `users` itself is deliberately excluded (see that entry
+    # for why: /auth/register and /auth/login both look a row up by email
+    # before any identity exists at all, which is structurally
+    # incompatible with RLS on that one table without a second,
+    # bypass-capable Postgres role). session.info persists this for every
+    # later transaction on this same request-scoped Session (see
+    # database.py's _set_rls_context); set_config is also called directly
+    # here so it applies within this already-open transaction too, not
+    # just the next one.
+    db.info["rls_user_id"] = str(user.id)
+    if db.bind.dialect.name == "postgresql":
+        db.execute(text("SELECT set_config('app.current_user_id', :v, true)"), {"v": str(user.id)})
 
     return user
