@@ -6,6 +6,79 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-08 — Installable-shell PWA shipped
+
+Picked "installable shell only" over "offline trip viewing" (the two
+options scoped and presented before building) — a manifest, three icon
+sizes generated from the existing 512×512 app icon (including a
+`maskable` variant), and a service worker that cache-first-serves only
+five static assets, passing every page/API request straight to the
+network untouched. Registered via a small `PwaRegister` client
+component after `window.load`, so it never competes with the chat UI's
+own first paint. `layout.tsx` also gained Safari's separate
+`appleWebApp` opt-in, since Safari ignores `manifest.webmanifest`
+entirely.
+
+Verified live in the real dev frontend (`link[rel="manifest"]` resolves,
+one active service-worker registration scoped to `/`), not just built.
+4 new tests for `PwaRegister` (immediate registration, waits for `load`
+when the page is still loading, renders nothing and never throws with no
+`serviceWorker` support, swallows a rejected registration) — frontend
+suite 39 → 43. `tsc --noEmit`/`eslint` clean.
+
+Deliberately doesn't cache trip/itinerary data or anything per-user —
+that's "offline trip viewing," a distinct, larger scope with its own
+cache-invalidation/sync design questions, not attempted here. See
+`decisions.md`'s PWA entry.
+
+## 2026-09-08 — Postgres row-level security actually shipped (a second, non-bypass role)
+
+Picked back up the RLS investigation paused 2026-09-06 (see
+`decisions.md`'s "Database access control (RLS)" entry for the full
+before/after). Built the previously-validated plumbing exactly as
+scoped — a SQLAlchemy `after_begin` hook, `auth.get_current_user`
+setting the identity on `session.info`, an Alembic migration enabling +
+forcing RLS with `user_id`-keyed policies on 6 tables and an
+`EXISTS`-subquery policy for 3 FK-hop tables — applied it to the real
+dev database, and ran a direct two-temporary-user verification script
+before trusting it. It did nothing: every row stayed visible under every
+identity, including none at all.
+
+The real cause was worse than the original write-up assumed: Neon's
+default project-owner role (`neondb_owner`, this app's only role) has
+`BYPASSRLS` set directly — unconditional, and `FORCE ROW LEVEL SECURITY`
+has no power over it at all (`FORCE` only overrides ownership-based
+bypass). Rolled the migration back immediately rather than leave
+non-functional policies that look like protection but aren't.
+
+Presented three real options to the user with honest pros/cons: revoke
+`BYPASSRLS` from the existing role directly (simplest, but a security
+attribute change on the project's primary role — correctly refused to
+run that myself, `ALTER ROLE` was blocked by the permission classifier
+and rightly so); a second, lower-privileged role for runtime queries
+(more moving parts, but touches nothing existing); or shelve it again.
+User chose the second role.
+
+Created `itinera_app` (no `BYPASSRLS`, no `SUPERUSER`), granted table/
+sequence access plus `ALTER DEFAULT PRIVILEGES` (so future migrations'
+tables don't need a manual grant), wired a new `APP_DATABASE_URL` env
+var that `database.py` falls back to `DATABASE_URL` when unset (sqlite
+tests and any not-yet-provisioned environment stay exactly as before).
+Re-applied the migration (via the still-owner `DATABASE_URL`), re-ran
+the same isolation script against the new role: cross-user read blocked,
+cross-user write rejected via the `WITH CHECK` clause, no-identity-set
+sees nothing, and the FK-hop case (`itinerary_items` via `trips`) also
+correctly isolated. `users` itself stays deliberately unprotected by
+RLS — `/auth/register`/`/auth/login` look a row up by email before any
+identity exists, which is what "login" means and can't be reconciled
+with a per-user policy without a third role scoped just to those two
+endpoints; not justified given that table's existing protections
+(unique constraints, bcrypt, exact-match lookups) were already real.
+
+Backend suite (402 tests, sqlite) unaffected throughout — RLS is a
+Postgres-only concept the test suite never touches. Verified live
+against the real dev database directly, not via pytest.
+
 ## 2026-09-08 — Race condition in profile get-or-create fixed (PR #53)
 
 The race flagged (not fixed) during Phase 1 of the auth work below —

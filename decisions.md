@@ -195,53 +195,89 @@ non-GA preview program at implementation time. Also the better
 architectural fit independent of that: pushing to a calendar is a
 deterministic user click, never a Gemini judgment call.
 
-## Database access control (RLS) — investigated 2026-09-06, not built
+## Database access control (RLS) — live, 2026-09-08
 
-User asked to enable Postgres row-level security on every table, with
-real per-user policies (no `USING (true)`). Investigated before writing
-any SQL: this app isn't Supabase-shaped — there's exactly one Postgres
-role for the whole backend (`DATABASE_URL`, one connection string, no
-per-request Postgres identity of any kind), and authorization is enforced
-entirely in the API layer today (`user_id == user.id` filters in every
-router, verified real — not cosmetic — in `docs/security-review.md`).
+**Originally investigated 2026-09-06, not built.** User asked to enable
+Postgres row-level security on every table, with real per-user policies
+(no `USING (true)`). Investigated before writing any SQL: this app isn't
+Supabase-shaped — there's exactly one Postgres role for the whole
+backend (`DATABASE_URL`, one connection string, no per-request Postgres
+identity of any kind), and authorization was enforced entirely in the
+API layer (`user_id == user.id` filters in every router, verified real —
+not cosmetic — in `docs/security-review.md`).
 
-Two real blockers found, not just friction:
-1. **The table owner bypasses RLS by default.** The backend's role owns
-   every table (created them via Alembic), so `ENABLE ROW LEVEL SECURITY`
-   alone would be a no-op — policies would exist and do nothing, a false
-   sense of security. `FORCE ROW LEVEL SECURITY` is needed to actually
-   apply policies to the owner.
-2. **A chicken-and-egg problem on `users` specifically.**
-   `auth.get_current_user` looks up (and sometimes auto-creates) a `users`
-   row *by `google_sub`*, before the app knows that user's internal id —
-   the exact id a naive `user_id`-keyed policy would need to already have
-   in a session variable. Forcing RLS on `users` keyed by id would break
-   login/auto-provisioning for every user, since the id being looked up
-   is unknown at query time. (Workable in principle — key the `users`
-   policy off `google_sub`, known from the verified JWT, and switch to
-   `user_id`-keyed policies once the row is resolved — but this needs a
-   real per-request session-variable mechanism, e.g. a SQLAlchemy
-   `after_begin` hook calling `set_config('app.current_user_id', ..., true)`
-   at the start of every transaction, tested against every request path.)
+Two blockers were identified at the time: the table owner bypassing RLS
+by default (needing `FORCE ROW LEVEL SECURITY`), and a chicken-and-egg
+problem on `users` (`auth.get_current_user` looks a row up *by
+`google_sub`*, before the app knows that user's internal id — the id a
+naive `user_id`-keyed policy would need already in a session variable).
+Presented to the user rather than faking policies that would do nothing;
+paused without a decision at the time.
 
-Every table's ownership chain is otherwise unambiguous — `conversations`/
-`trips`/`google_calendar_credentials` have a direct `user_id`;
-`messages`/`itinerary_items`/`saved_places` trace to one via a single FK
-hop (`conversation_id`/`trip_id`). Nothing here is a modeling problem —
-it's exclusively the missing session-identity plumbing.
+**Picked back up 2026-09-08 — and the first blocker turned out to be
+worse than described.** Built the session-identity plumbing exactly as
+scoped (a SQLAlchemy `after_begin` hook setting
+`set_config('app.current_user_id', ..., true)` at the start of every
+transaction, populated by `auth.get_current_user` on `session.info`),
+wrote the Alembic migration (`ENABLE`/`FORCE ROW LEVEL SECURITY` plus a
+`user_id`-keyed policy on 6 directly-owned tables, and an `EXISTS`-subquery
+policy for the 3 FK-hop tables — `messages`→`conversations`,
+`itinerary_items`/`saved_places`→`trips`), applied it to the real dev
+database, and verified with a real two-temporary-user isolation script
+(cross-user read blocked, cross-user write rejected, no-identity-set
+sees nothing) — and it did **nothing**. Every row was visible regardless
+of identity.
 
-Presented this to the user (blockers + the exact plumbing a real
-implementation needs) rather than either faking policies that would do
-nothing or forcing RLS in a way that would take the app down; user asked
-a clarifying question, then paused before choosing a path. **Status: no
-RLS enabled, no code changed — still enforced at the API layer only.**
-*Revisit: if/when this is picked back up, the plumbing above (dedicated
-session-identity mechanism, `google_sub`-keyed bootstrap policy on
-`users`, `user_id`-keyed policies everywhere else, `FORCE ROW LEVEL
-SECURITY` on all 7 tables) is the validated path — re-confirm test
-coverage (SQLite in `tests/` has no RLS concept at all, so this needs its
-own verification against real Postgres, not just the existing suite)
-before shipping it.*
+Root cause: `FORCE ROW LEVEL SECURITY` only overrides *ownership*-based
+bypass. Neon's default project-owner role (`neondb_owner`, the one and
+only role this app had) carries the `BYPASSRLS` attribute directly —
+unconditional, applies regardless of `FORCE`, and unrelated to table
+ownership. This is a strictly harder blocker than the 2026-09-06
+write-up anticipated (that entry assumed ownership was the only issue).
+
+**Resolution: a second, non-bypass Postgres role (Option 2 of three
+presented — see this session's transcript for the other two: revoking
+`BYPASSRLS` from `neondb_owner` directly, or shelving RLS again).**
+Created `itinera_app` — `LOGIN`, no `BYPASSRLS`, no `SUPERUSER` —
+granted `SELECT`/`INSERT`/`UPDATE`/`DELETE` on all tables plus
+`USAGE`/`SELECT` on all sequences, and (to avoid an ongoing
+per-migration maintenance burden) `ALTER DEFAULT PRIVILEGES FOR ROLE
+neondb_owner` so any table a *future* Alembic migration creates is
+automatically usable by `itinera_app` with no extra grant statement.
+`neondb_owner`/`DATABASE_URL` stays exactly as before — schema owner,
+what Alembic migrates against, untouched. The app's own queries now run
+as `itinera_app` via a new `APP_DATABASE_URL` env var (`database.py`
+falls back to `DATABASE_URL` when unset, so sqlite dev/tests and any
+environment that hasn't provisioned the second role keep working
+exactly as before — unenforced, not broken). Re-ran the same isolation
+script against `itinera_app`: every check passed, including the FK-hop
+case (`itinerary_items` via `trips`).
+
+**`users` is deliberately excluded from RLS**, a scope decision made
+during this build, not carried over from the original plan. `/auth/register`
+and `/auth/login` (routers/auth.py) both look a row up *by email* with no
+established identity at all — that's structurally what "login" means —
+which no per-user policy can accommodate without a *third*,
+bypass-capable role scoped to just those two endpoints (real added
+infra, not justified for what's already covered: email/`google_sub`
+unique constraints, bcrypt hashing, and `get_current_user`'s exact-match
+lookups protect that table today, unchanged by this work).
+
+**Operational note for future direct DB access** (psql, an admin script,
+a migration's data backfill): a plain `itinera_app` connection sees NO
+rows in any RLS-governed table unless it first runs
+`SELECT set_config('app.current_user_id', '<id>', false);` in that
+session — intended fail-closed behavior, not a bug, but easy to mistake
+for "the data's gone" the first time it's hit. Scripts needing
+unrestricted access (like the orphaned-migration cleanup in the Auth
+entry above) should keep using `DATABASE_URL`/`neondb_owner`, same as
+before.
+
+*Revisit: none currently planned — this closes the gap identified
+2026-09-06. If a 10th table is ever added, remember it needs its own
+policy in a migration (direct `user_id` or FK-hop, matching whichever
+shape applies) — `ALTER DEFAULT PRIVILEGES` only covers the *grant*, not
+the RLS policy itself.*
 
 ## Place context: Wikipedia + Google Places
 
@@ -1105,3 +1141,52 @@ mechanic (see this file's UI/gamification entries in
 without a genuine daily-use loop underneath them ("streak creep" —
 users optimize for not-losing rather than the actual goal), which
 Itinera doesn't have.
+
+## PWA — installable shell live, 2026-09-08; offline trip data explicitly out of scope
+
+STATUS.md had carried "no native/PWA app exists — a real engineering
+decision (React Native vs. PWA vs. native) not yet made" as an open item
+for a while. User confirmed PWA as the direction and asked for it built;
+scoped to two options before writing code — an installable shell
+(manifest + a service worker caching only the static app shell) vs. full
+offline trip viewing (the above, plus caching a user's own trip/
+itinerary data so a saved trip reads with no network). User chose the
+installable shell — the smaller, lower-risk first pass.
+
+**What shipped**: `public/manifest.webmanifest` (name, three icon sizes
+including one `maskable` variant generated from the existing 512×512
+`src/app/icon.png`, `display: "standalone"`), `public/sw.js` (a
+service worker that cache-first-serves exactly five static assets —
+the manifest, its icons, `favicon.ico` — and passes every other request,
+including every page and API call, straight to the network,
+untouched), and `PwaRegister.tsx` (a small client component registering
+that service worker after `window.load`, deliberately not blocking the
+chat UI's own first paint). `layout.tsx`'s metadata gained `manifest`
+and Safari's separate `appleWebApp` opt-in (Safari ignores
+`manifest.webmanifest` entirely; needs its own meta tags to be
+installable at all).
+
+**Deliberately not built — offline trip/itinerary data.** The service
+worker never caches `/trips/*` responses, chat history, or anything
+per-user; a saved trip is only viewable with a live connection to the
+backend, exactly as before this change. Real offline support needs a
+genuine data/sync strategy (what happens when a locally-viewed itinerary
+and the server's copy disagree, cache invalidation on edit, etc.) that's
+a distinct, larger scope from "the app is installable and repeat visits
+load faster" — not attempted here.
+
+**Verified live** (not just built): loaded the real dev frontend,
+confirmed `document.querySelector('link[rel="manifest"]')` resolves and
+`navigator.serviceWorker.getRegistrations()` shows one active
+registration scoped to `/`. Frontend suite went 39 → 43 (4 new
+`PwaRegister` tests: registers immediately when the page has already
+loaded, waits for `load` when it hasn't, renders nothing and never
+throws with no `serviceWorker` support at all, and swallows a rejected
+registration rather than surfacing it). `tsc --noEmit` and `eslint`
+clean.
+
+*Revisit: if/when offline trip viewing becomes a real ask, this shell is
+the right foundation to extend (the service worker already exists and is
+registered) — but the caching strategy for per-user, server-owned data
+is a new design question, not a small addition to `sw.js`'s current
+five-asset allowlist.*

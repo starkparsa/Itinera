@@ -206,7 +206,10 @@ personalization entry for the full detail. The chip/tag visual polish
 pass on onboarding fields is now live (PR #39) — a real interactive chip
 control (`components/ui/toggle-chip.tsx`), not just a styling change.
 The `/profile` page also now has a passport-stamps-and-badges section
-(PR #42, gamification). No native/PWA app exists yet.
+(PR #42, gamification). An installable-shell PWA (manifest + a
+static-asset-caching service worker, no offline trip data) shipped
+2026-09-08 — see below and `decisions.md`'s PWA entry; no native app
+exists.
 
 **LLM**: Gemini API (`gemini-3.5-flash-lite`), Groq as an automatic
 fallback on rate-limit only. Not wired into the agentic tool-calling
@@ -238,6 +241,8 @@ plain Q&A).
 | Events Trip Hub card | Live ([PR #40](https://github.com/starkparsa/Itinera/pull/40)) — per-trip fetch, 6h TTL, no new table |
 | SMS trip-day reminders | Not built — `mobile_number` is collected, sending needs an external provider evaluated against a real free tier first |
 | Gamification (passport stamps, tiered badges) | Live ([PR #42](https://github.com/starkparsa/Itinera/pull/42)) |
+| Database row-level security (Postgres) | Live, 2026-09-08 — 9 tables, second non-bypass role (`itinera_app`); `users` deliberately excluded (see `decisions.md`) |
+| Installable-shell PWA (manifest, service worker) | Live, 2026-09-08 — no offline trip data (deliberately out of scope, see `decisions.md`) |
 | Flights (tracking/predicting/booking) | Not built — no backend data source exists at all; deep-link booking scoped, price tracking blocked on a verified free data source |
 | Hotels | Not built |
 | Maps/routing | Not built — planned around Google's Maps MCP server |
@@ -287,18 +292,21 @@ the three below:
   refresh tokens at 7 days. Publishing to Production needs a human in
   Google Cloud Console; explicitly deferred until there's a real domain
   to publish against (see `decisions.md`'s Deployment entry).
-- **No native/PWA app exists** — a real engineering decision (React
-  Native vs. PWA vs. native) not yet made.
+- ~~No native/PWA app exists~~ — **an installable-shell PWA is live,
+  2026-09-08** (manifest, icons, a static-asset-caching service worker).
+  No offline trip/itinerary data — that's a larger, explicitly deferred
+  scope (see `decisions.md`'s PWA entry). No native app (React Native)
+  decision has been made or is currently planned.
 - **No user research behind the current UX direction** — built from
   feature docs and engineering history, not measured usage.
-- **Database has no row-level security** — a single Postgres role serves
-  the whole backend with no per-request Postgres identity, so
-  authorization is enforced entirely in the API layer (verified real,
-  not cosmetic). Enabling real per-user RLS needs new session-identity
-  plumbing this app doesn't have yet; investigated 2026-09-06 and
-  presented to the user, not yet decided on — see `decisions.md`'s
-  Database access control entry for the validated path if/when this is
-  picked back up.
+- ~~Database has no row-level security~~ — **live, 2026-09-08.** A
+  second, non-bypass Postgres role (`itinera_app`, set via
+  `APP_DATABASE_URL`) now runs every real request query, with
+  `user_id`-keyed RLS policies on 9 tables (verified against the real
+  dev database with a two-user isolation script — cross-user read/write
+  both correctly blocked). `users` itself stays API-layer-only, by
+  design — see `decisions.md`'s Database access control entry for why
+  and for the Neon `BYPASSRLS` blocker this ran into along the way.
 - CI on `main` was briefly red on 2026-09-07 (since PR #38's merge) — an
   `npm ci` `ERESOLVE` conflict (`@types/node` pinned too old for
   `vitest@5`) and an unsorted-import `ruff` failure, neither caught

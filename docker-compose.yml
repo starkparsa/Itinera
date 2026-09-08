@@ -32,6 +32,11 @@ services:
       # every other part of the app reads (database.py, alembic/env.py).
       # No longer a hardcoded local `mysql` container reference.
       DATABASE_URL: ${DATABASE_URL}
+      # Optional: the lower-privileged role real request queries actually
+      # run as, so Postgres row-level security applies (see decisions.md's
+      # Database access control (RLS) entry). Unset means the app falls
+      # back to DATABASE_URL's role -- not broken, just unenforced.
+      APP_DATABASE_URL: ${APP_DATABASE_URL:-}
       # CORS allow-list (see main.py, docs/security-review.md) -- defaults
       # to the local Next.js dev origin if unset, which is exactly what
       # `docker compose up` needs since the frontend container is still

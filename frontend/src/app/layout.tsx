@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { PwaRegister } from "@/components/PwaRegister";
 import { ToastProvider } from "@/components/ui/toast";
 import "./globals.css";
 
@@ -24,6 +25,17 @@ export const metadata: Metadata = {
     title: "Itinera",
     description: "Chat-driven AI travel planner",
     type: "website",
+  },
+  // Installable-shell PWA (see decisions.md's "PWA" entry) -- manifest +
+  // a controlling service worker (public/sw.js, registered by
+  // PwaRegister below) is what most browsers actually check before
+  // offering "Add to Home Screen"/"Install app". appleWebApp is Safari's
+  // own separate opt-in; it ignores manifest.webmanifest entirely.
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "default",
+    title: "Itinera",
   },
 };
 
@@ -50,6 +62,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         >
           Skip to main content
         </a>
+        <PwaRegister />
         <ToastProvider>{children}</ToastProvider>
       </body>
     </html>
