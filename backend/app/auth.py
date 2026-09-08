@@ -14,13 +14,27 @@ explicit decision not to build session/security logic in-house.
 
 Extended 2026-09-07 (login page redesign) to also carry a `provider`
 claim, since Auth.js now has more than one way to establish a session
-(Google, and email/password via a Credentials provider -- Facebook is
-next). `sub`'s *meaning* depends on `provider`: for "google" it's still
-Google's OIDC subject, matched against User.google_sub exactly as before;
-for "credentials" it's this app's own internal User.id (already known --
-routers/auth.py's /auth/login just confirmed the account exists), matched
-directly and never auto-provisioned, since an email/password account can
-only ever be created through /auth/register.
+(Google, email/password via a Credentials provider, and now Facebook).
+`sub`'s *meaning* depends on `provider`: for "google"/"facebook" it's
+that provider's own stable subject id, matched against User.google_sub/
+User.facebook_id respectively; for "credentials" it's this app's own
+internal User.id (already known -- routers/auth.py's /auth/login just
+confirmed the account exists), matched directly and never
+auto-provisioned, since an email/password account can only ever be
+created through /auth/register.
+
+Extended again the same day to guard OAuth auto-provisioning against an
+email collision: a brand-new Google or Facebook identity whose email
+already belongs to a *different* existing account (e.g. one created via
+/auth/register, or via the other OAuth provider) is rejected with a
+clean 401 instead of silently linking onto that row or crashing on the
+users.email unique constraint. Deliberately NOT auto-linked -- this
+app's email/password signup has no email-verification step, so an
+attacker could pre-register a victim's email with a password they
+control; silently linking a later real OAuth login onto that same row
+would hand the attacker access to it. The same gap existed for Google
+alone before this, just unreachable until email/password added a second
+way to claim an email.
 """
 import os
 
@@ -74,11 +88,30 @@ def get_current_user(
             raise HTTPException(status_code=401, detail="Account not found")
         return user
 
-    # "google" (and, once wired, "facebook") -- auto-provision on first
-    # sight of a new OAuth identity, the original Phase-C behavior.
-    user = db.query(models.User).filter(models.User.google_sub == sub).first()
+    if provider == "facebook":
+        id_column = models.User.facebook_id
+        placeholder_domain = "users.noreply.facebook.com"
+    else:
+        # "google" -- the original Phase-C behavior, and the default for
+        # any token predating the provider claim.
+        id_column = models.User.google_sub
+        placeholder_domain = "users.noreply.google.com"
+
+    user = db.query(models.User).filter(id_column == sub).first()
     if user is None:
-        user = models.User(google_sub=sub, email=email or f"{sub}@users.noreply.google.com")
+        # Auto-provisioning a *new* identity: refuse to silently attach to
+        # (or crash on) an existing account under a different sign-in
+        # method that happens to share this email -- see the module
+        # docstring above.
+        if email:
+            existing = db.query(models.User).filter(models.User.email == email).first()
+            if existing is not None:
+                raise HTTPException(
+                    status_code=401,
+                    detail="This email is linked to a different sign-in method.",
+                )
+        user = models.User(email=email or f"{sub}@{placeholder_domain}")
+        setattr(user, id_column.key, sub)
         db.add(user)
         db.flush()  # visible to the rest of this request before the route's own commit
 

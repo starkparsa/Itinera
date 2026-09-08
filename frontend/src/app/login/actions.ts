@@ -13,6 +13,10 @@ export async function googleSignIn() {
   await signIn("google", { redirectTo: "/" });
 }
 
+export async function facebookSignIn() {
+  await signIn("facebook", { redirectTo: "/" });
+}
+
 export interface EmailAuthResult {
   ok: boolean;
   error?: string;

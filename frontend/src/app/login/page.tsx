@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import LoginCard from "@/components/login/LoginCard";
-import { googleSignIn } from "./actions";
+import { facebookSignIn, googleSignIn } from "./actions";
 
 // Mirrors app/(chat)/layout.tsx's auth check in reverse: an already
 // signed-in user landing here (typed the URL directly, followed a stale
@@ -16,5 +16,5 @@ export default async function LoginPage() {
     redirect("/");
   }
 
-  return <LoginCard onGoogleSignIn={googleSignIn} />;
+  return <LoginCard onGoogleSignIn={googleSignIn} onFacebookSignIn={facebookSignIn} />;
 }

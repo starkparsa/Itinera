@@ -14,13 +14,16 @@ vi.mock("@/app/login/actions", () => ({
   emailSignUp: vi.fn(),
 }));
 
-function renderCard(onGoogleSignIn = vi.fn().mockResolvedValue(undefined)) {
+function renderCard(
+  onGoogleSignIn = vi.fn().mockResolvedValue(undefined),
+  onFacebookSignIn = vi.fn().mockResolvedValue(undefined)
+) {
   render(
     <ToastProvider>
-      <LoginCard onGoogleSignIn={onGoogleSignIn} />
+      <LoginCard onGoogleSignIn={onGoogleSignIn} onFacebookSignIn={onFacebookSignIn} />
     </ToastProvider>
   );
-  return { onGoogleSignIn };
+  return { onGoogleSignIn, onFacebookSignIn };
 }
 
 function openEmailForm() {
@@ -64,10 +67,10 @@ describe("LoginCard", () => {
     await waitFor(() => expect(onGoogleSignIn).toHaveBeenCalledTimes(1));
   });
 
-  it("Facebook has no real backend yet -- it toasts instead of pretending to sign in", async () => {
-    renderCard();
+  it("Continue with Facebook calls the real sign-in action", async () => {
+    const { onFacebookSignIn } = renderCard();
     fireEvent.click(screen.getByRole("button", { name: /Continue with Facebook/ }));
-    await waitFor(() => expect(screen.getByText("Facebook sign-in isn't available yet")).toBeInTheDocument());
+    await waitFor(() => expect(onFacebookSignIn).toHaveBeenCalledTimes(1));
   });
 
   it("Continue with email reveals the email/password form", () => {

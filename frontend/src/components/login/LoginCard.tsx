@@ -31,13 +31,20 @@ function passwordStrengthError(password: string): string | null {
   return null;
 }
 
-export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Promise<void> }) {
+export default function LoginCard({
+  onGoogleSignIn,
+  onFacebookSignIn,
+}: {
+  onGoogleSignIn: () => Promise<void>;
+  onFacebookSignIn: () => Promise<void>;
+}) {
   const { toast } = useToast();
   const router = useRouter();
   const [mode, setMode] = useState<AuthMode>("login");
   const [emailOpen, setEmailOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [googlePending, setGooglePending] = useState(false);
+  const [facebookPending, setFacebookPending] = useState(false);
   const [emailPending, setEmailPending] = useState(false);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -49,10 +56,10 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
   // a save failure.
   const [formError, setFormError] = useState<string | null>(null);
 
-  // Facebook and password reset have no real backend yet -- Google and
-  // email/password (below) are this app's two actually-wired methods.
-  // Facebook shows this same honest "not live yet" toast rather than a
-  // fabricated success, so nothing here silently pretends to work.
+  // Password reset has no real backend yet -- Google, Facebook, and
+  // email/password are this app's three actually-wired methods. It shows
+  // this same honest "not live yet" toast rather than a fabricated
+  // success, so nothing here silently pretends to work.
   const notWired = (label: string) => () =>
     toast({ title: `${label} isn't available yet`, description: "Use Google to continue for now." });
 
@@ -64,6 +71,15 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
       // Only reached if the redirect the action performs didn't navigate
       // away (e.g. it threw) -- a successful sign-in never returns here.
       setGooglePending(false);
+    }
+  }
+
+  async function handleFacebook() {
+    setFacebookPending(true);
+    try {
+      await onFacebookSignIn();
+    } finally {
+      setFacebookPending(false);
     }
   }
 
@@ -181,10 +197,11 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
             type="button"
             size="lg"
             className="h-11 w-full gap-2.5 bg-[#1877F2] text-sm text-white hover:bg-[#1877F2]/90"
-            onClick={notWired("Facebook sign-in")}
+            onClick={handleFacebook}
+            disabled={facebookPending}
           >
             <FacebookGlyph />
-            Continue with Facebook
+            {facebookPending ? "Continuing..." : "Continue with Facebook"}
           </Button>
           <Button
             type="button"

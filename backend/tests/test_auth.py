@@ -179,6 +179,90 @@ def test_absent_provider_claim_defaults_to_google_behavior(monkeypatch):
         db.close()
 
 
+def test_unknown_facebook_id_auto_provisions_a_user(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        assert db.query(models.User).count() == 0
+        token = _token(sub="fb-sub-1", email="fb-user@example.com", provider="facebook")
+        user = auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert user.id is not None
+        assert db.query(models.User).filter(models.User.facebook_id == "fb-sub-1").count() == 1
+        # Never cross-populates the other provider's join column.
+        assert user.google_sub is None
+    finally:
+        db.close()
+
+
+def test_facebook_second_request_reuses_the_same_user(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        token = _token(sub="fb-sub-2", provider="facebook")
+        first = auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        db.commit()
+        second = auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert first.id == second.id
+    finally:
+        db.close()
+
+
+def test_new_google_identity_rejects_an_email_already_used_by_another_account(monkeypatch):
+    # The existing account could be a Facebook or credentials account --
+    # either way, a brand-new Google sub must never silently attach to it.
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        existing = models.User(email="shared@example.com", password_hash="irrelevant-for-this-test")
+        db.add(existing)
+        db.commit()
+
+        token = _token(sub="new-google-sub", email="shared@example.com", provider="google")
+        with pytest.raises(HTTPException) as exc_info:
+            auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert exc_info.value.status_code == 401
+        # No new row was created, and the existing one wasn't touched.
+        assert db.query(models.User).count() == 1
+        assert db.query(models.User).filter(models.User.google_sub == "new-google-sub").count() == 0
+    finally:
+        db.close()
+
+
+def test_new_facebook_identity_rejects_an_email_already_used_by_another_account(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        existing = models.User(email="shared@example.com", google_sub="google-sub-existing")
+        db.add(existing)
+        db.commit()
+
+        token = _token(sub="new-fb-sub", email="shared@example.com", provider="facebook")
+        with pytest.raises(HTTPException) as exc_info:
+            auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert exc_info.value.status_code == 401
+        assert db.query(models.User).count() == 1
+        assert db.query(models.User).filter(models.User.facebook_id == "new-fb-sub").count() == 0
+    finally:
+        db.close()
+
+
+def test_email_collision_guard_does_not_block_a_returning_oauth_user(monkeypatch):
+    # The guard only applies to auto-provisioning a *new* identity -- a
+    # returning user (already matched by google_sub/facebook_id) must never
+    # be rejected just because their own email is "already in use" (by
+    # themselves).
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        token = _token(sub="repeat-google-sub", email="repeat@example.com", provider="google")
+        first = auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        db.commit()
+        second = auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert first.id == second.id
+    finally:
+        db.close()
+
+
 def test_unconfigured_secret_raises_500_not_silently_accepting(monkeypatch):
     # A missing AUTH_BACKEND_SECRET must fail loudly -- never be treated as
     # "auth is off" and accept any token.

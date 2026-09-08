@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import Facebook from "next-auth/providers/facebook";
 import Credentials from "next-auth/providers/credentials";
 import { mintBackendJwt } from "@/lib/mintBackendJwt";
 
@@ -35,6 +36,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           access_type: "offline",
         },
       },
+    }),
+    // Facebook OAuth (login page redesign Phase 2, 2026-09-07 -- see
+    // decisions.md). Auth.js is the OAuth client here exactly as it is for
+    // Google -- FastAPI never talks to Facebook, it only ever verifies the
+    // same short-lived backend JWT (now carrying provider: "facebook") via
+    // backend/app/auth.py's generalized get_current_user. No Calendar-style
+    // scope needed, so unlike Google this needs no extra `authorization`
+    // params -- Facebook's default `public_profile,email` scope is enough
+    // to get the id/email this app actually uses.
+    Facebook({
+      clientId: process.env.AUTH_FACEBOOK_ID,
+      clientSecret: process.env.AUTH_FACEBOOK_SECRET,
     }),
     // Email/password (login page redesign, 2026-09-07 -- see decisions.md's
     // Login page redesign entry). FastAPI owns the actual account

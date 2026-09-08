@@ -28,6 +28,10 @@ class User(Base):
     # pre-auth placeholder users (see CLAUDE.md decision log, "Auth" row)
     # have none.
     google_sub = Column(String(255), unique=True, index=True, nullable=True)
+    # Facebook's stable per-app user id (the OAuth "id" field) -- same
+    # nullable-per-method shape as google_sub above; null for an account
+    # that has never signed in with Facebook.
+    facebook_id = Column(String(255), unique=True, index=True, nullable=True)
     # bcrypt hash (backend/app/password_auth.py) for email/password accounts
     # (see routers/auth.py's /auth/register, /auth/login) -- null for a
     # Google-only account, same nullable-per-method shape as google_sub
