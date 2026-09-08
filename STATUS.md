@@ -218,7 +218,8 @@ plain Q&A).
 | Trip photos (Pexels, "{destination} skyline at night" first, plain name as fallback) | Live, billed-free tier — key set |
 | Your Trips / Trip Hub pages (`/trips`, `/trips/[tripId]`) | Live |
 | Google OAuth login + per-user data isolation | Live (needs a real `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` to actually sign in) |
-| Redesigned `/login` page (Login/Signup toggle, Dusk City background) | Live ([PR #45](https://github.com/starkparsa/Itinera/pull/45)) — Google is the only real auth method; Facebook/email fields are visual parity only, honestly toast "not available yet" |
+| Redesigned `/login` page (Login/Signup toggle, Dusk City background) | Live ([PR #45](https://github.com/starkparsa/Itinera/pull/45)) |
+| Email/password authentication (`/auth/register`, `/auth/login`, bcrypt) | Live ([PR #47](https://github.com/starkparsa/Itinera/pull/47)) — same session/onboarding flow as Google, via Auth.js's Credentials provider and a `provider` JWT claim |
 | Google Calendar push ("Export Plan") | Live |
 | Currency conversion (`gather_trip_context`/`convert_currency`) | **Paused** — product decision, not a bug. Kill switch: `AGENT_TOOL_CALLING_ENABLED` |
 | Groq fallback | Live, verified |
