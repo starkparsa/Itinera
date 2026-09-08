@@ -155,6 +155,24 @@ already touched a live database gets closed unmerged: roll the database
 back to match, don't just delete the branch — see `progress.md`'s
 2026-09-07/08 entry for the full incident.*
 
+**A pre-existing race condition in `profile.py`'s get-or-create, found
+during that work, fixed separately — live 2026-09-08 (PR #53).**
+`_get_or_create_profile`'s SELECT-then-INSERT had no protection against
+two concurrent requests for the same brand-new user both passing the
+SELECT before either committed; newly reachable (not newly introduced)
+because the credentials login flow's client-side redirect reaches
+`GET /profile` faster/more concurrently than Google's full-page OAuth
+round-trip ever did. Fix: catch `IntegrityError` on the losing request's
+commit, roll back, and re-query for the winning request's row, rather
+than adding a lock or changing the read pattern — matches this
+codebase's existing preference for the smallest correct fix over a
+structural change. *Coordination note: flagged via `spawn_task` to a
+peer session rather than fixed inline (out of scope for the auth work in
+progress); that session's worktree already held a correct, verified,
+uncommitted fix, which was reapplied onto a fresh branch off `main`
+directly rather than waited on, to avoid blocking on another session's
+own commit timing.*
+
 **Hardening pass (PR #50), from a second brief re-litigating this same
 build.** The brief asked to build in-house email/password auth from
 scratch; audited the existing code against its own checklist first
