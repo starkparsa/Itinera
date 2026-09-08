@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Eye, EyeOff, Mail, Trophy } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ChipGroup, ChipOption } from "@/components/ui/toggle-chip";
 import { useToast } from "@/components/ui/toast";
+import { emailLogin, emailSignUp } from "@/app/login/actions";
 
 // Same field styling convention OnboardingFlow.tsx already established
 // (fieldClass) -- one shared class for every text-ish input, including
@@ -14,24 +17,42 @@ const fieldClass =
   "w-full rounded-lg border border-input bg-transparent px-2.5 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 [color-scheme:light]";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Client-side courtesy only -- mirrors schemas.py's RegisterRequest
+// validator exactly, but that backend check is the authoritative one.
+const MIN_PASSWORD_LENGTH = 8;
 
 type AuthMode = "login" | "signup";
 
+function passwordStrengthError(password: string): string | null {
+  if (password.length < MIN_PASSWORD_LENGTH) return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+  if (!/[A-Z]/.test(password)) return "Password must include an uppercase letter.";
+  if (!/[0-9]/.test(password)) return "Password must include a number.";
+  if (!/[^A-Za-z0-9]/.test(password)) return "Password must include a special character.";
+  return null;
+}
+
 export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Promise<void> }) {
   const { toast } = useToast();
+  const router = useRouter();
   const [mode, setMode] = useState<AuthMode>("login");
   const [emailOpen, setEmailOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [googlePending, setGooglePending] = useState(false);
+  const [emailPending, setEmailPending] = useState(false);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [emailError, setEmailError] = useState<string | null>(null);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
+  // Form-level, not field-level -- "incorrect email or password" (login)
+  // or "an account with this email already exists" (signup) isn't about
+  // one specific field, matching OnboardingFlow.tsx's own Alert usage for
+  // a save failure.
+  const [formError, setFormError] = useState<string | null>(null);
 
-  // Facebook, email/password, and password reset are all drawn to visual
-  // parity per the approved design (see the "Dusk City Login" artifact)
-  // but have no real backend yet -- Google is this app's one actually-
-  // wired auth method (backend/app/auth.py). Each shows this same honest
-  // "not live yet" toast rather than a fabricated success or a fake
-  // "wrong password" error, so nothing here silently pretends to work.
+  // Password reset has no real backend yet -- Google and email/password
+  // (below) are this app's two actually-wired methods. It shows this same
+  // honest "not live yet" toast rather than a fabricated success, so
+  // nothing here silently pretends to work.
   const notWired = (label: string) => () =>
     toast({ title: `${label} isn't available yet`, description: "Use Google to continue for now." });
 
@@ -53,13 +74,32 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
   // and relying on it to forward type="submit" through to a real submit
   // control is exactly the kind of implicit behavior that convention
   // avoids.
-  function handleEmailSubmit() {
+  async function handleEmailSubmit() {
+    setFormError(null);
     if (!EMAIL_RE.test(email)) {
       setEmailError("Enter a valid email address.");
       return;
     }
     setEmailError(null);
-    notWired(mode === "signup" ? "Email sign-up" : "Email sign-in")();
+
+    if (mode === "signup") {
+      const strengthError = passwordStrengthError(password);
+      if (strengthError) {
+        setPasswordError(strengthError);
+        return;
+      }
+    }
+    setPasswordError(null);
+
+    setEmailPending(true);
+    const result = mode === "signup" ? await emailSignUp(email, password) : await emailLogin(email, password);
+    setEmailPending(false);
+
+    if (!result.ok) {
+      setFormError(result.error ?? "Something went wrong. Try again.");
+      return;
+    }
+    router.push("/");
   }
 
   const copy =
@@ -139,15 +179,6 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
           </Button>
           <Button
             type="button"
-            size="lg"
-            className="h-11 w-full gap-2.5 bg-[#1877F2] text-sm text-white hover:bg-[#1877F2]/90"
-            onClick={notWired("Facebook sign-in")}
-          >
-            <FacebookGlyph />
-            Continue with Facebook
-          </Button>
-          <Button
-            type="button"
             variant="ghost"
             size="lg"
             className="h-11 w-full gap-2 text-sm text-muted-foreground"
@@ -161,9 +192,25 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
 
         {emailOpen && (
           <div className="mt-4 flex flex-col gap-3">
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Email
+            {formError && (
+              <Alert variant="destructive">
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            )}
+
+            {/* label wraps only the field name, not the hint/error text --
+                a description span nested inside <label> becomes part of
+                its accessible name (e.g. "Password" turns into
+                "PasswordAt least 8 characters..."), which is wrong for
+                assistive tech and broke a very literal getByLabelText
+                match in tests. aria-describedby links the description
+                without folding it into the name. */}
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="login-email" className="text-sm font-medium">
+                Email
+              </label>
               <input
+                id="login-email"
                 type="email"
                 className={fieldClass}
                 value={email}
@@ -173,18 +220,32 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
                 }}
                 placeholder="you@example.com"
                 autoComplete="email"
+                aria-describedby={emailError ? "login-email-error" : undefined}
               />
-              {emailError && <span className="text-xs font-normal text-destructive">{emailError}</span>}
-            </label>
+              {emailError && (
+                <span id="login-email-error" className="text-xs font-normal text-destructive">
+                  {emailError}
+                </span>
+              )}
+            </div>
 
-            <label className="flex flex-col gap-1.5 text-sm font-medium">
-              Password
+            <div className="flex flex-col gap-1.5">
+              <label htmlFor="login-password" className="text-sm font-medium">
+                Password
+              </label>
               <span className="relative">
                 <input
+                  id="login-password"
                   type={showPassword ? "text" : "password"}
                   className={`${fieldClass} pr-9`}
                   placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    if (passwordError) setPasswordError(null);
+                  }}
                   autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  aria-describedby="login-password-hint"
                   onKeyDown={(e) => {
                     if (e.key === "Enter") handleEmailSubmit();
                   }}
@@ -198,7 +259,18 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
                   {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                 </button>
               </span>
-            </label>
+              {passwordError ? (
+                <span id="login-password-hint" className="text-xs font-normal text-destructive">
+                  {passwordError}
+                </span>
+              ) : mode === "signup" ? (
+                <span id="login-password-hint" className="text-xs font-normal text-muted-foreground">
+                  At least 8 characters, with an uppercase letter, a number, and a special character.
+                </span>
+              ) : (
+                <span id="login-password-hint" className="sr-only" />
+              )}
+            </div>
 
             {mode === "login" ? (
               <div className="flex items-center justify-between text-xs">
@@ -212,8 +284,8 @@ export default function LoginCard({ onGoogleSignIn }: { onGoogleSignIn: () => Pr
               </div>
             ) : null}
 
-            <Button type="button" size="lg" className="h-11 w-full text-sm" onClick={handleEmailSubmit}>
-              {copy.submit}
+            <Button type="button" size="lg" className="h-11 w-full text-sm" onClick={handleEmailSubmit} disabled={emailPending}>
+              {emailPending ? "Please wait..." : copy.submit}
             </Button>
           </div>
         )}
@@ -245,14 +317,6 @@ function GoogleGlyph() {
       <path fill="#34A853" d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.8.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.98v2.33A9 9 0 0 0 9 18Z" />
       <path fill="#FBBC05" d="M3.95 10.7A5.4 5.4 0 0 1 3.67 9c0-.59.1-1.17.28-1.7V4.97H.98A9 9 0 0 0 0 9c0 1.45.35 2.83.98 4.03l2.97-2.33Z" />
       <path fill="#EA4335" d="M9 3.58c1.32 0 2.5.45 3.44 1.35l2.58-2.58C13.46.9 11.42 0 9 0A9 9 0 0 0 .98 4.97L3.95 7.3C4.66 5.17 6.65 3.58 9 3.58Z" />
-    </svg>
-  );
-}
-
-function FacebookGlyph() {
-  return (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-      <path d="M13.5 21v-7.5h2.5l.5-3h-3V8.5c0-.87.24-1.46 1.5-1.46H16.5V4.36c-.26-.03-1.15-.11-2.19-.11-2.17 0-3.66 1.32-3.66 3.75V10.5H8v3h2.65V21h2.85Z" />
     </svg>
   );
 }

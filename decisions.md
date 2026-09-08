@@ -102,9 +102,73 @@ HS256 JWT (`AUTH_BACKEND_SECRET`, shared with the backend) on every
 backend call; FastAPI is a stateless resource server. `User.google_sub`
 is the identity key, not email. All four phases shipped: UI parity (no
 auth) → real login → per-user ownership checks on every endpoint → Google
-Calendar push. *Revisit: the OAuth consent screen is still "Testing"
+Calendar push. Email/password (below) was added later as a second, real
+auth method sharing this same session/database/onboarding flow — Google
+remains the only OAuth provider. *Revisit: the OAuth consent screen is
+still "Testing"
 status (7-day refresh token cap) — publish to Production once there's a
 real domain to register (see STATUS.md's blockers).*
+
+**Email/password added as a second, real auth method — live, 2026-09-07/08
+(PRs #47, #50).** Requested via a fully-detailed three-phase brief (Google
++ Facebook + email/password, sharing one session/database/onboarding
+flow). Researched the real architecture first and asked three clarifying
+questions rather than building the brief's assumed shape verbatim:
+
+1. **No separate `sessions`/token table.** The brief's schema proposed
+   one; declined in favor of reusing Auth.js's own JWT session cookie
+   (user's explicit choice) — a second, parallel session system alongside
+   Auth.js's would be pure duplication, not a real architectural need.
+2. **`provider` JWT claim, not a new token shape.** `mintBackendJwt`/
+   `get_current_user` gained a `provider` claim (default `"google"` for
+   backward compatibility) so `sub`'s *meaning* is explicit per method:
+   Google's OIDC subject for `"google"`, this app's own internal
+   `User.id` for `"credentials"` (looked up directly, never
+   auto-provisioned — a password account can only be created via
+   `/auth/register`).
+3. **No automatic cross-provider account linking by email.** A brand-new
+   OAuth identity whose email already belongs to a different existing
+   account gets a clean 401, not a silent link or a unique-constraint
+   crash. This app's email/password signup has no email-verification
+   step, so silent linking would let an attacker who pre-registered a
+   victim's email gain access to whatever account a later real OAuth
+   login attaches to that email — the same reasoning `/auth/register`
+   already applies to a duplicate email at signup time.
+
+**Facebook was built, then removed** (PR #48 opened and fully working end
+to end — verified via a real browser click-through hitting Facebook's own
+OAuth endpoint — then closed unmerged; PR #49 stripped the UI placeholder
+too). Decided against pursuing a real Facebook integration; Google and
+email/password are this app's two live auth methods. *Revisit: if
+Facebook comes back, PR #48's diff (closed, not deleted from GitHub) has
+the working implementation to restore from, including the email-collision
+guard generalized to a `facebook_id` branch.*
+
+**Closing that PR left the real dev database out of sync** — its
+migration (`facebook_id`) had already been applied there, so deleting
+the branch left `alembic_version` pointing at a revision that existed
+nowhere in the repo, breaking every future `alembic` command against
+that database. Caught and fixed after the fact (column dropped, version
+stamped back to Phase 1's real head), not by any test (SQLite-backed
+tests never touch the real database). *Lesson for next time a PR that
+already touched a live database gets closed unmerged: roll the database
+back to match, don't just delete the branch — see `progress.md`'s
+2026-09-07/08 entry for the full incident.*
+
+**Hardening pass (PR #50), from a second brief re-litigating this same
+build.** The brief asked to build in-house email/password auth from
+scratch; audited the existing code against its own checklist first
+(per its explicit "reuse, don't rebuild" instruction) rather than
+re-implementing — nearly everything it asked for already existed. Two
+real gaps closed: auth-event logging (signup/login success and each
+distinct failure reason, never the password) and a small static
+common-password blacklist (catches e.g. `Password1!`, which passes every
+character-class rule but is a first guess in any real credential-
+stuffing attempt). A third candidate — shortening Auth.js's shared
+session cookie from its 30-day default toward the brief's 1-24h
+guidance — was declined: that setting is shared with Google logins too,
+and the actual backend-facing JWT already expires every 60 seconds
+regardless of the session cookie's length.
 
 **Calendar: `googleapiclient` directly, not the Calendar MCP server** —
 reversed from an earlier plan. `google-genai`'s MCP support was still

@@ -60,4 +60,17 @@ describe("mintBackendJwt", () => {
     delete process.env.AUTH_BACKEND_SECRET;
     await expect(mintBackendJwt("google-sub-123")).rejects.toThrow("AUTH_BACKEND_SECRET is not set");
   });
+
+  it("defaults the provider claim to 'google' when omitted, for every pre-existing call site", async () => {
+    const token = await mintBackendJwt("google-sub-123");
+    const { payload } = await jwtVerify(token, new TextEncoder().encode(SECRET));
+    expect(payload.provider).toBe("google");
+  });
+
+  it("carries a real 'credentials' provider claim when passed, for backend/app/auth.py's internal-id lookup", async () => {
+    const token = await mintBackendJwt("42", "jordan@example.com", "credentials");
+    const { payload } = await jwtVerify(token, new TextEncoder().encode(SECRET));
+    expect(payload.sub).toBe("42");
+    expect(payload.provider).toBe("credentials");
+  });
 });

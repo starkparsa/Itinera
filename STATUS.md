@@ -136,7 +136,17 @@ email "submit" button relied on native `<form onSubmit>`, which this
 app's `Button` primitive doesn't reliably forward — fixed by switching
 to the `onClick`-only convention `OnboardingFlow.tsx` already
 established. See `decisions.md`'s new Login page redesign entry for
-the full detail._
+the full detail. Updated again 2026-09-07/08 (PRs #47, #49, #50): the
+email/password side of that toast-only placeholder became a real, live
+second auth method (bcrypt, backend-side validation, rate
+limiting, sharing Auth.js's existing session via a new `provider` JWT
+claim rather than a parallel session system); a real Facebook OAuth
+integration was built end-to-end, verified working, then deliberately
+removed along with its UI placeholder (Google and email/password are
+this app's two live methods); and a follow-up security audit closed
+two real gaps (auth-event logging, a common-password blacklist) while
+correctly declining to rebuild what already existed. See `decisions.md`'s
+Auth entry for the full detail._
 
 ## Where the project stands
 
@@ -218,7 +228,8 @@ plain Q&A).
 | Trip photos (Pexels, "{destination} skyline at night" first, plain name as fallback) | Live, billed-free tier — key set |
 | Your Trips / Trip Hub pages (`/trips`, `/trips/[tripId]`) | Live |
 | Google OAuth login + per-user data isolation | Live (needs a real `AUTH_GOOGLE_ID`/`AUTH_GOOGLE_SECRET` to actually sign in) |
-| Redesigned `/login` page (Login/Signup toggle, Dusk City background) | Live ([PR #45](https://github.com/starkparsa/Itinera/pull/45)) — Google is the only real auth method; Facebook/email fields are visual parity only, honestly toast "not available yet" |
+| Redesigned `/login` page (Login/Signup toggle, Dusk City background) | Live ([PR #45](https://github.com/starkparsa/Itinera/pull/45)) |
+| Email/password authentication (`/auth/register`, `/auth/login`, bcrypt) | Live ([PR #47](https://github.com/starkparsa/Itinera/pull/47)) — same session/onboarding flow as Google, via Auth.js's Credentials provider and a `provider` JWT claim |
 | Google Calendar push ("Export Plan") | Live |
 | Currency conversion (`gather_trip_context`/`convert_currency`) | **Paused** — product decision, not a bug. Kill switch: `AGENT_TOOL_CALLING_ENABLED` |
 | Groq fallback | Live, verified |
@@ -235,9 +246,12 @@ plain Q&A).
 
 ## Next action
 
-PRs #43, #39, #40, #41, #42 are all merged to `main` as of 2026-09-07 —
-none of the three build-order candidates below depend on any of that
-work. Gamification was an intentional, discussed jump ahead of
+PRs #43, #39, #40, #41, #42 are all merged to `main` as of 2026-09-07,
+and the login/auth work (PRs #45–#47, #49, #50 — redesign, real email/
+password, Facebook removed after being fully built, an audit-logging/
+password-blacklist hardening pass) merged 2026-09-07/08 — none of the
+three build-order candidates below depend on any of that work.
+Gamification was an intentional, discussed jump ahead of
 Maps/routing in this order, not a silent reorder (see `decisions.md`'s
 "Four follow-on features" entry). One item still open from the
 onboarding pass, not resolved by any of the four: a real signed-in

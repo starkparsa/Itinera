@@ -12,7 +12,7 @@ export async function backendAuthHeader(): Promise<Record<string, string>> {
   if (!session?.user?.sub) return {};
 
   try {
-    const token = await mintBackendJwt(session.user.sub, session.user.email);
+    const token = await mintBackendJwt(session.user.sub, session.user.email, session.user.provider);
     return { Authorization: `Bearer ${token}` };
   } catch {
     return {};

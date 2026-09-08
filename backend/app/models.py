@@ -28,6 +28,11 @@ class User(Base):
     # pre-auth placeholder users (see CLAUDE.md decision log, "Auth" row)
     # have none.
     google_sub = Column(String(255), unique=True, index=True, nullable=True)
+    # bcrypt hash (backend/app/password_auth.py) for email/password accounts
+    # (see routers/auth.py's /auth/register, /auth/login) -- null for a
+    # Google-only account, same nullable-per-method shape as google_sub
+    # above. Never the plaintext password, obviously.
+    password_hash = Column(String(255), nullable=True)
     display_name = Column(String(255))
     # Per-account daily quota on POST /trips/generate (see
     # app/usage_quota.py) -- distinct from rate_limit.py's IP-keyed slowapi
