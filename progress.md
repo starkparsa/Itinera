@@ -6,6 +6,37 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-08 — Race condition in profile get-or-create fixed (PR #53)
+
+The race flagged (not fixed) during Phase 1 of the auth work below —
+`_get_or_create_profile`'s SELECT-then-INSERT had no protection against
+two concurrent requests for the same brand-new user both passing the
+SELECT before either committed, newly exposed by the credentials flow's
+faster client-side redirect to `GET /profile`. Flagged via `spawn_task`
+to a peer session (`kind-boyd-57d162`) rather than fixed inline at the
+time, since it was unrelated to the auth work in progress.
+
+Checked that peer session's worktree directly rather than assuming it
+had finished or guessing at the fix: found a correct, verified,
+uncommitted diff sitting in its git state. Rather than wait on that
+session to commit/push, reapplied the identical diff onto a fresh branch
+off current `main` — deliberately not touching the peer session's own
+worktree/branch, to avoid any interference with its independent state —
+then messaged that session afterward to say the gap was already covered,
+avoiding duplicate work.
+
+**Fix**: the losing request's `db.commit()` now runs inside a
+`try/except IntegrityError` — on the unique-constraint violation it
+rolls back its own failed insert and re-queries for the winning
+request's row instead of letting the `IntegrityError` propagate as a
+500. One new test (`test_get_or_create_profile_recovers_from_concurrent_insert_race`)
+simulates the race directly: a second `SessionLocal()` commits the
+winning row first, then the original session's `commit()` is patched to
+raise the real `IntegrityError` shape (`user_profiles_user_id_key`) so
+the recovery path is exercised without needing genuinely concurrent
+threads. Verified against the real dev Postgres schema's actual unique
+constraint name.
+
 ## 2026-09-07/08 — Real email/password auth added, Facebook built then removed, an audit-driven hardening pass (PRs #47, #48/closed, #49, #50)
 
 A fully-detailed three-phase brief (Google + Facebook + email/password,

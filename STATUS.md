@@ -249,8 +249,10 @@ plain Q&A).
 PRs #43, #39, #40, #41, #42 are all merged to `main` as of 2026-09-07,
 and the login/auth work (PRs #45–#47, #49, #50 — redesign, real email/
 password, Facebook removed after being fully built, an audit-logging/
-password-blacklist hardening pass) merged 2026-09-07/08 — none of the
-three build-order candidates below depend on any of that work.
+password-blacklist hardening pass) merged 2026-09-07/08, plus a fix
+(PR #53, 2026-09-08) for a pre-existing race condition in
+`profile.py`'s get-or-create that PR #47's work had surfaced — none of
+the three build-order candidates below depend on any of that work.
 Gamification was an intentional, discussed jump ahead of
 Maps/routing in this order, not a silent reorder (see `decisions.md`'s
 "Four follow-on features" entry). One item still open from the
