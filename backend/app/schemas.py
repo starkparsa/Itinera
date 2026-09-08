@@ -10,6 +10,61 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 _PHONE_RE = re.compile(r"^\+?[0-9\s().-]{7,20}$")
 MAX_PLAUSIBLE_AGE = 120
 
+# Same "loose on purpose" posture as _PHONE_RE -- catches obvious garbage,
+# not full RFC 5322 compliance (an address that passes this but doesn't
+# exist is caught by Auth.js's own "did the login actually work" flow, not
+# by more regex).
+_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+MIN_PASSWORD_LENGTH = 8
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email(cls, value: str) -> str:
+        if not _EMAIL_RE.match(value):
+            raise ValueError("Enter a valid email address.")
+        return value.lower()
+
+    @field_validator("password")
+    @classmethod
+    def _validate_password(cls, value: str) -> str:
+        # Mirrors the client-side check in components/login/LoginCard.tsx --
+        # this one is the authoritative check, that one is a courtesy so a
+        # user isn't round-tripped to the server just to learn "add a
+        # number." Rules match the brief this was built against: length,
+        # an uppercase letter, a digit, a special character.
+        if len(value) < MIN_PASSWORD_LENGTH:
+            raise ValueError(f"Password must be at least {MIN_PASSWORD_LENGTH} characters.")
+        if len(value.encode("utf-8")) > 72:
+            raise ValueError("Password is too long.")
+        if not re.search(r"[A-Z]", value):
+            raise ValueError("Password must include an uppercase letter.")
+        if not re.search(r"[0-9]", value):
+            raise ValueError("Password must include a number.")
+        if not re.search(r"[^A-Za-z0-9]", value):
+            raise ValueError("Password must include a special character.")
+        return value
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UserAuthOut(BaseModel):
+    """Minimal identity returned by /auth/register and /auth/login -- just
+    enough for Auth.js's Credentials provider to mint its own session
+    (frontend/src/auth.ts); never a token or session of any kind, since
+    FastAPI doesn't own sessions in this architecture (see decisions.md's
+    Auth entry)."""
+
+    id: int
+    email: str
+
 
 class TripRequest(BaseModel):
     prompt: str

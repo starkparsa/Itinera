@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import Credentials from "next-auth/providers/credentials";
 import { mintBackendJwt } from "@/lib/mintBackendJwt";
 
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
@@ -35,6 +36,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         },
       },
     }),
+    // Email/password (login page redesign, 2026-09-07 -- see decisions.md's
+    // Login page redesign entry). FastAPI owns the actual account
+    // (password_hash column, bcrypt via backend/app/password_auth.py) and
+    // is the only thing that ever verifies a password -- this provider is
+    // a thin bridge that calls the real backend endpoint and, on success,
+    // lets Auth.js mint the exact same kind of session Google already
+    // gets. No parallel session/token system, per that same decision.
+    Credentials({
+      credentials: { email: {}, password: {} },
+      authorize: async (creds) => {
+        const email = creds?.email as string | undefined;
+        const password = creds?.password as string | undefined;
+        if (!email || !password) return null;
+
+        const res = await fetch(`${BACKEND_URL}/auth/login`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+        // A specific reason (invalid credentials vs. "use Google instead")
+        // is surfaced to the UI by login/actions.ts's own direct call to
+        // this same endpoint, made just before this one -- authorize()
+        // itself only needs a yes/no here, since a thrown error's message
+        // doesn't reliably survive signIn()'s own error handling.
+        if (!res.ok) return null;
+
+        const user = await res.json(); // schemas.UserAuthOut: {id, email}
+        return { id: String(user.id), email: user.email };
+      },
+    }),
   ],
   session: { strategy: "jwt" },
   pages: {
@@ -43,22 +74,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async jwt({ token, account }) {
       // account is only present on the initial sign-in request -- persist
-      // Google's stable subject id (providerAccountId) onto the token so
-      // it survives every later request in this session.
+      // the stable subject id (providerAccountId) onto the token so it
+      // survives every later request in this session. Its *meaning*
+      // depends on provider: Google's own OIDC subject for "google", or
+      // this app's internal User.id (as a string, set by authorize() just
+      // above) for "credentials" -- see mintBackendJwt.ts and
+      // backend/app/auth.py for how each is interpreted downstream.
       if (account) {
         token.sub = account.providerAccountId;
+        token.provider = account.provider;
 
-        // The Calendar scope above means a normal login now carries a real
-        // access_token/refresh_token here too, not just the incremental
-        // "Connect Google Calendar" re-consent path (still used as a rare
-        // fallback -- see lib/authActions.ts -- if a stored credential ever
-        // goes stale, e.g. the 7-day refresh-token cap on an unverified/
-        // "Testing"-status OAuth app). Save server-side, right here, before
-        // these ever touch the browser -- never passed through the session
-        // cookie.
-        if (account.access_token && typeof account.expires_at === "number") {
+        // Calendar push is a Google-specific feature -- explicitly gated
+        // on the provider, not just on access_token/expires_at happening
+        // to be present, now that a second (and soon third) provider
+        // shares this same callback.
+        if (account.provider === "google" && account.access_token && typeof account.expires_at === "number") {
           try {
-            const backendToken = await mintBackendJwt(token.sub as string, token.email as string | undefined);
+            const backendToken = await mintBackendJwt(token.sub as string, token.email as string | undefined, "google");
             await fetch(`${BACKEND_URL}/auth/google-calendar-token`, {
               method: "POST",
               headers: { "Content-Type": "application/json", Authorization: `Bearer ${backendToken}` },
@@ -78,6 +110,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     session({ session, token }) {
       if (token.sub) {
         session.user.sub = token.sub;
+      }
+      if (typeof token.provider === "string") {
+        session.user.provider = token.provider;
       }
       return session;
     },

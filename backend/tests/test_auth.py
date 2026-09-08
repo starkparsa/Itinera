@@ -15,10 +15,18 @@ def setup_function():
     Base.metadata.create_all(bind=engine)
 
 
-def _token(sub: str | None = "google-sub-1", email: str | None = "user@example.com", secret: str = SECRET, expired: bool = False) -> str:
+def _token(
+    sub: str | None = "google-sub-1",
+    email: str | None = "user@example.com",
+    secret: str = SECRET,
+    expired: bool = False,
+    provider: str | None = None,
+) -> str:
     payload = {"email": email}
     if sub is not None:
         payload["sub"] = sub
+    if provider is not None:
+        payload["provider"] = provider
     payload["exp"] = datetime.utcnow() + (timedelta(seconds=-60) if expired else timedelta(seconds=60))
     return jwt.encode(payload, secret, algorithm=auth.ALGORITHM)
 
@@ -110,6 +118,63 @@ def test_token_missing_subject_claim_raises_401(monkeypatch):
         with pytest.raises(HTTPException) as exc_info:
             auth.get_current_user(authorization=f"Bearer {_token(sub=None)}", db=db)
         assert exc_info.value.status_code == 401
+    finally:
+        db.close()
+
+
+def test_credentials_provider_looks_up_by_internal_user_id(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        existing = models.User(email="pw-user@example.com", password_hash="irrelevant-for-this-test")
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+
+        token = _token(sub=str(existing.id), email=existing.email, provider="credentials")
+        user = auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert user.id == existing.id
+    finally:
+        db.close()
+
+
+def test_credentials_provider_never_auto_provisions(monkeypatch):
+    # Unlike Google, a credentials-provider subject that doesn't match any
+    # existing user must 401, never silently create one -- an email/
+    # password account can only come from /auth/register.
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        assert db.query(models.User).count() == 0
+        token = _token(sub="99999", provider="credentials")
+        with pytest.raises(HTTPException) as exc_info:
+            auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert exc_info.value.status_code == 401
+        assert db.query(models.User).count() == 0
+    finally:
+        db.close()
+
+
+def test_credentials_provider_rejects_a_non_numeric_subject(monkeypatch):
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        token = _token(sub="not-a-number", provider="credentials")
+        with pytest.raises(HTTPException) as exc_info:
+            auth.get_current_user(authorization=f"Bearer {token}", db=db)
+        assert exc_info.value.status_code == 401
+    finally:
+        db.close()
+
+
+def test_absent_provider_claim_defaults_to_google_behavior(monkeypatch):
+    # Tokens minted before the provider claim existed (or any client still
+    # built against the old shape) must keep working unchanged.
+    monkeypatch.setattr(auth, "AUTH_BACKEND_SECRET", SECRET)
+    db = SessionLocal()
+    try:
+        user = auth.get_current_user(authorization=f"Bearer {_token(sub='legacy-sub')}", db=db)
+        assert user.google_sub == "legacy-sub"
     finally:
         db.close()
 
