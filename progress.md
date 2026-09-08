@@ -6,6 +6,104 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-07/08 — Real email/password auth added, Facebook built then removed, an audit-driven hardening pass (PRs #47, #48/closed, #49, #50)
+
+A fully-detailed three-phase brief (Google + Facebook + email/password,
+one shared session/database/onboarding flow) arrived with its own
+proposed schema (a separate `sessions` table, a `login_attempts` table)
+and build order. Researched the real architecture first — Auth.js JWT
+sessions, no backend session store — and asked three clarifying
+questions before writing anything: reuse Auth.js's session or build a
+parallel one (user: reuse it); build order (user: email/password first,
+Facebook after); get Facebook credentials first or build the code
+anyway (user: build now, get credentials separately).
+
+**Phase 1 — email/password (PR #47).** `password_hash` column
+(nullable, same shape as `google_sub`), `password_auth.py` (bcrypt
+directly), `POST /auth/register`/`POST /auth/login` (rate-limited
+5/minute, one generic "incorrect email or password" for both wrong-
+password and unknown-email, a distinct honest message for a Google-only
+account). `get_current_user` gained a `provider` JWT claim (default
+`"google"`, backward-compatible) — `"credentials"` looks up by this
+app's own internal `User.id` directly, never auto-provisioned, since a
+password account can only be created via `/auth/register`. Frontend: a
+`Credentials` provider in `auth.ts` bridging to the same backend
+endpoint, `LoginCard.tsx` wired for real with client + authoritative
+server-side validation. Two real bugs found and fixed: the submit
+button's `<form onSubmit>` never actually fired (this app's `Button`
+doesn't reliably forward `type="submit"` through its `@base-ui/react`
+primitive — fixed via `onClick`, matching `OnboardingFlow.tsx`'s
+convention), and a password-strength hint nested inside its `<label>`
+polluted the label's accessible name (fixed by moving it to a sibling
+`aria-describedby` span). Verified against the real dev Postgres
+database: real signup → logout → re-login → wrong-password rejection,
+driven directly via the browser's JS console since the automated
+`computer` tool's coordinate clicks were unreliable against this
+React-controlled-input form. Found (but didn't fix — flagged via
+`spawn_task` instead, since it's unrelated to auth) a real pre-existing
+race condition in `profile.py`'s get-or-create, newly exposed because
+the credentials flow's client-side redirect reaches `GET /profile`
+faster/more concurrently than Google's full-page OAuth round-trip ever
+did.
+
+**Phase 2 — Facebook (PR #48), built then removed.** Added
+`facebook_id` (same nullable/unique/indexed shape as `google_sub`),
+generalized `get_current_user` with a `"facebook"` branch, and closed a
+real latent gap found while generalizing: a brand-new OAuth identity
+whose email already belongs to a different account now gets a clean
+401 instead of silently linking or crashing on the `users.email` unique
+constraint — applied to both the Google and Facebook branches (existed
+for Google alone before, just unreachable until Phase 1 gave email a
+second claimant). Deliberately **not** auto-linking accounts by email —
+this app's email/password signup has no verification step, so silent
+linking would hand an attacker who pre-registered a victim's email
+access to whatever account a later real OAuth login attaches to it.
+Verified with a real browser click-through: the Facebook button
+correctly redirected to Facebook's own OAuth endpoint, failing only on
+"Invalid App ID" since no real Facebook app existed yet. Fully working,
+then the user decided against pursuing Facebook at all — PR #48 closed
+unmerged, its branch deleted; PR #49 removed the now-pointless UI
+placeholder (button, glyph, toast test) that had existed since the
+original login redesign mockup.
+
+**Hardening pass (PR #50), from a second brief re-litigating the same
+build.** This one explicitly demanded an audit-before-building step;
+followed it literally — checked the actual code against its own
+checklist (schema, hashing, sessions, rate limiting, validation, error
+patterns) before writing anything, and found almost everything already
+existed. Closed the two real gaps: auth-event logging (signup/login
+success and each distinct failure reason, asserted in tests to never
+include the password) and a small static common-password blacklist
+(catches e.g. `Password1!`, which satisfies every character-class rule
+but is a first guess in any real attack). Declined a third candidate —
+shortening Auth.js's session cookie from 30 days toward the brief's
+1-24h guidance — since that setting is shared with Google logins too
+and the real backend-facing JWT already expires every 60 seconds
+regardless.
+
+**Verified across all three**: backend suite 396 passed after Phase 1
+(PR #47), unchanged through Facebook's build-then-close since PR #48
+was never merged, then 401 after the hardening pass's 5 new tests
+(PR #50); frontend suite 34 → 40 (Phase 1) → 39 (PR #49 removed
+Facebook's one toast test, unaffected by the backend-only hardening
+pass). `tsc --noEmit` and `eslint` clean throughout.
+
+**A real gap found while documenting this, not while building it**:
+Facebook's migration (`facebook_id`) had been applied and round-tripped
+against the live dev database while PR #48 was open, but closing that
+PR unmerged left the real dev database pointing at an Alembic revision
+(`a1f3c9d02b7e`) that no longer exists anywhere in the repo — the file
+was on the deleted branch. Any `alembic` command against that database
+would have failed outright from that point on. Caught this while
+writing up the migration history for this entry (not from a test —
+`pytest` uses a fresh SQLite schema per run, so this was invisible to
+the whole suite). Fixed directly: dropped the orphaned `facebook_id`
+column and its index, then stamped `alembic_version` back to
+`0668d9be3ecf` (Phase 1's real head) — verified with `alembic current`
+and a full backend suite re-run afterward. *Lesson: closing a PR that
+already touched a live database needs the database rolled back too,
+not just the branch deleted — the two aren't the same action.*
+
 ## 2026-09-07 — Login page redesigned end to end (PR #45)
 
 Requested twice with the same wrong premise: a traditional email/
