@@ -1,6 +1,10 @@
 from datetime import date
 
-from app.event_planning import extract_committed_event_id, resolve_start_date_for_event
+from app.event_planning import (
+    extract_committed_event_id,
+    extract_event_not_found,
+    resolve_start_date_for_event,
+)
 
 
 def test_resolve_start_date_defaults_to_two_days_before():
@@ -36,3 +40,30 @@ def test_extract_committed_event_id_ignores_mention_without_the_exact_marker():
     # marker line counts.
     summary = "The event id is abc123 if you want to look it up yourself."
     assert extract_committed_event_id(summary) is None
+
+
+def test_extract_event_not_found_finds_the_marker():
+    summary = "Looked for the requested show.\nEVENT_NOT_FOUND: Alex O'Connor\nPlanning a general trip instead."
+    assert extract_event_not_found(summary) == "Alex O'Connor"
+
+
+def test_extract_event_not_found_returns_none_when_absent():
+    # The common case -- either no commitment attempt, or one that found
+    # a real event (COMMITTED_EVENT_ID fired instead).
+    summary = "Found Miami Heat vs. Phoenix Suns on 2027-03-08.\nCOMMITTED_EVENT_ID: abc123"
+    assert extract_event_not_found(summary) is None
+
+
+def test_extract_event_not_found_handles_empty_string():
+    assert extract_event_not_found("") is None
+
+
+def test_extract_event_not_found_handles_none():
+    assert extract_event_not_found(None) is None
+
+
+def test_extract_event_not_found_ignores_mention_without_the_exact_marker():
+    # A browsing miss described in ordinary prose must not trigger this --
+    # only the exact required marker line counts.
+    summary = "I couldn't find any Alex O'Connor shows in New York right now."
+    assert extract_event_not_found(summary) is None

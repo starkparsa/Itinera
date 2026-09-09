@@ -5,7 +5,7 @@ from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel
 
-from . import agent_service, gemini_client, groq_service
+from . import agent_service, event_planning, gemini_client, groq_service
 
 # GEMINI_MODEL/_THINKING_CONFIG/_get_client are aliases onto gemini_client
 # (2026-08-31 architecture review, Tier 2) -- that module is the single
@@ -575,6 +575,22 @@ def generate_itinerary(
         # non-empty rather than assuming both ran/found something (either
         # loop can be individually disabled, and both fail quietly to "").
         trip_context = " ".join(part for part in (currency_context, place_context) if part)
+
+        # The request truly committed to a specific named event/show
+        # (PLANNING_TOOL_SYSTEM_PROMPT's "EVENT_NOT_FOUND:" marker -- never
+        # set for an ordinary browsing miss) but find_events genuinely
+        # found nothing. Per the user's explicit call: don't write a
+        # substitute general itinerary in that case -- bail out before any
+        # chunk is generated, so routers/trips.py can tell the traveler
+        # plainly instead of quietly planning something they didn't ask
+        # for. Only checked in this fresh-gather branch -- a later,
+        # unrelated turn reusing cached_agent_context must not keep
+        # blocking generation forever off a stale marker from an earlier
+        # failed attempt (see this function's cached_agent_context branch
+        # above, which never re-runs the planning loop at all).
+        event_not_found = event_planning.extract_event_not_found(place_context)
+        if event_not_found:
+            return {"destination": destination, "days": [], "event_not_found": event_not_found}
 
     all_days: list[dict] = []
     covered_activities: list[str] = []

@@ -376,6 +376,47 @@ def test_previous_total_days_takes_priority_over_typical_trip_length():
     assert "usually plan" not in meta_prompt
 
 
+def test_committed_event_not_found_bails_out_before_writing_any_chunk():
+    # Explicit product decision: a request that truly commits to a named
+    # show but find_events genuinely finds nothing must NOT fall back to
+    # planning a substitute general itinerary -- bail out before any
+    # chunk is even generated, so routers/trips.py can tell the traveler
+    # plainly instead. destination/day-count inference still runs (it's
+    # independent, already in flight concurrently), but no chunk call
+    # should happen at all.
+    meta = TripMeta(destination="New York", total_days=3)
+
+    with (
+        patch(
+            "app.llm_service.agent_service.gather_place_context_for_itinerary",
+            return_value=("Checked for the requested show.\nEVENT_NOT_FOUND: Alex O'Connor\n", []),
+        ),
+        patch("app.llm_service._call_gemini", return_value=meta) as mock_call,
+    ):
+        result = llm_service.generate_itinerary("go to New York for Alex O'Connor's show")
+
+    assert result == {"destination": "New York", "days": [], "event_not_found": "Alex O'Connor"}
+    mock_call.assert_called_once()  # only the meta call -- never a chunk call
+
+
+def test_event_not_found_is_only_checked_on_a_fresh_gather_not_a_cached_one():
+    # A later, unrelated turn reusing cached_agent_context must not keep
+    # blocking generation forever off a stale EVENT_NOT_FOUND marker from
+    # an earlier failed attempt -- the check only runs in the branch that
+    # actually re-invokes the planning loop.
+    meta = TripMeta(destination="New York", total_days=3)
+    chunk = _chunk([(i, "explore") for i in range(1, 4)])
+
+    with patch("app.llm_service._call_gemini", side_effect=[meta, chunk]):
+        result = llm_service.generate_itinerary(
+            "actually just plan me a general trip",
+            cached_agent_context="EVENT_NOT_FOUND: Alex O'Connor",
+        )
+
+    assert "event_not_found" not in result
+    assert len(result["days"]) == 3
+
+
 def test_describe_gemini_error_missing_api_key():
     exc = ValueError("No API key was provided. Please pass a valid API key.")
     assert "GEMINI_API_KEY" in llm_service._describe_gemini_error(exc)

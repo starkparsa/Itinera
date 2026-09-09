@@ -1545,3 +1545,53 @@ def test_committed_event_lookup_failure_falls_through_cleanly():
 
     assert response.status_code == 200
     assert response.json()["start_date"] is None
+
+
+def test_generate_trip_does_not_create_a_trip_when_a_committed_event_is_not_found():
+    # Explicit product decision: a request that truly commits to a named
+    # show ("go to X's show") but find_events genuinely finds nothing
+    # must NOT fall back to planning a general trip the user didn't ask
+    # for -- no Trip row, no itinerary, just a plain reply saying so. Same
+    # no-Trip-created shape _handle_off_topic already uses.
+    fake_result_not_found = {"destination": "New York", "days": [], "event_not_found": "Alex O'Connor"}
+    with patch("app.llm_service.generate_itinerary", return_value=fake_result_not_found):
+        response = client.post(
+            "/trips/generate", json={"prompt": "I want to go to New York to go to Alex O'Connor's show"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trip_id"] is None
+    assert "Alex O'Connor" in body["reply"]
+    assert "New York" in body["reply"]
+
+    db = SessionLocal()
+    try:
+        assert db.query(models.Trip).count() == 0
+    finally:
+        db.close()
+
+
+def test_generate_trip_still_persists_messages_when_event_not_found():
+    fake_result_not_found = {"destination": "New York", "days": [], "event_not_found": "Alex O'Connor"}
+    with patch("app.llm_service.generate_itinerary", return_value=fake_result_not_found):
+        response = client.post(
+            "/trips/generate", json={"prompt": "I want to go to New York to go to Alex O'Connor's show"},
+        )
+
+    conv_id = response.json()["conversation_id"]
+    messages = client.get(f"/conversations/{conv_id}").json()["messages"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "user"
+    assert messages[1]["role"] == "assistant"
+    assert "Alex O'Connor" in messages[1]["content"]
+
+
+def test_generate_trip_plans_normally_when_event_not_found_key_is_absent():
+    # Sanity check: the common case (no event-not-found signal at all)
+    # must be completely unaffected by this branch.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        response = client.post("/trips/generate", json={"prompt": "any jazz shows while I'm in Austin?"})
+
+    assert response.status_code == 200
+    assert response.json()["trip_id"] is not None
