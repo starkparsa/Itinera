@@ -597,6 +597,33 @@ def test_answer_question_without_agent_context_still_works():
     assert result == "I'd need a destination to check that."
 
 
+def test_answer_question_personalizes_with_the_user_profile_note():
+    # Same gap as generate_itinerary had before user_profile_note existed
+    # there: a conversational question ("suggest somewhere to eat") had
+    # zero awareness of the traveler's own stated preferences even though
+    # the data already existed and was already used one code path over.
+    with patch("app.llm_service._call_gemini_chat", return_value="Try a vegetarian spot on the east side.") as mock_call:
+        llm_service.answer_question(
+            "where should I eat tonight?", [],
+            user_profile_note="dietary needs: vegetarian; budget: mid",
+        )
+
+    sent_system_prompt = mock_call.call_args.args[0]
+    assert "vegetarian" in sent_system_prompt
+    assert "budget: mid" in sent_system_prompt
+    # Same "preference, not fact" caution generate_itinerary's chunk prompt
+    # already applies to this same note -- must not be dropped here.
+    assert "invent" in sent_system_prompt.lower()
+
+
+def test_answer_question_without_user_profile_note_adds_nothing():
+    with patch("app.llm_service._call_gemini_chat", return_value="Sure thing.") as mock_call:
+        llm_service.answer_question("what's a good area for dinner?", [])
+
+    sent_system_prompt = mock_call.call_args.args[0]
+    assert sent_system_prompt == llm_service.QUESTION_SYSTEM_PROMPT
+
+
 def test_answer_question_instructs_honesty_even_with_no_agent_context():
     # Regression test: a weather question with nothing cached yet (no prior
     # trip generation, or the agent step found nothing) got zero grounding

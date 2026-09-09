@@ -417,6 +417,7 @@ def gather_place_context_for_itinerary(prompt: str) -> tuple[str, list[dict]]:
 
 def answer_question_with_tools(
     prompt: str, chat_messages: list[dict], agent_context: str = "", tour_guide_mode: bool = False,
+    user_profile_note: str = "",
 ) -> tuple[str, list[dict]]:
     """Runs the place-context tool-calling loop for a conversational
     follow-up question and returns `(answer, tool_calls)` -- a plain-text
@@ -460,6 +461,14 @@ def answer_question_with_tools(
     handles it), so callers should pass the conversation's state as it
     stood *entering* this turn, not including any update this turn makes.
 
+    user_profile_note: same onboarding-derived summary (pace, budget,
+    interests, dietary/accessibility needs) llm_service.generate_itinerary
+    and llm_service.answer_question already receive -- without it, this
+    loop's own recommendations (find_nearby_places results, "suggest a
+    place to eat") had no awareness of the traveler's own stated
+    preferences even though the data already existed. "" (the default)
+    means no profile or an empty one.
+
     As of 2026-08-29 this does NOT force detail="detailed" on later turns
     (a deliberate reversal of this flag's original 2026-08-27 behavior,
     made once the fabrication risk that motivated forcing "detailed" was
@@ -493,6 +502,15 @@ def answer_question_with_tools(
         system_instruction += (
             f"\n\nReal data gathered earlier for this trip (for your reference "
             f"only): {agent_context}\n"
+        )
+    if user_profile_note:
+        system_instruction += (
+            f"\n\nTraveler's stated preferences (from their profile; use to "
+            f"personalize recommendations -- e.g. favor suggestions that fit "
+            f"their pace/budget/interests, respect any dietary or "
+            f"accessibility needs -- but do not treat these as facts about "
+            f"the destination or invent specifics beyond what's given): "
+            f"{user_profile_note}\n"
         )
 
     contents = gemini_client.to_contents(chat_messages, prompt)

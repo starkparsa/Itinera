@@ -403,6 +403,35 @@ def test_question_message_calls_answer_question_not_generate_itinerary():
     mock_answer.assert_called_once()
 
 
+def test_question_forwards_user_profile_note_to_both_qa_paths():
+    # Same gap generate_itinerary had before user_profile_note was threaded
+    # through it: a conversational question had zero awareness of the
+    # traveler's own stated preferences. Asserts the note reaches both the
+    # tool-calling loop (tried first) and the plain fallback -- whichever
+    # one actually answers should have it available.
+    db = SessionLocal()
+    try:
+        user = models.User(google_sub=TEST_GOOGLE_SUB, email="test-user@example.com")
+        db.add(user)
+        db.flush()
+        db.add(models.UserProfile(user_id=user.id, dietary_needs="vegetarian", budget_tier="mid"))
+        db.commit()
+    finally:
+        db.close()
+
+    with (
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.agent_service.answer_question_with_tools", return_value=("", [])) as mock_qa_tools,
+        patch("app.llm_service.answer_question", return_value="Try a vegetarian spot nearby.") as mock_answer,
+    ):
+        client.post("/trips/generate", json={"prompt": "where should I eat tonight?"})
+
+    expected_note = "budget: mid; dietary needs: vegetarian"
+    assert mock_qa_tools.call_args.kwargs["user_profile_note"] == expected_note
+    assert mock_answer.call_args.kwargs["user_profile_note"] == expected_note
+
+
 def test_question_uses_place_context_tool_answer_when_available():
     # When the place-context tool loop produces a real answer, it's used
     # directly and the plain llm_service.answer_question path is skipped

@@ -310,7 +310,9 @@ def classify_intent(prompt: str, conversation_context: str) -> tuple[str, bool]:
         return "new_trip", False
 
 
-def answer_question(prompt: str, chat_messages: list[dict], agent_context: str = "") -> str:
+def answer_question(
+    prompt: str, chat_messages: list[dict], agent_context: str = "", user_profile_note: str = "",
+) -> str:
     """Answers a conversational question using real chat-formatted history
     (not the squashed summary string), without regenerating an itinerary.
 
@@ -330,8 +332,25 @@ def answer_question(prompt: str, chat_messages: list[dict], agent_context: str =
     hypothetical). Passing the real data here, plus telling the model not
     to guess when it's missing, fixes both the wrong-number case and the
     making-one-up case.
+
+    user_profile_note: same onboarding-derived summary (pace, budget,
+    interests, dietary/accessibility needs) already threaded into
+    _generate_chunk for itinerary generation -- until this was added, a
+    conversational question like "suggest somewhere to eat" or "what
+    should I pack" answered with zero awareness of the traveler's own
+    stated preferences, even though that data already existed and was
+    already used one code path over. "" (the default) means no profile or
+    an empty one, matching every other optional-context parameter here.
     """
     system_prompt = QUESTION_SYSTEM_PROMPT
+    if user_profile_note:
+        system_prompt += (
+            f"\n\nTraveler's stated preferences (from their profile; use to "
+            f"personalize your answer -- e.g. favor suggestions that fit their "
+            f"pace/budget/interests, respect any dietary or accessibility needs "
+            f"-- but do not treat these as facts about the destination or "
+            f"invent specifics beyond what's given): {user_profile_note}"
+        )
     if agent_context:
         system_prompt += (
             f"\n\nReal data gathered earlier for this trip (for your reference "

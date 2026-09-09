@@ -340,6 +340,41 @@ def test_qa_tools_folds_agent_context_into_system_instruction():
     assert "104-108F" in system_instruction
 
 
+def test_qa_tools_folds_user_profile_note_into_system_instruction():
+    # Same gap as llm_service.answer_question had before user_profile_note
+    # existed there: a tool-calling recommendation ("find a place to eat")
+    # had zero awareness of the traveler's own stated preferences even
+    # though the data already existed and was already used one code path
+    # over (itinerary generation).
+    response = _mock_tool_response(text="Try a vegetarian spot on the east side.")
+
+    with (
+        patch("app.agent_service.QA_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
+    ):
+        agent_service.answer_question_with_tools(
+            "where should I eat tonight?", [],
+            user_profile_note="dietary needs: vegetarian; budget: mid",
+        )
+
+    system_instruction = mock_call.call_args.args[1]
+    assert "vegetarian" in system_instruction
+    assert "budget: mid" in system_instruction
+
+
+def test_qa_tools_without_user_profile_note_adds_nothing():
+    response = _mock_tool_response(text="Sure.")
+
+    with (
+        patch("app.agent_service.QA_TOOL_CALLING_ENABLED", True),
+        patch("app.agent_service._call_gemini_with_tools", return_value=response) as mock_call,
+    ):
+        agent_service.answer_question_with_tools("what else is nearby?", [])
+
+    system_instruction = mock_call.call_args.args[1]
+    assert system_instruction == agent_service.QA_TOOL_SYSTEM_PROMPT
+
+
 def test_qa_tools_folds_tour_guide_mode_note_into_system_instruction():
     response = _mock_tool_response(text="Sure.")
 

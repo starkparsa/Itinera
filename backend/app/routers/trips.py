@@ -174,6 +174,20 @@ def _handle_question(
     """
     chat_messages = _build_chat_messages(conversation)
 
+    # Same onboarding-derived summary itinerary generation already gets
+    # (_handle_new_or_edit_trip below) -- until now, a conversational
+    # question ("suggest somewhere to eat", "what should I pack") was
+    # answered with zero awareness of the traveler's own stated
+    # preferences, even though this data already existed and was already
+    # used one code path over. Looked up via conversation.user_id
+    # directly rather than needing a `user` parameter threaded through
+    # this whole call chain -- Conversation already carries its owner's
+    # id (see models.py).
+    profile = (
+        db.query(models.UserProfile).filter(models.UserProfile.user_id == conversation.user_id).first()
+    )
+    user_profile_note = _build_user_profile_note(profile)
+
     # Needed below for both the on-demand currency fetch's destination
     # hint and the real weather grounding -- looked up unconditionally
     # now (not just inside the "nothing cached yet" branch below),
@@ -266,6 +280,7 @@ def _handle_question(
         # detailed reply via QA_TOOL_SYSTEM_PROMPT's own per-turn
         # instruction, this flag only needs to cover turns after that.
         tour_guide_mode=conversation.tour_guide_mode,
+        user_profile_note=user_profile_note,
     )
     # No new Trip is created on the question path -- persist against
     # whichever trip already exists in this conversation, if any.
@@ -278,6 +293,7 @@ def _handle_question(
         if not reply_text:
             reply_text = llm_service.answer_question(
                 trip_request.prompt, chat_messages, agent_context=combined_context,
+                user_profile_note=user_profile_note,
             )
     except Exception as exc:
         logger.exception("Q&A request failed for conversation %s", conversation.id)

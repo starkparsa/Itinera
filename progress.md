@@ -6,6 +6,31 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Onboarding preferences reach conversational Q&A too, not just itinerary generation
+
+Found while explaining the app's LLM-stabilization prompts to the user:
+`user_profile_note` (pace, budget, interests, dietary/accessibility
+needs from `UserProfile`) was threaded into itinerary generation from
+day one, but `routers/trips.py`'s question branch never built or passed
+it to either `llm_service.answer_question` or `agent_service.
+answer_question_with_tools` — a real, live gap, not a hypothetical one:
+"suggest somewhere to eat" or "what should I pack" got answered with no
+awareness of a traveler's own stated dietary needs or budget.
+
+Closed with no new mechanism: both functions gained a `user_profile_note`
+parameter, appended to their system prompts with the same "personalize
+with this, don't treat it as fact, don't invent beyond it" caution
+`_generate_chunk` already applies to the same note. `_handle_question`
+now looks the profile up via `conversation.user_id` directly (no `user`
+parameter needed through the call chain) and passes the note to both the
+tool-calling loop (tried first) and its plain fallback, so whichever one
+actually answers has it.
+
+5 new tests (2 in `test_llm_service.py`, 2 in `test_agent_service.py`, 1
+router-level integration test in `test_trips_router.py` asserting the
+note reaches both call sites with a real `UserProfile` row and a real
+posted message) — backend suite 402 → 407.
+
 ## 2026-09-08 — Installable-shell PWA shipped
 
 Picked "installable shell only" over "offline trip viewing" (the two

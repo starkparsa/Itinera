@@ -486,6 +486,25 @@ something to bundle into a form field. *Revisit: when a specific SMS
 provider's free tier has been live-verified, the same way Travelpayouts/
 Aviasales still needs to be for flight tracking.*
 
+**Personalization was itinerary-only for its first two years of use — closed 2026-09-09.**
+`user_profile_note` reached `generate_itinerary`/`_generate_chunk` from
+day one, but the conversational Q&A path (`llm_service.answer_question`
+and `agent_service.answer_question_with_tools`, both called from
+`routers/trips.py`'s `_handle_question`) never received it — a question
+like "suggest somewhere to eat" or "what should I pack" was answered
+with zero awareness of the traveler's own stated dietary needs, budget,
+pace, or interests, even though that exact data already existed and was
+already used one code path over. Closed by threading the same
+`user_profile_note` string (built the same way — `_build_user_profile_note`,
+looked up via `conversation.user_id` rather than needing a `user`
+parameter threaded through the whole Q&A call chain) into both
+functions' system prompts, with the same "personalize with this, don't
+treat it as a fact about the destination, don't invent specifics beyond
+what's given" caution the itinerary path already applies. No new
+mechanism, no schema change — the data and the append pattern both
+already existed; this only closed the one path that hadn't been wired to
+either yet.
+
 **Manual end-to-end verification stops at the real OAuth handshake.**
 Both dev servers were started for real, live-verified: the backend's own
 Swagger UI lists all three `/profile` endpoints, `/`, `/trips`, and
