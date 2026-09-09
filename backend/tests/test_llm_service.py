@@ -315,6 +315,67 @@ def test_previous_total_days_omitted_when_none_leaves_meta_prompt_unchanged():
     assert "already has a" not in captured_prompts[0]
 
 
+def test_typical_trip_length_is_folded_into_the_meta_prompt_as_a_soft_default():
+    # A brand-new conversation, no trip generated yet -- the traveler's
+    # profile-stated usual trip length should ground the meta prompt as a
+    # default the latest request's own duration language can still
+    # override, the same soft-instruction treatment previous_total_days
+    # already gets.
+    meta = TripMeta(destination="Lisbon", total_days=5)
+    chunk = _chunk([(i, "explore") for i in range(1, 6)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary("a trip to Lisbon", typical_trip_length_days=5)
+
+    meta_prompt = captured_prompts[0]
+    assert "usually plan 5-day trips" in meta_prompt
+    assert "unless" in meta_prompt
+
+
+def test_typical_trip_length_omitted_when_none_leaves_meta_prompt_unchanged():
+    meta = TripMeta(destination="Kyoto", total_days=3)
+    chunk = _chunk([(i, "sightsee") for i in range(1, 4)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary("3 days in Kyoto")
+
+    assert "usually plan" not in captured_prompts[0]
+
+
+def test_previous_total_days_takes_priority_over_typical_trip_length():
+    # An edit turn within an already-generated trip is a more specific
+    # anchor than the traveler's general-purpose profile default -- the
+    # established trip length must win, not silently revert to the
+    # profile's usual length.
+    meta = TripMeta(destination="Miami", total_days=5)
+    chunk = _chunk([(i, "explore") for i in range(1, 6)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary(
+            "I want to experience the artsy miami",
+            previous_total_days=5, typical_trip_length_days=10,
+        )
+
+    meta_prompt = captured_prompts[0]
+    assert "5-day itinerary" in meta_prompt
+    assert "usually plan" not in meta_prompt
+
+
 def test_describe_gemini_error_missing_api_key():
     exc = ValueError("No API key was provided. Please pass a valid API key.")
     assert "GEMINI_API_KEY" in llm_service._describe_gemini_error(exc)
@@ -595,6 +656,33 @@ def test_answer_question_without_agent_context_still_works():
     sent_system_prompt = mock_call.call_args.args[0]
     assert sent_system_prompt == llm_service.QUESTION_SYSTEM_PROMPT
     assert result == "I'd need a destination to check that."
+
+
+def test_answer_question_personalizes_with_the_user_profile_note():
+    # Same gap as generate_itinerary had before user_profile_note existed
+    # there: a conversational question ("suggest somewhere to eat") had
+    # zero awareness of the traveler's own stated preferences even though
+    # the data already existed and was already used one code path over.
+    with patch("app.llm_service._call_gemini_chat", return_value="Try a vegetarian spot on the east side.") as mock_call:
+        llm_service.answer_question(
+            "where should I eat tonight?", [],
+            user_profile_note="dietary needs: vegetarian; budget: mid",
+        )
+
+    sent_system_prompt = mock_call.call_args.args[0]
+    assert "vegetarian" in sent_system_prompt
+    assert "budget: mid" in sent_system_prompt
+    # Same "preference, not fact" caution generate_itinerary's chunk prompt
+    # already applies to this same note -- must not be dropped here.
+    assert "invent" in sent_system_prompt.lower()
+
+
+def test_answer_question_without_user_profile_note_adds_nothing():
+    with patch("app.llm_service._call_gemini_chat", return_value="Sure thing.") as mock_call:
+        llm_service.answer_question("what's a good area for dinner?", [])
+
+    sent_system_prompt = mock_call.call_args.args[0]
+    assert sent_system_prompt == llm_service.QUESTION_SYSTEM_PROMPT
 
 
 def test_answer_question_instructs_honesty_even_with_no_agent_context():

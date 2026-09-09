@@ -486,6 +486,78 @@ something to bundle into a form field. *Revisit: when a specific SMS
 provider's free tier has been live-verified, the same way Travelpayouts/
 Aviasales still needs to be for flight tracking.*
 
+**Personalization was itinerary-only for its first two years of use — closed 2026-09-09.**
+`user_profile_note` reached `generate_itinerary`/`_generate_chunk` from
+day one, but the conversational Q&A path (`llm_service.answer_question`
+and `agent_service.answer_question_with_tools`, both called from
+`routers/trips.py`'s `_handle_question`) never received it — a question
+like "suggest somewhere to eat" or "what should I pack" was answered
+with zero awareness of the traveler's own stated dietary needs, budget,
+pace, or interests, even though that exact data already existed and was
+already used one code path over. Closed by threading the same
+`user_profile_note` string (built the same way — `_build_user_profile_note`,
+looked up via `conversation.user_id` rather than needing a `user`
+parameter threaded through the whole Q&A call chain) into both
+functions' system prompts, with the same "personalize with this, don't
+treat it as a fact about the destination, don't invent specifics beyond
+what's given" caution the itinerary path already applies. No new
+mechanism, no schema change — the data and the append pattern both
+already existed; this only closed the one path that hadn't been wired to
+either yet.
+
+**`typical_trip_length_days` was collected but never read — also closed
+2026-09-09.** Onboarding's `UserProfile.typical_trip_length_days`
+existed in the schema and the form since the original build, but nothing
+downstream ever queried it — a brand-new trip request with no duration
+of its own ("a trip to Lisbon") fell through to `META_INSTRUCTIONS`'s
+generic "a week" = 7 heuristic instead of the traveler's own stated
+usual length. Fixed with the exact same soft-instruction mechanism
+`_infer_trip_meta` already uses for `previous_total_days` (an
+already-established trip length within a conversation) — folded into
+the meta prompt as a default, never a hard override, so the latest
+request's own duration language still wins. Priority, most to least
+specific: `requested_days` (explicit UI field) > `previous_total_days`
+(a trip already exists in this conversation) > `typical_trip_length_days`
+(the profile default) > the model's free estimate — the profile default
+only applies to a conversation's first trip, since an edit turn's
+already-established length is the more specific anchor. No new query
+(`_handle_new_or_edit_trip` already loads `UserProfile` for
+`user_profile_note`), no schema change.
+
+**`pace` reached the model as a bare label with no consistent meaning
+— closed 2026-09-09, `PACE_GUIDANCE` dict.** The model only ever saw
+`"pace: Leisurely"`/`"Balanced"`/`"Packed"` verbatim (`OnboardingFlow.tsx`'s
+`PACE_OPTIONS` values, stored unchanged in `UserProfile.pace`) and had
+to infer what each word means for an actual day's schedule, with no
+anchor keeping that consistent turn to turn. Fixed with a small static
+dict in `routers/trips.py` translating each label into a concrete
+activity-count range *and* a travel-radius/trim instruction, agreed with
+the user before writing code: Leisurely = 3-4 activities/day, same
+neighborhood; Balanced = 5-6, moderate travel between areas, drop 1-2 if
+spread out; Packed = 6-8, can span the whole destination, drop 1-2 for
+travel time between stops. `_build_user_profile_note` looks the raw
+value up via `PACE_GUIDANCE.get(profile.pace, profile.pace)` — an
+unrecognized value (a legacy value, or the option set changing later)
+falls back to the raw string unchanged rather than dropping the
+preference or erroring, same degrade-don't-break convention as
+`_age_bracket`'s bucket-not-exact-age approach just above it.
+
+**Real travel-time data (distance/duration between activities) —
+explicitly deferred, not folded into the pace mapping above.** Asked to
+also ground the model in real travel times so it isn't just reasoning
+qualitatively about distance; this is the previously-tracked
+Maps/routing roadmap item (see that entry below and `STATUS.md`'s build
+order), not a small addition to `PACE_GUIDANCE`. Per CLAUDE.md principle
+#7 (don't let the model invent data it wasn't given), a real distance/
+duration figure needs an actual grounded source — a live pricing/
+free-tier check on Google's Distance Matrix or Routes API (the existing
+billing-enabled Google Cloud project already used for Places could
+plausibly cover it) or a production-ready Maps MCP server, per principle
+#8 — before any code gets written, exactly the kind of check the
+existing Maps/routing entry already calls for and hasn't been done yet.
+*Revisit: this needs its own research pass (pricing/free-tier/auth
+verified live), not a guess folded into a prompt string.*
+
 **Manual end-to-end verification stops at the real OAuth handshake.**
 Both dev servers were started for real, live-verified: the backend's own
 Swagger UI lists all three `/profile` endpoints, `/`, `/trips`, and

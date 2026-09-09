@@ -6,6 +6,94 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Pace label translated into concrete guidance; real travel-time data deliberately deferred
+
+Asked how `pace` (Leisurely/Balanced/Packed, from onboarding) actually
+reaches the model -- found it was a raw, untranslated label
+(`"pace: Leisurely"`), no more concrete than the bare word itself, with
+no consistent meaning turn to turn. Drafted a mapping and showed it for
+review before writing any code (per the user's explicit ask) -- agreed
+numbers after one round of feedback (Leisurely 3-4 activities/day,
+Balanced 5-6, Packed 6-8), then a second round adding a travel-radius
+dimension on top: Leisurely stays within one neighborhood, Balanced
+allows moderate travel between areas (trim 1-2 activities if spread
+out), Packed can span the whole destination (same trim for travel time
+between farther-apart stops).
+
+Shipped as `PACE_GUIDANCE`, a small static dict in `routers/trips.py`,
+looked up via `.get(profile.pace, profile.pace)` so an unrecognized
+value degrades to the raw string rather than erroring or disappearing.
+2 new tests (translation for all three known labels, fallback for an
+unrecognized one) -- backend suite 412 → 414.
+
+**Real travel-time data was then asked for on top -- correctly scoped
+out as its own feature, not folded in.** This is the previously-tracked
+Maps/routing roadmap item, not a prompt tweak: giving the model an
+actual distance/duration figure means a real grounded data source
+(CLAUDE.md principle #7 -- never let it invent one), which needs a live
+pricing/free-tier check (Google Distance Matrix/Routes API, or a
+production-ready Maps MCP server) before any code gets written -- the
+same check `decisions.md`'s existing Maps/routing entry already called
+for and never completed. Presented three options (qualitative-only
+now / real data as its own researched feature / defer entirely); user
+chose real data as a separate feature -- research not yet started.
+
+## 2026-09-09 — A traveler's usual trip length now defaults new trips, same soft-instruction pattern as an existing trip's length
+
+`UserProfile.typical_trip_length_days` (collected at onboarding) existed
+in the schema but was never read anywhere -- a brand-new trip request
+with no duration language of its own ("a trip to Lisbon") was left
+entirely to the model's own generic guess (`META_INSTRUCTIONS`'s "a
+week" = 7 heuristic), ignoring a real preference the traveler had
+already stated.
+
+Closed with the exact same mechanism `_infer_trip_meta` already uses for
+`previous_total_days` (an already-established trip length within a
+conversation) -- a soft instruction folded into the meta prompt, never a
+hard override: the latest request's own duration language ("a week in
+Lisbon", "10 days") still wins. Priority order, most to least specific:
+`requested_days` (explicit UI field) > `previous_total_days` (this
+conversation already has a generated trip) > `typical_trip_length_days`
+(the traveler's general profile default) > the model's own free
+estimate. The profile default only applies when there's no
+already-established trip in the conversation to anchor to instead.
+
+`routers/trips.py`'s `_handle_new_or_edit_trip` (already querying
+`UserProfile` for `user_profile_note`) now also forwards
+`profile.typical_trip_length_days` straight through
+`generate_itinerary`/`_infer_trip_meta` -- no new query, no schema
+change. 5 new tests (3 in `test_llm_service.py` covering the new note
+and the priority-over-typical-length case, 2 router-level in
+`test_trips_router.py`) -- backend suite 407 → 412. Shipped in the same
+PR as the Q&A personalization fix above, since both are the same
+"profile data that already existed wasn't reaching every prompt it
+should" pattern.
+
+## 2026-09-09 — Onboarding preferences reach conversational Q&A too, not just itinerary generation
+
+Found while explaining the app's LLM-stabilization prompts to the user:
+`user_profile_note` (pace, budget, interests, dietary/accessibility
+needs from `UserProfile`) was threaded into itinerary generation from
+day one, but `routers/trips.py`'s question branch never built or passed
+it to either `llm_service.answer_question` or `agent_service.
+answer_question_with_tools` — a real, live gap, not a hypothetical one:
+"suggest somewhere to eat" or "what should I pack" got answered with no
+awareness of a traveler's own stated dietary needs or budget.
+
+Closed with no new mechanism: both functions gained a `user_profile_note`
+parameter, appended to their system prompts with the same "personalize
+with this, don't treat it as fact, don't invent beyond it" caution
+`_generate_chunk` already applies to the same note. `_handle_question`
+now looks the profile up via `conversation.user_id` directly (no `user`
+parameter needed through the call chain) and passes the note to both the
+tool-calling loop (tried first) and its plain fallback, so whichever one
+actually answers has it.
+
+5 new tests (2 in `test_llm_service.py`, 2 in `test_agent_service.py`, 1
+router-level integration test in `test_trips_router.py` asserting the
+note reaches both call sites with a real `UserProfile` row and a real
+posted message) — backend suite 402 → 407.
+
 ## 2026-09-08 — Installable-shell PWA shipped
 
 Picked "installable shell only" over "offline trip viewing" (the two

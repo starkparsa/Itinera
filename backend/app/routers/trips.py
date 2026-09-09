@@ -174,6 +174,20 @@ def _handle_question(
     """
     chat_messages = _build_chat_messages(conversation)
 
+    # Same onboarding-derived summary itinerary generation already gets
+    # (_handle_new_or_edit_trip below) -- until now, a conversational
+    # question ("suggest somewhere to eat", "what should I pack") was
+    # answered with zero awareness of the traveler's own stated
+    # preferences, even though this data already existed and was already
+    # used one code path over. Looked up via conversation.user_id
+    # directly rather than needing a `user` parameter threaded through
+    # this whole call chain -- Conversation already carries its owner's
+    # id (see models.py).
+    profile = (
+        db.query(models.UserProfile).filter(models.UserProfile.user_id == conversation.user_id).first()
+    )
+    user_profile_note = _build_user_profile_note(profile)
+
     # Needed below for both the on-demand currency fetch's destination
     # hint and the real weather grounding -- looked up unconditionally
     # now (not just inside the "nothing cached yet" branch below),
@@ -266,6 +280,7 @@ def _handle_question(
         # detailed reply via QA_TOOL_SYSTEM_PROMPT's own per-turn
         # instruction, this flag only needs to cover turns after that.
         tour_guide_mode=conversation.tour_guide_mode,
+        user_profile_note=user_profile_note,
     )
     # No new Trip is created on the question path -- persist against
     # whichever trip already exists in this conversation, if any.
@@ -278,6 +293,7 @@ def _handle_question(
         if not reply_text:
             reply_text = llm_service.answer_question(
                 trip_request.prompt, chat_messages, agent_context=combined_context,
+                user_profile_note=user_profile_note,
             )
     except Exception as exc:
         logger.exception("Q&A request failed for conversation %s", conversation.id)
@@ -320,6 +336,35 @@ def _age_bracket(date_of_birth: date | None) -> str | None:
     return "65+"
 
 
+# Translates the onboarding pace label into a concrete activity-density
+# and travel-radius anchor -- without this, the model only ever saw the
+# bare word ("pace: Leisurely") and had to guess what that means for an
+# actual day's schedule, with no consistency turn to turn. Keyed on the
+# exact PACE_OPTIONS values from OnboardingFlow.tsx; an unrecognized
+# value (a legacy value, or the option set changing later) falls back to
+# the raw string unchanged in _build_user_profile_note below, rather than
+# dropping the preference entirely.
+PACE_GUIDANCE = {
+    "Leisurely": (
+        "leisurely (3-4 activities per day, generous downtime; keep "
+        "activities within the same neighborhood/locality rather than "
+        "spreading across the city)"
+    ),
+    "Balanced": (
+        "balanced (5-6 activities per day; can include moderate travel "
+        "between different areas of the destination -- if activities are "
+        "spread out, drop 1-2 of them so travel time doesn't crowd out "
+        "the day)"
+    ),
+    "Packed": (
+        "packed (6-8 activities per day; can span the whole destination, "
+        "including farther-apart areas -- drop 1-2 activities to account "
+        "for travel time between spread-out stops, so the day stays "
+        "realistic rather than rushed)"
+    ),
+}
+
+
 def _build_user_profile_note(profile: models.UserProfile | None) -> str:
     """Only the fields that actually shape itinerary content -- frequency,
     trip length, and bucket-list countries inform other features, not what
@@ -333,7 +378,7 @@ def _build_user_profile_note(profile: models.UserProfile | None) -> str:
     if age_bracket:
         parts.append(f"age group: {age_bracket}")
     if profile.pace:
-        parts.append(f"pace: {profile.pace}")
+        parts.append(f"pace: {PACE_GUIDANCE.get(profile.pace, profile.pace)}")
     if profile.budget_tier:
         parts.append(f"budget: {profile.budget_tier}")
     if profile.interests:
@@ -406,6 +451,7 @@ def _handle_new_or_edit_trip(
             requested_days=trip_request.days,
             conversation_context=conversation_context,
             user_profile_note=user_profile_note,
+            typical_trip_length_days=profile.typical_trip_length_days if profile else None,
             # Reuse currency/place-context findings gathered earlier in this
             # chat instead of re-running the agent steps on every edit turn.
             # A falsy value (None, or "" -- e.g. from a Q&A-first

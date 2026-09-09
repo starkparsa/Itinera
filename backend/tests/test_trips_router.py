@@ -12,6 +12,7 @@ from app.database import Base, SessionLocal, engine, get_db
 from app.main import app
 from app.routers.trips import (
     MAX_CONTEXT_CHARS,
+    PACE_GUIDANCE,
     _age_bracket,
     _build_conversation_context,
     _build_user_profile_note,
@@ -92,7 +93,7 @@ def test_generate_trip_forwards_requested_days_to_llm_service():
 
     mock_generate.assert_called_once_with(
         "a month in Japan", requested_days=30, conversation_context="", cached_agent_context=None,
-        previous_total_days=None, user_profile_note="",
+        previous_total_days=None, user_profile_note="", typical_trip_length_days=None,
     )
 
 
@@ -111,6 +112,30 @@ def test_generate_trip_forwards_user_profile_note_when_profile_exists():
         client.post("/trips/generate", json={"prompt": "weekend in Lisbon"})
 
     assert mock_generate.call_args.kwargs["user_profile_note"] == "pace: relaxed; budget: mid"
+
+
+def test_generate_trip_forwards_typical_trip_length_when_profile_has_one():
+    db = SessionLocal()
+    try:
+        user = models.User(google_sub=TEST_GOOGLE_SUB, email="test-user@example.com")
+        db.add(user)
+        db.flush()
+        db.add(models.UserProfile(user_id=user.id, typical_trip_length_days=4))
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY) as mock_generate:
+        client.post("/trips/generate", json={"prompt": "a trip to Lisbon"})
+
+    assert mock_generate.call_args.kwargs["typical_trip_length_days"] == 4
+
+
+def test_generate_trip_typical_trip_length_is_none_without_a_profile():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY) as mock_generate:
+        client.post("/trips/generate", json={"prompt": "a trip to Lisbon"})
+
+    assert mock_generate.call_args.kwargs["typical_trip_length_days"] is None
 
 
 def test_age_bracket_handles_a_birthday_not_yet_reached_this_year():
@@ -134,6 +159,24 @@ def test_user_profile_note_includes_age_bracket():
     profile = models.UserProfile(date_of_birth=date(1990, 1, 1))
     note = _build_user_profile_note(profile)
     assert "age group:" in note
+
+
+def test_user_profile_note_translates_pace_into_concrete_guidance():
+    # Regression test: the model only ever saw the bare word ("pace:
+    # Leisurely") and had no consistent, concrete sense of what that
+    # means for an actual day's schedule -- PACE_GUIDANCE anchors it to a
+    # real activity-count range and travel-radius instruction.
+    for label, guidance in PACE_GUIDANCE.items():
+        note = _build_user_profile_note(models.UserProfile(pace=label))
+        assert f"pace: {guidance}" in note
+
+
+def test_user_profile_note_falls_back_to_the_raw_pace_value_when_unrecognized():
+    # A legacy value, or the onboarding option set changing later, must
+    # not drop the preference entirely -- degrade to the raw string
+    # rather than erroring or silently omitting it.
+    note = _build_user_profile_note(models.UserProfile(pace="Something New"))
+    assert "pace: Something New" in note
 
 
 def test_generate_trip_surfaces_note_from_llm_result():
@@ -401,6 +444,35 @@ def test_question_message_calls_answer_question_not_generate_itinerary():
     assert response.json()["trip_id"] is None
     mock_generate.assert_not_called()
     mock_answer.assert_called_once()
+
+
+def test_question_forwards_user_profile_note_to_both_qa_paths():
+    # Same gap generate_itinerary had before user_profile_note was threaded
+    # through it: a conversational question had zero awareness of the
+    # traveler's own stated preferences. Asserts the note reaches both the
+    # tool-calling loop (tried first) and the plain fallback -- whichever
+    # one actually answers should have it available.
+    db = SessionLocal()
+    try:
+        user = models.User(google_sub=TEST_GOOGLE_SUB, email="test-user@example.com")
+        db.add(user)
+        db.flush()
+        db.add(models.UserProfile(user_id=user.id, dietary_needs="vegetarian", budget_tier="mid"))
+        db.commit()
+    finally:
+        db.close()
+
+    with (
+        patch("app.llm_service.classify_intent", return_value=("question", False)),
+        patch("app.routers.trips.agent_service.gather_trip_context", return_value=""),
+        patch("app.routers.trips.agent_service.answer_question_with_tools", return_value=("", [])) as mock_qa_tools,
+        patch("app.llm_service.answer_question", return_value="Try a vegetarian spot nearby.") as mock_answer,
+    ):
+        client.post("/trips/generate", json={"prompt": "where should I eat tonight?"})
+
+    expected_note = "budget: mid; dietary needs: vegetarian"
+    assert mock_qa_tools.call_args.kwargs["user_profile_note"] == expected_note
+    assert mock_answer.call_args.kwargs["user_profile_note"] == expected_note
 
 
 def test_question_uses_place_context_tool_answer_when_available():
