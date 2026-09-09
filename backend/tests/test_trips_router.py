@@ -12,6 +12,7 @@ from app.database import Base, SessionLocal, engine, get_db
 from app.main import app
 from app.routers.trips import (
     MAX_CONTEXT_CHARS,
+    PACE_GUIDANCE,
     _age_bracket,
     _build_conversation_context,
     _build_user_profile_note,
@@ -158,6 +159,24 @@ def test_user_profile_note_includes_age_bracket():
     profile = models.UserProfile(date_of_birth=date(1990, 1, 1))
     note = _build_user_profile_note(profile)
     assert "age group:" in note
+
+
+def test_user_profile_note_translates_pace_into_concrete_guidance():
+    # Regression test: the model only ever saw the bare word ("pace:
+    # Leisurely") and had no consistent, concrete sense of what that
+    # means for an actual day's schedule -- PACE_GUIDANCE anchors it to a
+    # real activity-count range and travel-radius instruction.
+    for label, guidance in PACE_GUIDANCE.items():
+        note = _build_user_profile_note(models.UserProfile(pace=label))
+        assert f"pace: {guidance}" in note
+
+
+def test_user_profile_note_falls_back_to_the_raw_pace_value_when_unrecognized():
+    # A legacy value, or the onboarding option set changing later, must
+    # not drop the preference entirely -- degrade to the raw string
+    # rather than erroring or silently omitting it.
+    note = _build_user_profile_note(models.UserProfile(pace="Something New"))
+    assert "pace: Something New" in note
 
 
 def test_generate_trip_surfaces_note_from_llm_result():

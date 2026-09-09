@@ -336,6 +336,35 @@ def _age_bracket(date_of_birth: date | None) -> str | None:
     return "65+"
 
 
+# Translates the onboarding pace label into a concrete activity-density
+# and travel-radius anchor -- without this, the model only ever saw the
+# bare word ("pace: Leisurely") and had to guess what that means for an
+# actual day's schedule, with no consistency turn to turn. Keyed on the
+# exact PACE_OPTIONS values from OnboardingFlow.tsx; an unrecognized
+# value (a legacy value, or the option set changing later) falls back to
+# the raw string unchanged in _build_user_profile_note below, rather than
+# dropping the preference entirely.
+PACE_GUIDANCE = {
+    "Leisurely": (
+        "leisurely (3-4 activities per day, generous downtime; keep "
+        "activities within the same neighborhood/locality rather than "
+        "spreading across the city)"
+    ),
+    "Balanced": (
+        "balanced (5-6 activities per day; can include moderate travel "
+        "between different areas of the destination -- if activities are "
+        "spread out, drop 1-2 of them so travel time doesn't crowd out "
+        "the day)"
+    ),
+    "Packed": (
+        "packed (6-8 activities per day; can span the whole destination, "
+        "including farther-apart areas -- drop 1-2 activities to account "
+        "for travel time between spread-out stops, so the day stays "
+        "realistic rather than rushed)"
+    ),
+}
+
+
 def _build_user_profile_note(profile: models.UserProfile | None) -> str:
     """Only the fields that actually shape itinerary content -- frequency,
     trip length, and bucket-list countries inform other features, not what
@@ -349,7 +378,7 @@ def _build_user_profile_note(profile: models.UserProfile | None) -> str:
     if age_bracket:
         parts.append(f"age group: {age_bracket}")
     if profile.pace:
-        parts.append(f"pace: {profile.pace}")
+        parts.append(f"pace: {PACE_GUIDANCE.get(profile.pace, profile.pace)}")
     if profile.budget_tier:
         parts.append(f"budget: {profile.budget_tier}")
     if profile.interests:

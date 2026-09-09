@@ -6,6 +6,38 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Pace label translated into concrete guidance; real travel-time data deliberately deferred
+
+Asked how `pace` (Leisurely/Balanced/Packed, from onboarding) actually
+reaches the model -- found it was a raw, untranslated label
+(`"pace: Leisurely"`), no more concrete than the bare word itself, with
+no consistent meaning turn to turn. Drafted a mapping and showed it for
+review before writing any code (per the user's explicit ask) -- agreed
+numbers after one round of feedback (Leisurely 3-4 activities/day,
+Balanced 5-6, Packed 6-8), then a second round adding a travel-radius
+dimension on top: Leisurely stays within one neighborhood, Balanced
+allows moderate travel between areas (trim 1-2 activities if spread
+out), Packed can span the whole destination (same trim for travel time
+between farther-apart stops).
+
+Shipped as `PACE_GUIDANCE`, a small static dict in `routers/trips.py`,
+looked up via `.get(profile.pace, profile.pace)` so an unrecognized
+value degrades to the raw string rather than erroring or disappearing.
+2 new tests (translation for all three known labels, fallback for an
+unrecognized one) -- backend suite 412 → 414.
+
+**Real travel-time data was then asked for on top -- correctly scoped
+out as its own feature, not folded in.** This is the previously-tracked
+Maps/routing roadmap item, not a prompt tweak: giving the model an
+actual distance/duration figure means a real grounded data source
+(CLAUDE.md principle #7 -- never let it invent one), which needs a live
+pricing/free-tier check (Google Distance Matrix/Routes API, or a
+production-ready Maps MCP server) before any code gets written -- the
+same check `decisions.md`'s existing Maps/routing entry already called
+for and never completed. Presented three options (qualitative-only
+now / real data as its own researched feature / defer entirely); user
+chose real data as a separate feature -- research not yet started.
+
 ## 2026-09-09 — A traveler's usual trip length now defaults new trips, same soft-instruction pattern as an existing trip's length
 
 `UserProfile.typical_trip_length_days` (collected at onboarding) existed
