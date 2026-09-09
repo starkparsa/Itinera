@@ -422,6 +422,7 @@ def _handle_new_or_edit_trip(
             requested_days=trip_request.days,
             conversation_context=conversation_context,
             user_profile_note=user_profile_note,
+            typical_trip_length_days=profile.typical_trip_length_days if profile else None,
             # Reuse currency/place-context findings gathered earlier in this
             # chat instead of re-running the agent steps on every edit turn.
             # A falsy value (None, or "" -- e.g. from a Q&A-first

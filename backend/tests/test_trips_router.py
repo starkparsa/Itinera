@@ -92,7 +92,7 @@ def test_generate_trip_forwards_requested_days_to_llm_service():
 
     mock_generate.assert_called_once_with(
         "a month in Japan", requested_days=30, conversation_context="", cached_agent_context=None,
-        previous_total_days=None, user_profile_note="",
+        previous_total_days=None, user_profile_note="", typical_trip_length_days=None,
     )
 
 
@@ -111,6 +111,30 @@ def test_generate_trip_forwards_user_profile_note_when_profile_exists():
         client.post("/trips/generate", json={"prompt": "weekend in Lisbon"})
 
     assert mock_generate.call_args.kwargs["user_profile_note"] == "pace: relaxed; budget: mid"
+
+
+def test_generate_trip_forwards_typical_trip_length_when_profile_has_one():
+    db = SessionLocal()
+    try:
+        user = models.User(google_sub=TEST_GOOGLE_SUB, email="test-user@example.com")
+        db.add(user)
+        db.flush()
+        db.add(models.UserProfile(user_id=user.id, typical_trip_length_days=4))
+        db.commit()
+    finally:
+        db.close()
+
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY) as mock_generate:
+        client.post("/trips/generate", json={"prompt": "a trip to Lisbon"})
+
+    assert mock_generate.call_args.kwargs["typical_trip_length_days"] == 4
+
+
+def test_generate_trip_typical_trip_length_is_none_without_a_profile():
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY) as mock_generate:
+        client.post("/trips/generate", json={"prompt": "a trip to Lisbon"})
+
+    assert mock_generate.call_args.kwargs["typical_trip_length_days"] is None
 
 
 def test_age_bracket_handles_a_birthday_not_yet_reached_this_year():

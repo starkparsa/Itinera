@@ -505,6 +505,25 @@ mechanism, no schema change — the data and the append pattern both
 already existed; this only closed the one path that hadn't been wired to
 either yet.
 
+**`typical_trip_length_days` was collected but never read — also closed
+2026-09-09.** Onboarding's `UserProfile.typical_trip_length_days`
+existed in the schema and the form since the original build, but nothing
+downstream ever queried it — a brand-new trip request with no duration
+of its own ("a trip to Lisbon") fell through to `META_INSTRUCTIONS`'s
+generic "a week" = 7 heuristic instead of the traveler's own stated
+usual length. Fixed with the exact same soft-instruction mechanism
+`_infer_trip_meta` already uses for `previous_total_days` (an
+already-established trip length within a conversation) — folded into
+the meta prompt as a default, never a hard override, so the latest
+request's own duration language still wins. Priority, most to least
+specific: `requested_days` (explicit UI field) > `previous_total_days`
+(a trip already exists in this conversation) > `typical_trip_length_days`
+(the profile default) > the model's free estimate — the profile default
+only applies to a conversation's first trip, since an edit turn's
+already-established length is the more specific anchor. No new query
+(`_handle_new_or_edit_trip` already loads `UserProfile` for
+`user_profile_note`), no schema change.
+
 **Manual end-to-end verification stops at the real OAuth handshake.**
 Both dev servers were started for real, live-verified: the backend's own
 Swagger UI lists all three `/profile` endpoints, `/`, `/trips`, and

@@ -382,6 +382,7 @@ def _infer_trip_meta(
     requested_days: int | None,
     conversation_context: str,
     previous_total_days: int | None = None,
+    typical_trip_length_days: int | None = None,
 ) -> tuple[str, int]:
     """Figures out destination and total trip length.
 
@@ -401,20 +402,41 @@ def _infer_trip_meta(
     instruction, not a hard override like `requested_days` -- day count
     must still be changeable by text alone ("make it a week instead"),
     since there's no UI field for it (see CLAUDE.md decision log).
+
+    typical_trip_length_days: the traveler's own stated usual trip length
+    from onboarding (UserProfile.typical_trip_length_days), if set. Same
+    soft-instruction treatment as previous_total_days -- a default to fall
+    back on, not a hard override, since the latest request's own duration
+    language ("a week in Lisbon") must still win. Only applied when
+    previous_total_days is unset: once a trip already exists in this
+    conversation, its established length is the more specific anchor for
+    an edit turn and takes priority over the traveler's general-purpose
+    profile default.
     """
     history_note = f"\n\nEarlier in this conversation: {conversation_context}" if conversation_context else ""
-    previous_days_note = (
-        f"\n\nThis conversation already has a {previous_total_days}-day itinerary. "
-        "Keep the trip at that same length unless the latest request explicitly "
-        "asks for a different number of days or a different-length duration "
-        "(e.g. \"make it a week\", \"add two more days\", \"shorten this to a "
-        "long weekend\"). If it does not ask for a different length, use "
-        f"{previous_total_days} as total_days."
-        if previous_total_days else ""
-    )
+    if previous_total_days:
+        length_note = (
+            f"\n\nThis conversation already has a {previous_total_days}-day itinerary. "
+            "Keep the trip at that same length unless the latest request explicitly "
+            "asks for a different number of days or a different-length duration "
+            "(e.g. \"make it a week\", \"add two more days\", \"shorten this to a "
+            "long weekend\"). If it does not ask for a different length, use "
+            f"{previous_total_days} as total_days."
+        )
+    elif typical_trip_length_days:
+        length_note = (
+            f"\n\nThis traveler's profile says they usually plan {typical_trip_length_days}-day "
+            "trips. Use that as the trip's length unless THIS request explicitly "
+            "states a different number of days or a different-length duration of "
+            "its own (e.g. \"a week in Lisbon\", \"just a long weekend\", \"10 days\"). "
+            f"If it does not state a length of its own, use {typical_trip_length_days} "
+            "as total_days."
+        )
+    else:
+        length_note = ""
     try:
         meta = _call_gemini(
-            f"{META_INSTRUCTIONS}\n\nTrip request: {prompt}{history_note}{previous_days_note}",
+            f"{META_INSTRUCTIONS}\n\nTrip request: {prompt}{history_note}{length_note}",
             response_schema=TripMeta, max_output_tokens=200,
         )
         destination = meta.destination or "Unknown"
@@ -475,6 +497,7 @@ def generate_itinerary(
     cached_agent_context: str | None = None,
     previous_total_days: int | None = None,
     user_profile_note: str = "",
+    typical_trip_length_days: int | None = None,
 ) -> dict:
     """Calls Gemini and returns a complete itinerary, generating it in
     day-range chunks so trip length doesn't degrade output quality.
@@ -502,6 +525,12 @@ def generate_itinerary(
     from UserProfile, not looked up here, so this module stays free of any
     DB dependency. Threaded into every chunk call, same as trip_context.
 
+    typical_trip_length_days: the traveler's own stated usual trip length
+    (UserProfile.typical_trip_length_days), or None if unset -- see
+    _infer_trip_meta's docstring for the exact priority (requested_days,
+    then previous_total_days, then this, then the model's own free
+    estimate). Threaded straight through, unused here beyond that.
+
     The agentic tool-calling steps (agent_service.py: currency conversion,
     paused, and place-context via Wikipedia, added 2026-08-29) and the
     destination/length inference call are all independent of each other,
@@ -524,7 +553,9 @@ def generate_itinerary(
     found_places: list[dict] = []
     if cached_agent_context:
         trip_context = cached_agent_context
-        destination, total_days = _infer_trip_meta(prompt, requested_days, conversation_context, previous_total_days)
+        destination, total_days = _infer_trip_meta(
+            prompt, requested_days, conversation_context, previous_total_days, typical_trip_length_days,
+        )
         # No fresh place-context call happened this turn (the cache above
         # is reused instead), so there's nothing new to persist as a saved
         # place here -- an earlier turn's own found_places, if any, were
@@ -535,6 +566,7 @@ def generate_itinerary(
             place_future = executor.submit(agent_service.gather_place_context_for_itinerary, prompt)
             meta_future = executor.submit(
                 _infer_trip_meta, prompt, requested_days, conversation_context, previous_total_days,
+                typical_trip_length_days,
             )
             currency_context = currency_future.result()
             place_context, found_places = place_future.result()

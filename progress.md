@@ -6,6 +6,37 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — A traveler's usual trip length now defaults new trips, same soft-instruction pattern as an existing trip's length
+
+`UserProfile.typical_trip_length_days` (collected at onboarding) existed
+in the schema but was never read anywhere -- a brand-new trip request
+with no duration language of its own ("a trip to Lisbon") was left
+entirely to the model's own generic guess (`META_INSTRUCTIONS`'s "a
+week" = 7 heuristic), ignoring a real preference the traveler had
+already stated.
+
+Closed with the exact same mechanism `_infer_trip_meta` already uses for
+`previous_total_days` (an already-established trip length within a
+conversation) -- a soft instruction folded into the meta prompt, never a
+hard override: the latest request's own duration language ("a week in
+Lisbon", "10 days") still wins. Priority order, most to least specific:
+`requested_days` (explicit UI field) > `previous_total_days` (this
+conversation already has a generated trip) > `typical_trip_length_days`
+(the traveler's general profile default) > the model's own free
+estimate. The profile default only applies when there's no
+already-established trip in the conversation to anchor to instead.
+
+`routers/trips.py`'s `_handle_new_or_edit_trip` (already querying
+`UserProfile` for `user_profile_note`) now also forwards
+`profile.typical_trip_length_days` straight through
+`generate_itinerary`/`_infer_trip_meta` -- no new query, no schema
+change. 5 new tests (3 in `test_llm_service.py` covering the new note
+and the priority-over-typical-length case, 2 router-level in
+`test_trips_router.py`) -- backend suite 407 → 412. Shipped in the same
+PR as the Q&A personalization fix above, since both are the same
+"profile data that already existed wasn't reaching every prompt it
+should" pattern.
+
 ## 2026-09-09 — Onboarding preferences reach conversational Q&A too, not just itinerary generation
 
 Found while explaining the app's LLM-stabilization prompts to the user:
