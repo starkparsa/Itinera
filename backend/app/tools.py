@@ -24,17 +24,33 @@ the same way: TICKETMASTER_API_KEY's presence
 (ticketmaster_client.TICKETMASTER_API_ENABLED) is its own kill switch,
 independent of the Places key.
 
-All four are reached through the SAME two loops
+A FIFTH tool, compute_travel_time (Google Routes API, billed, added
+2026-09-09), gives real distance/duration between two named places --
+grounds the model's pacing decisions (see routers/trips.py's
+PACE_GUIDANCE) in an actual figure instead of a guess (principle #7).
+This is the previously-tracked Maps/routing roadmap item, scoped down
+deliberately to just this one capability -- no turn-by-turn directions,
+no live traffic (Google's Maps Grounding Lite MCP server bundles those
+plus weather/place-search tools this app already covers elsewhere via
+Open-Meteo/Wikipedia/Places; calling the plain Routes API REST endpoint
+directly, same pattern as every other integration here, avoids both the
+overlap and a new MCP-client dependency for one tool). Reuses
+GOOGLE_PLACES_API_KEY's own kill switch
+(google_routes_client.ROUTES_API_ENABLED) -- same Google Cloud
+project/API key as the Places tools, though Routes API must be
+separately enabled on that project (a Places-enabled key does not
+automatically cover it).
+
+All five are reached through the SAME two loops
 (agent_service.answer_question_with_tools for conversational Q&A/tour-guide
 use, and agent_service.gather_place_context_for_itinerary for
 itinerary-planning background) -- see agent_service.py's module docstring
 for why loops stay split by caching semantics, not by which tool they
-expose. The two Places-backed tools have their own cost-control mechanism
-distinct from a loop-level flag: GOOGLE_PLACES_API_KEY's presence (checked
-via google_places_client.PLACES_API_ENABLED) is itself the kill switch --
-unset it and both functions return {"error": ...} immediately, no network
-call, so Wikipedia-only behavior is unaffected whether or not a Places key
-is configured.
+expose. The Places- and Routes-backed tools each have their own
+cost-control mechanism distinct from a loop-level flag: their API key's
+presence is itself the kill switch -- unset it and the affected
+function(s) return {"error": ...} immediately, no network call, so the
+free tools (Wikipedia, Ticketmaster) are unaffected either way.
 
 TOOL_SCHEMAS is in Gemini's function-calling shape (google.genai.types) as
 of the Gemini migration -- previously Ollama's dict-list shape.
@@ -45,7 +61,12 @@ import requests
 from google.genai import types
 
 from . import weather_service
-from .clients import google_places_client, ticketmaster_client, wikipedia_client
+from .clients import (
+    google_places_client,
+    google_routes_client,
+    ticketmaster_client,
+    wikipedia_client,
+)
 
 _BRIEF_CHAR_CAP = 320  # enforced even if Wikipedia's own extract runs long,
                         # so "brief" stays genuinely brief regardless of topic
@@ -239,6 +260,45 @@ def find_nearby_places(place_type: str, near: str, limit: int = 5) -> dict:
     return {"results": results}
 
 
+def compute_travel_time(origin: str, destination: str, travel_mode: str = "DRIVE") -> dict:
+    """Real travel time and distance between two named places, via
+    Google's Routes API (billed; see google_routes_client.py for the cost
+    controls -- same GOOGLE_PLACES_API_KEY project as the Places tools
+    above). Use this when sequencing a day's activities to check whether
+    back-to-back stops are actually realistic, or to directly answer a
+    travel-time question -- never estimate or guess a travel time
+    yourself (principle #7: this is exactly the kind of fact that must
+    come from real data, not a plausible-sounding invention).
+
+    travel_mode: "DRIVE" (default), "WALK", "BICYCLE", or "TRANSIT" --
+    pick whichever matches how the traveler would realistically get
+    there (e.g. "WALK" for two stops in the same neighborhood).
+
+    Returns {"origin","destination","travel_mode","duration_minutes",
+    "distance_km"} on success, or {"error": ...} if the Routes
+    integration isn't configured, the travel_mode is invalid, or no
+    route could be computed between the two places.
+    """
+    if not google_routes_client.ROUTES_API_ENABLED:
+        return {"error": "Google Routes lookup is not configured"}
+
+    mode = travel_mode.upper()
+    if mode not in google_routes_client.VALID_TRAVEL_MODES:
+        return {"error": f"Invalid travel_mode '{travel_mode}' -- must be one of {google_routes_client.VALID_TRAVEL_MODES}"}
+
+    result = google_routes_client.compute_route(origin, destination, travel_mode=mode)
+    if result is None:
+        return {"error": f"Could not compute a route from '{origin}' to '{destination}'"}
+
+    return {
+        "origin": origin,
+        "destination": destination,
+        "travel_mode": mode,
+        "duration_minutes": round(result["duration_seconds"] / 60),
+        "distance_km": round(result["distance_meters"] / 1000, 1),
+    }
+
+
 def find_events(
     city: str, keyword: str | None = None, start_date: str | None = None, end_date: str | None = None,
 ) -> dict:
@@ -387,6 +447,35 @@ _FIND_NEARBY_PLACES_DECLARATION = types.FunctionDeclaration(
     },
 )
 
+_COMPUTE_TRAVEL_TIME_DECLARATION = types.FunctionDeclaration(
+    name="compute_travel_time",
+    description=(
+        "Get REAL travel time and distance between two named places -- "
+        "use this to check whether sequencing two stops back-to-back in "
+        "the same day is realistic, or to directly answer a travel-time "
+        "question. Never estimate a travel time yourself; call this "
+        "instead. Costs real money per call -- only call when travel "
+        "time genuinely affects a scheduling decision or was directly "
+        "asked about, not for every pair of stops speculatively."
+    ),
+    parameters_json_schema={
+        "type": "object",
+        "properties": {
+            "origin": {"type": "string", "description": "Starting place, e.g. 'the Louvre, Paris'"},
+            "destination": {"type": "string", "description": "Destination place, e.g. 'Notre-Dame, Paris'"},
+            "travel_mode": {
+                "type": "string",
+                "enum": list(google_routes_client.VALID_TRAVEL_MODES),
+                "description": (
+                    "How the traveler would realistically get there -- default DRIVE, "
+                    "but prefer WALK for two stops in the same neighborhood"
+                ),
+            },
+        },
+        "required": ["origin", "destination"],
+    },
+)
+
 _FIND_EVENTS_DECLARATION = types.FunctionDeclaration(
     name="find_events",
     description=(
@@ -428,6 +517,7 @@ _QA_AND_PLANNING_TOOL_DECLARATIONS = [
     _GET_PLACE_DETAILS_DECLARATION,
     _FIND_NEARBY_PLACES_DECLARATION,
     _FIND_EVENTS_DECLARATION,
+    _COMPUTE_TRAVEL_TIME_DECLARATION,
 ]
 
 # Used by agent_service.answer_question_with_tools.
@@ -453,4 +543,5 @@ TOOL_FUNCTIONS = {
     "get_place_details": get_place_details,
     "find_nearby_places": find_nearby_places,
     "find_events": find_events,
+    "compute_travel_time": compute_travel_time,
 }

@@ -6,6 +6,51 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Real travel-time data shipped: compute_travel_time, researched then built
+
+Picked up the travel-time research deferred in the entry below. Verified
+three real facts live before writing code (per CLAUDE.md's own
+discipline, and directly answering what the 2026-09-06 Maps/routing
+entry had left unverified): Google's Maps Grounding Lite MCP server is
+real and GA for its `compute_routes` tool; the Routes API has a genuine
+10,000-free-monthly-events tier; and it reuses the same billing-enabled
+Google Cloud project already backing `GOOGLE_PLACES_API_KEY`, no new
+account needed.
+
+Presented one real architecture call before building: adopt the MCP
+transport wrapper, or call the plain Routes API REST endpoint directly
+(same underlying `compute_routes` capability, same pricing) matching
+every other integration's existing pattern. Went with the direct REST
+call -- this app has zero MCP-client infrastructure today, and adding
+one for a single tool would be new surface for no functional gain.
+
+Built `google_routes_client.py` (raw wrapper) and `tools.compute_travel_time`
+(LLM-facing, same billed-tool discipline as `get_place_details`), added
+to the shared QA/planning tool-calling loops alongside the four existing
+place/event tools -- no new loop, no new kill switch (reuses
+`GOOGLE_PLACES_API_KEY`'s presence check). Adopted only the routing
+capability, deliberately not `search_places`/`lookup_weather` from the
+same MCP bundle -- both would duplicate Wikipedia/Places and Open-Meteo,
+which this app already covers.
+
+**Real gotcha hit during live verification, not a code bug**: the first
+live call returned a genuine `403 SERVICE_DISABLED` -- Routes API needs
+separately enabling on the Google Cloud project even though Places was
+already enabled there. After enabling it, one more call still failed
+before Google's own documented "wait a few minutes to propagate"
+window had passed -- confirmed as a real, observed propagation delay
+by retrying successfully moments later, not a configuration mistake on
+this app's side. Verified live across all four travel modes
+afterward with distinct, realistic numbers (Eiffel Tower -> Louvre:
+46min walking, 23min driving, 12min cycling, 21min transit).
+
+9 new tests (5 for `google_routes_client.py`, 4 for `tools.compute_travel_time`),
+plus 2 existing tests updated to account for the new tool
+(`test_agent_service.py`'s exact-tool-list assertions,
+`test_weather_service.py`'s tool-count assertion) -- backend suite
+414 → 424 (414 already included the pace-mapping entry below's own 2
+tests). `ruff check` clean.
+
 ## 2026-09-09 — Pace label translated into concrete guidance; real travel-time data deliberately deferred
 
 Asked how `pace` (Leisurely/Balanced/Packed, from onboarding) actually

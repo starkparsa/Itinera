@@ -219,6 +219,62 @@ def test_find_nearby_places_error_when_both_geocoders_fail():
     assert "error" in result
 
 
+def test_compute_travel_time_not_configured_returns_error_no_network_call():
+    with patch("app.tools.google_routes_client.ROUTES_API_ENABLED", False), \
+         patch("app.tools.google_routes_client.compute_route") as mock_compute:
+        result = tools.compute_travel_time("A", "B")
+
+    assert "error" in result
+    mock_compute.assert_not_called()
+
+
+def test_compute_travel_time_success_defaults_to_drive():
+    with patch("app.tools.google_routes_client.ROUTES_API_ENABLED", True), \
+         patch(
+             "app.tools.google_routes_client.compute_route",
+             return_value={"duration_seconds": 1530, "distance_meters": 4200},
+         ) as mock_compute:
+        result = tools.compute_travel_time("the Louvre", "Notre-Dame")
+
+    mock_compute.assert_called_once_with("the Louvre", "Notre-Dame", travel_mode="DRIVE")
+    assert result == {
+        "origin": "the Louvre",
+        "destination": "Notre-Dame",
+        "travel_mode": "DRIVE",
+        "duration_minutes": 26,  # 1530s = 25.5min, rounds to 26
+        "distance_km": 4.2,
+    }
+
+
+def test_compute_travel_time_normalizes_mode_case():
+    with patch("app.tools.google_routes_client.ROUTES_API_ENABLED", True), \
+         patch(
+             "app.tools.google_routes_client.compute_route",
+             return_value={"duration_seconds": 600, "distance_meters": 800},
+         ) as mock_compute:
+        result = tools.compute_travel_time("A", "B", travel_mode="walk")
+
+    mock_compute.assert_called_once_with("A", "B", travel_mode="WALK")
+    assert result["travel_mode"] == "WALK"
+
+
+def test_compute_travel_time_rejects_an_invalid_mode_without_a_network_call():
+    with patch("app.tools.google_routes_client.ROUTES_API_ENABLED", True), \
+         patch("app.tools.google_routes_client.compute_route") as mock_compute:
+        result = tools.compute_travel_time("A", "B", travel_mode="TELEPORT")
+
+    assert "error" in result
+    mock_compute.assert_not_called()
+
+
+def test_compute_travel_time_no_route_found_returns_error():
+    with patch("app.tools.google_routes_client.ROUTES_API_ENABLED", True), \
+         patch("app.tools.google_routes_client.compute_route", return_value=None):
+        result = tools.compute_travel_time("Nowhere", "Nowhere Else")
+
+    assert "error" in result
+
+
 def test_find_events_not_configured_returns_error_no_network_call():
     with patch("app.tools.ticketmaster_client.TICKETMASTER_API_ENABLED", False), \
          patch("app.tools.ticketmaster_client.search_events") as mock_search:

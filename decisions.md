@@ -295,14 +295,70 @@ switch, same convention as `GROQ_API_KEY`. *Revisit: if Places billing
 becomes a real cost concern, or when Maps/routing (below) gets built —
 confirm the two features stay non-overlapping.*
 
-## Maps/routing — not built
+## Maps/routing — travel time live, 2026-09-09; full Maps/routing still not built
 
-Reversed twice: OSM-based stack (Nominatim/Overpass/OpenRouteService) →
-Google's official Maps MCP server (once Google shipped one, bundling
-weather-forecast grounding) — **unverified as of the decision**, Google's
-announcement didn't disclose pricing/free-tier/auth flow. *Revisit:
-confirm those three facts live before writing any code against it —
-don't assume the old OSM-based design transfers.*
+Reversed twice before this: OSM-based stack (Nominatim/Overpass/
+OpenRouteService) → Google's official Maps MCP server (once Google
+shipped one, bundling weather-forecast grounding) — unverified at the
+time, Google's announcement hadn't disclosed pricing/free-tier/auth
+flow. *This entry was itself the reason a later request for "real
+travel-time data" was scoped down to just travel time, not the full
+Maps/routing feature — see the pace-mapping session below.*
+
+**Researched live, 2026-09-09, before writing any code.** Confirmed
+three facts Google's announcement hadn't disclosed:
+1. Google's official Maps MCP server exists and is real: **Maps
+   Grounding Lite** (`https://mapstools.googleapis.com/mcp`, Streamable
+   HTTP transport), three tools (`search_places`, `lookup_weather`,
+   `compute_routes`), GA (generally available) for the routing tool
+   specifically — only its separate Resolution API is still
+   experimental.
+2. **Pricing is real and free at this app's scale**: Routes API
+   (`compute_routes`/`Compute Route Matrix`) gets 10,000 free monthly
+   events, then $5.00/1,000 after — verified on Google's own current
+   pricing page, not assumed. 300 requests/minute per project.
+3. **Auth reuses the existing billing-enabled project** — a plain API
+   key via `X-Goog-Api-Key`, the same Google Cloud project/key already
+   used for `GOOGLE_PLACES_API_KEY`. No new billing account. The Routes
+   API does need separately enabling on that project though (confirmed
+   live: the first call returned a real `403 SERVICE_DISABLED` until
+   enabled in Google Cloud Console, and even after enabling, one call
+   still failed before Google's own "wait a few minutes to propagate"
+   window passed — a real, observed propagation delay, not a
+   configuration mistake).
+
+**Built as `compute_travel_time` (tools.py), not the full Maps/routing
+feature.** `search_places`/`lookup_weather` deliberately NOT adopted —
+they'd duplicate Wikipedia/Places and Open-Meteo, which this app already
+covers; same "confirm the two features stay non-overlapping" discipline
+as the Wikipedia/Places entry below. Also called the plain Routes API
+REST endpoint directly (`computeRoutes`), not the MCP transport wrapper
+around the identical underlying capability — this app has zero
+MCP-client infrastructure today (every existing integration is a thin
+REST client wrapped as a Gemini function-calling tool, `google_places_client.py`'s
+exact shape), and pulling in a new MCP client library for one tool
+would be new architectural surface for no functional gain over calling
+the REST endpoint directly. Flagged as a deviation from a literal
+reading of CLAUDE.md principle #8, not a silent one.
+
+New `google_routes_client.py` (raw wrapper, no caching — travel time is
+at least theoretically time-varying, unlike a place's static identity)
+plus `tools.compute_travel_time` (LLM-facing, billed-tool cost
+discipline matching `get_place_details`/`find_nearby_places`). Reached
+through the same two existing tool-calling loops
+(`answer_question_with_tools`, `gather_place_context_for_itinerary`) —
+no new loop, no new kill switch beyond reusing `GOOGLE_PLACES_API_KEY`'s
+presence check. Live-verified against the real dev Google Cloud project
+across all four travel modes (DRIVE/WALK/BICYCLE/TRANSIT) with distinct,
+realistic numbers (Eiffel Tower → Louvre: 46min/3.3km walking, 23min/
+5.7km driving, 12min/3.8km cycling, 21min/4.3km transit).
+
+**No turn-by-turn directions, no live traffic, no map UI — genuinely
+still not built**, and not attempted here. This closes only the
+"ground pacing decisions in a real travel-time figure" gap that came up
+alongside the `PACE_GUIDANCE` mapping above; a real Maps/routing feature
+(an actual map view, real navigation) remains its own future item if
+ever picked up.
 
 ## Weather — resolved
 
