@@ -245,7 +245,7 @@ plain Q&A).
 | Installable-shell PWA (manifest, service worker) | Live, 2026-09-08 — no offline trip data (deliberately out of scope, see `decisions.md`) |
 | Flights (tracking/predicting/booking) | Not built — no backend data source exists at all; deep-link booking scoped, price tracking blocked on a verified free data source |
 | Hotels | Not built |
-| Maps/routing | Not built — planned around Google's Maps MCP server |
+| Maps/routing | Real travel time live, 2026-09-09 (`compute_travel_time`, Google Routes API) — no map UI, turn-by-turn, or live traffic; see `decisions.md` |
 | Cross-trip preference memory (pgvector) | Not built — deliberately last |
 | PDF export | Deferred indefinitely |
 
@@ -266,9 +266,9 @@ click-through of `OnboardingFlow` — a documented runbook now exists
 (`docs/manual-auth-testing.md`, PR #41) but actually running it needs
 the user's own Google credentials, still not automatable. Doesn't block
 the three below:
-1. Build-order item 4: Maps/routing (planned around Google's Maps MCP
-   server — the specific server/pricing/auth details need re-confirming
-   live before writing code, per `decisions.md`'s Maps/routing entry).
+1. ~~Build-order item 4: Maps/routing~~ — the travel-time slice is live
+   (2026-09-09, `compute_travel_time`); a full map UI/turn-by-turn/live
+   traffic feature remains unstarted if ever picked back up.
 2. Resolve the flight price-tracking data-source question
    (Travelpayouts/Aviasales — unverified). Flight tracking is the one
    Trip Hub card still with zero backend data behind it.

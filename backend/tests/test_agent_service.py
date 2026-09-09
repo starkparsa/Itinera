@@ -236,7 +236,9 @@ def test_qa_tools_only_exposes_place_context_schemas():
 
     tool_schema = mock_call.call_args.args[2]
     names = [d.name for d in tool_schema.function_declarations]
-    assert names == ["get_place_context", "get_place_details", "find_nearby_places", "find_events"]
+    assert names == [
+        "get_place_context", "get_place_details", "find_nearby_places", "find_events", "compute_travel_time",
+    ]
     assert "convert_currency" not in names
 
 
@@ -488,7 +490,9 @@ def test_planning_context_only_exposes_place_context_schemas():
 
     tool_schema = mock_call.call_args.args[2]
     names = [d.name for d in tool_schema.function_declarations]
-    assert names == ["get_place_context", "get_place_details", "find_nearby_places", "find_events"]
+    assert names == [
+        "get_place_context", "get_place_details", "find_nearby_places", "find_events", "compute_travel_time",
+    ]
     assert "convert_currency" not in names
 
 
