@@ -6,6 +6,38 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Deleting a chat now purges its trip(s) too
+
+User explicitly reversed a considered, documented design decision from
+2026-08-31: deleting a conversation used to leave any trip it generated
+alive as an "orphan," still fully visible on Your Trips
+(`Trip.conversation_id`'s `ondelete="SET NULL"`, `list_trips`'s own
+comment on surfacing those). Presented the tradeoff before changing
+anything, since it was deliberate, not an oversight -- user chose full
+purge.
+
+`routers/conversations.py`'s `delete_conversation` now explicitly
+deletes every Trip row for that conversation_id (a conversation refined
+across several edit turns has more than one) before deleting the
+conversation -- each Trip's existing `items`/`saved_places` cascades
+handle their own cleanup. Messages are deleted first, not left to the
+Conversation's own cascade -- `Message.trip_id` has no `ON DELETE`
+clause, so a Trip can't be deleted while a message in the same
+conversation still points at it. Reasoned through that ordering before
+writing the deletion code, not found by a failing test after the fact --
+deleting a Trip while a Message still pointed at it via trip_id would
+have been a real FK violation against Postgres (SQLite's tests wouldn't
+have caught it without `PRAGMA foreign_keys=ON`, same class of gap this
+app's own history already has one real incident from).
+
+Updated `Sidebar.tsx`'s delete-confirmation copy too -- it only
+mentioned "full history" before, which is no longer the whole story now
+that the trip goes too.
+
+4 new/changed backend tests. Backend suite: 434 → 436. Frontend: 43
+unaffected (no test pinned the old copy). `ruff check`/`tsc --noEmit`
+clean.
+
 ## 2026-09-09 — Real travel-time data shipped: compute_travel_time, researched then built
 
 Picked up the travel-time research deferred in the entry below. Verified

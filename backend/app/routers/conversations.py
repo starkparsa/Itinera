@@ -159,6 +159,24 @@ def delete_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
+    # Deleting a chat purges everything it produced, not just the chat
+    # thread itself -- explicit product decision, 2026-09-09, reversing
+    # the original "orphaned trip survives" design (see models.py's
+    # Trip.conversation_id comment and routers/trips.py's list_trips
+    # docstring for that original reasoning, and decisions.md for why it
+    # changed). Messages are deleted first, not left to Conversation's
+    # own cascade (`messages` relationship, cascade="all, delete-orphan")
+    # -- some of them reference a trip via Message.trip_id (that FK has
+    # no ON DELETE clause), so a Trip can't be deleted while a message
+    # still points at it. Deleting each Trip via the ORM (not a bulk
+    # query) lets its own existing cascades (items/saved_places,
+    # cascade="all, delete-orphan") clean those up in turn -- no separate
+    # code needed for either.
+    for message in conversation.messages:
+        db.delete(message)
+    trips = db.query(models.Trip).filter(models.Trip.conversation_id == conversation.id).all()
+    for trip in trips:
+        db.delete(trip)
     db.delete(conversation)
     db.commit()
     return {"deleted": True}
