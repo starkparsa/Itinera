@@ -6,6 +6,68 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Itineraries now name real places, not generic descriptions
+
+User reported live, with a screenshot of a real generated Miami trip:
+activities read like "Dinner at a local South Beach restaurant / Try
+fresh coastal seafood" and "Experience South Beach nightlife / Visit a
+lively lounge or bar" -- never an actual restaurant, bar, museum, or
+gallery named anywhere in the itinerary. Asked what happened to
+"get info from Ticketmaster/Places API and give to plan."
+
+Root cause: `find_nearby_places` (Google Places) was already wired into
+`gather_place_context_for_itinerary`'s tool-calling loop, but capped at
+"1-2 calls combined" by explicit prompt instruction -- a deliberate cost
+control that made sense for a short background summary, but left almost
+every activity slot with nothing real to name. Worse, even the 1-2 real
+results that loop did find only ever reached chunk generation as free
+prose in the model's own 2-5 sentence summary, never as structured names
+the chunk prompt could reliably draw from.
+
+Asked the user how aggressive to make the fix (moderate per-day budget
+vs. full "maximal" grounding vs. a prompt-only tweak) -- they chose
+maximal. Built `agent_service.gather_named_place_pool(destination,
+total_days)`: a new, deliberately *deterministic* function (not left to
+the tool-calling loop's own judgment) that sweeps a fixed 8-category list
+(restaurant, cafe, bar, night_club, tourist_attraction, museum, park,
+shopping_mall) via `find_nearby_places`, one call per category, every
+time an itinerary is freshly generated -- 8 billed calls per itinerary
+regardless of length, with the per-category result limit scaling gently
+with trip length (3/day, floored at 5, capped at 15).
+
+The real names are folded into `trip_context` as a by-category text
+block with an explicit "name an actual place from this list, don't
+invent one" instruction -- same anti-fabrication contract every other
+place-grounding feature here already follows. Persistence to
+`SavedPlace` deliberately does NOT save the whole sweep (would flood Trip
+Hub's Saved Places list with unused candidates) -- after generation,
+`generate_itinerary` substring-matches the finished itinerary's
+activity/notes text against the pool and only persists the places
+actually named, through the existing `find_nearby_places` → `SavedPlace`
+path unchanged.
+
+14 new tests (`test_agent_service.py`: the sweep itself -- disabled/
+unresolved-destination short circuits, exactly-once-per-category,
+limit scaling, real names in the text block, anti-invention instruction
+present; `test_llm_service.py`: pool text folded into `agent_context`,
+called with the resolved destination/day-count only on a fresh gather
+(never on a cached turn), only itinerary-used places become
+`found_places`, case-insensitive dedup across days, no `found_places` key
+when nothing pooled was used). Full suite: 476 passed (up from 462).
+
+Live-verified against the real dev Google Places project, not just
+mocked: a real sweep for "Miami, FL" returned genuine named venues in
+every category (Joe's-tier restaurants, CLUB SPACE, Bayside Marketplace,
+Phillip & Patricia Frost Museum of Science, ...). A real, unpinned
+end-to-end `generate_itinerary("a 2 day balanced trip to Miami",
+requested_days=2)` call came back with a real venue named in every single
+dining/nightlife/sightseeing/shopping activity across both days (Bayside
+Marketplace, Sexy Fish Miami, InterContinental Miami by IHG, E11EVEN
+MIAMI, Phillip & Patricia Frost Museum of Science, Pérez Art Museum
+Miami, ...), and 12 of those were persisted as real `SavedPlace` rows.
+See `decisions.md`'s "Place context" entry for the full design rationale
+and cost trade-off.
+
 ## 2026-09-09 — Pace vocabulary made unconditional, closing a real gap in the earlier pace-mapping work
 
 User reported live: "I asked for a 3 day balanced trip why am I getting

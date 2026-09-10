@@ -544,3 +544,111 @@ def test_planning_system_prompt_instructs_brief_default_and_against_inventing():
     assert "brief" in prompt_lower
     assert "error" in prompt_lower
     assert "invent" in prompt_lower
+
+
+# --- gather_named_place_pool (deterministic Google Places category sweep) ---
+
+
+def _places_result(names: list[str]) -> dict:
+    return {"results": [{"name": name, "rating": 4.5, "address": f"{name} Ave", "price_level": None, "open_now": None} for name in names]}
+
+
+def test_named_place_pool_short_circuits_on_unresolved_destination():
+    with patch("app.tools.find_nearby_places") as mock_call:
+        text, tool_calls = agent_service.gather_named_place_pool("Unknown", 3)
+
+    assert text == ""
+    assert tool_calls == []
+    mock_call.assert_not_called()
+
+
+def test_named_place_pool_short_circuits_on_empty_destination():
+    with patch("app.tools.find_nearby_places") as mock_call:
+        text, tool_calls = agent_service.gather_named_place_pool("", 3)
+
+    assert text == ""
+    assert tool_calls == []
+    mock_call.assert_not_called()
+
+
+def test_named_place_pool_short_circuits_when_places_not_configured():
+    with (
+        patch("app.agent_service.google_places_client.PLACES_API_ENABLED", False),
+        patch("app.tools.find_nearby_places") as mock_call,
+    ):
+        text, tool_calls = agent_service.gather_named_place_pool("Miami", 3)
+
+    assert text == ""
+    assert tool_calls == []
+    mock_call.assert_not_called()
+
+
+def test_named_place_pool_sweeps_every_category_exactly_once():
+    with (
+        patch("app.agent_service.google_places_client.PLACES_API_ENABLED", True),
+        patch("app.tools.find_nearby_places", return_value=_places_result(["Some Place"])) as mock_call,
+    ):
+        agent_service.gather_named_place_pool("Miami", 3)
+
+    called_types = [call.args[0] for call in mock_call.call_args_list]
+    assert called_types == agent_service.NAMED_PLACE_CATEGORIES
+    assert mock_call.call_count == len(agent_service.NAMED_PLACE_CATEGORIES)
+
+
+def test_named_place_pool_scales_limit_with_trip_length_within_bounds():
+    with (
+        patch("app.agent_service.google_places_client.PLACES_API_ENABLED", True),
+        patch("app.tools.find_nearby_places", return_value=_places_result([])) as mock_call,
+    ):
+        agent_service.gather_named_place_pool("Miami", 1)
+        limit_for_short_trip = mock_call.call_args.kwargs["limit"]
+
+        mock_call.reset_mock()
+        agent_service.gather_named_place_pool("Miami", 10)
+        limit_for_long_trip = mock_call.call_args.kwargs["limit"]
+
+    assert limit_for_short_trip == 5  # floored, not 3
+    assert limit_for_long_trip == 15  # capped, not 30
+
+
+def test_named_place_pool_includes_real_names_by_category_in_the_prompt_block():
+    def fake_find(place_type, near, limit):
+        if place_type == "restaurant":
+            return _places_result(["Joe's Stone Crab"])
+        if place_type == "bar":
+            return _places_result(["Sweet Liberty"])
+        return {"error": "nothing found"}
+
+    with (
+        patch("app.agent_service.google_places_client.PLACES_API_ENABLED", True),
+        patch("app.tools.find_nearby_places", side_effect=fake_find),
+    ):
+        text, tool_calls = agent_service.gather_named_place_pool("Miami", 3)
+
+    assert "Joe's Stone Crab" in text
+    assert "Sweet Liberty" in text
+    assert "restaurant:" in text
+    assert "bar:" in text
+    assert len(tool_calls) == len(agent_service.NAMED_PLACE_CATEGORIES)  # every attempt recorded, errors included
+
+
+def test_named_place_pool_instructs_using_real_names_not_generic_descriptions():
+    with (
+        patch("app.agent_service.google_places_client.PLACES_API_ENABLED", True),
+        patch("app.tools.find_nearby_places", return_value=_places_result(["Joe's Stone Crab"])),
+    ):
+        text, _tool_calls = agent_service.gather_named_place_pool("Miami", 3)
+
+    assert "invent" in text.lower()
+    assert "generic description" in text.lower()
+
+
+def test_named_place_pool_returns_empty_text_when_every_category_errors():
+    with (
+        patch("app.agent_service.google_places_client.PLACES_API_ENABLED", True),
+        patch("app.tools.find_nearby_places", return_value={"error": "Could not resolve a location for 'Miami'"}),
+    ):
+        text, tool_calls = agent_service.gather_named_place_pool("Miami", 3)
+
+    assert text == ""
+    assert len(tool_calls) == len(agent_service.NAMED_PLACE_CATEGORIES)  # attempts still recorded for logging

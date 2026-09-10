@@ -58,6 +58,7 @@ import logging
 from google.genai import types
 
 from . import gemini_client, tools
+from .clients import google_places_client
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +69,24 @@ AGENT_TOOL_CALLING_ENABLED = False
 QA_TOOL_CALLING_ENABLED = True
 
 PLANNING_TOOL_CALLING_ENABLED = True
+
+# Google Places "included type" categories swept deterministically for
+# every freshly-generated itinerary -- see gather_named_place_pool's
+# docstring. Fixed set, not derived from the request's stated interests:
+# these eight cover the activity types an itinerary actually schedules
+# (dining, nightlife, sightseeing, shopping), and keeping the set fixed
+# keeps the per-itinerary call count predictable rather than scaling with
+# however many interests a profile happens to list.
+NAMED_PLACE_CATEGORIES = [
+    "restaurant",
+    "cafe",
+    "bar",
+    "night_club",
+    "tourist_attraction",
+    "museum",
+    "park",
+    "shopping_mall",
+]
 
 AGENT_SYSTEM_PROMPT = """You are a travel planning assistant with access to \
 a tool for currency conversion. Given a trip request, call the tool only if \
@@ -443,6 +462,87 @@ def gather_place_context_for_itinerary(prompt: str) -> tuple[str, list[dict]]:
     return _run_tool_loop(
         contents, PLANNING_TOOL_SYSTEM_PROMPT, tools.PLANNING_TOOL_SCHEMAS, loop_name="planning_place_context",
     )
+
+
+def gather_named_place_pool(destination: str, total_days: int) -> tuple[str, list[dict]]:
+    """Deterministically sweeps every category in NAMED_PLACE_CATEGORIES via
+    tools.find_nearby_places (Google Places, billed) for the trip's
+    destination, so chunk generation has real, named restaurants/cafes/
+    bars/attractions/etc. to put into an itinerary instead of a generic
+    description -- fixed 2026-09-09 after a real complaint that generated
+    days read like "try fresh coastal seafood" / "visit a lively lounge"
+    with no actual place named anywhere.
+
+    Deliberately NOT left to gather_place_context_for_itinerary's own
+    tool-calling loop, which caps find_nearby_places at 1-2 calls total by
+    design (cost control -- see PLANNING_TOOL_SYSTEM_PROMPT). Given an
+    explicit choice between a cheaper, partial fix and full "maximal"
+    grounding, the maximal option was chosen: one call per category,
+    every time, regardless of how many the model would have decided to
+    make on its own. This is one call per category (len(NAMED_PLACE_CATEGORIES),
+    currently 8) per fresh itinerary generation -- not per day and not per
+    activity slot, since a category search already returns enough distinct
+    named places to cover every day without repeating (and repeating the
+    same search per day against the same city would just return the same
+    top results again, wasting calls rather than adding real coverage).
+
+    limit per category scales gently with trip length (3 per day, floored
+    at 5, capped at 15) so a long trip still gets enough distinct names to
+    avoid reusing the same restaurant twice, without letting a single
+    itinerary's billed-call volume run away.
+
+    Returns (block_of_text, tool_calls) -- block_of_text is "" when the
+    destination is unresolved ("Unknown"/empty) or Places isn't configured
+    or returned nothing usable in any category (never surfaced as an error
+    to the model, same "no data beats a wrong answer" contract as every
+    other agent_service function). tool_calls is every attempted call in
+    the same {"tool","args","result"} shape _run_tool_loop's callers
+    already produce, purely so llm_service.generate_itinerary can log/
+    inspect what was searched -- unlike gather_place_context_for_itinerary,
+    generate_itinerary does NOT pass this list straight through as
+    result["found_places"] (that would flood Trip Hub's Saved Places list
+    with every candidate this function looked at, most of which never make
+    it into the actual itinerary); it instead persists only the places the
+    generated itinerary text actually names -- see generate_itinerary's own
+    "matched_named_places" step.
+    """
+    if not destination or destination == "Unknown" or not google_places_client.PLACES_API_ENABLED:
+        return "", []
+
+    limit = max(5, min(15, total_days * 3))
+    lines: list[str] = []
+    tool_calls: list[dict] = []
+    for place_type in NAMED_PLACE_CATEGORIES:
+        result = tools.find_nearby_places(place_type, destination, limit=limit)
+        tool_calls.append({
+            "tool": "find_nearby_places",
+            "args": {"place_type": place_type, "near": destination, "limit": limit},
+            "result": result,
+        })
+        if "error" in result:
+            continue
+        names = [p["name"] for p in result.get("results", []) if p.get("name")]
+        if names:
+            lines.append(f"{place_type.replace('_', ' ')}: " + ", ".join(names))
+
+    if not lines:
+        return "", tool_calls
+
+    block = (
+        "Real, named places near the destination, by category (from Google "
+        "Places -- use these actual names, not a generic description):\n"
+        + "\n".join(lines)
+        + "\nWhen an activity is dining, nightlife, sightseeing, or "
+        "shopping, name an actual place from the matching category above "
+        "in that activity's title -- e.g. \"Dinner at <real restaurant "
+        "name>\" instead of \"Dinner at a local restaurant\". Use a "
+        "different named place for each such activity rather than "
+        "reusing the same one across days. Never invent a place name that "
+        "isn't in this list or already mentioned in the conversation -- if "
+        "nothing above fits a planned activity, describe it generically "
+        "instead of making a name up."
+    )
+    return block, tool_calls
 
 
 def answer_question_with_tools(

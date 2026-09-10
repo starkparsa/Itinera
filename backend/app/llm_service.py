@@ -639,6 +639,7 @@ def generate_itinerary(
     # the 2026-08-30 code review, not something the "" caching was ever
     # meant to imply for this loop specifically.
     found_places: list[dict] = []
+    named_place_pool: dict[str, list[dict]] = {}
     if cached_agent_context:
         trip_context = cached_agent_context
         destination, total_days = _infer_trip_meta(
@@ -649,20 +650,36 @@ def generate_itinerary(
         # place here -- an earlier turn's own found_places, if any, were
         # already persisted when they were found.
     else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             currency_future = executor.submit(agent_service.gather_trip_context, prompt)
             place_future = executor.submit(agent_service.gather_place_context_for_itinerary, prompt)
             meta_future = executor.submit(
                 _infer_trip_meta, prompt, requested_days, conversation_context, previous_total_days,
                 typical_trip_length_days,
             )
+            destination, total_days = meta_future.result()
+            # Needs a resolved destination, so this can only start once
+            # meta_future is done -- the other two futures above don't
+            # depend on it and keep running concurrently in the meantime.
+            pool_future = executor.submit(agent_service.gather_named_place_pool, destination, total_days)
             currency_context = currency_future.result()
             place_context, found_places = place_future.result()
-            destination, total_days = meta_future.result()
-        # Two independent findings, both optional -- join whichever are
-        # non-empty rather than assuming both ran/found something (either
-        # loop can be individually disabled, and both fail quietly to "").
-        trip_context = " ".join(part for part in (currency_context, place_context) if part)
+            pool_text, pool_tool_calls = pool_future.result()
+        # Three independent findings, all optional -- join whichever are
+        # non-empty rather than assuming all ran/found something (each
+        # loop can be individually disabled, and all fail quietly to "").
+        trip_context = " ".join(part for part in (currency_context, place_context, pool_text) if part)
+        # Indexed by name for the post-generation match step below, not
+        # threaded into any prompt itself -- see
+        # agent_service.gather_named_place_pool's docstring for why the
+        # raw sweep isn't persisted wholesale as result["found_places"].
+        named_place_pool = {
+            (p.get("name") or "").lower(): p
+            for call in pool_tool_calls
+            if "error" not in call["result"]
+            for p in call["result"].get("results", [])
+            if p.get("name")
+        }
 
         # The request truly committed to a specific named event/show
         # (PLANNING_TOOL_SYSTEM_PROMPT's "EVENT_NOT_FOUND:" marker -- never
@@ -692,15 +709,42 @@ def generate_itinerary(
                 if item.get("activity"):
                     covered_activities.append(item["activity"])
 
+    if named_place_pool:
+        # Only the pool entries the generated itinerary actually named make
+        # it into found_places -- not the whole sweep (see
+        # agent_service.gather_named_place_pool's docstring). Substring
+        # match on each item's activity/notes text against every pool
+        # name; case-insensitive since the model may not reproduce a
+        # place's exact casing. A short/generic pool name could in theory
+        # match unrelated text, but a false-positive here only means one
+        # extra SavedPlace row, not a wrong itinerary -- an acceptable
+        # trade-off against the alternative of never crediting a used
+        # place at all.
+        matched_names: set[str] = set()
+        for day in all_days:
+            for item in day.get("items", []):
+                item_text = f"{item.get('activity') or ''} {item.get('notes') or ''}".lower()
+                for name_lower in named_place_pool:
+                    if name_lower in item_text:
+                        matched_names.add(name_lower)
+        for name_lower in matched_names:
+            found_places.append({
+                "tool": "find_nearby_places",
+                "args": {"near": destination},
+                "result": {"results": [named_place_pool[name_lower]]},
+            })
+
     result = {"destination": destination, "days": all_days}
     if trip_context:
         result["agent_context"] = trip_context
     if found_places:
         # Raw {"tool","args","result"} entries from the planning tool loop
-        # (agent_service.gather_place_context_for_itinerary) -- routers/
-        # trips.py filters these to find_nearby_places/get_place_details
-        # only and persists them as models.SavedPlace rows once trip.id
-        # exists. Never surfaced to the LLM prompt itself, only used here.
+        # (agent_service.gather_place_context_for_itinerary) plus any
+        # gather_named_place_pool entries the itinerary actually used --
+        # routers/trips.py filters these to find_nearby_places/
+        # get_place_details only and persists them as models.SavedPlace
+        # rows once trip.id exists. Never surfaced to the LLM prompt
+        # itself, only used here.
         result["found_places"] = found_places
     if requested_days and requested_days > MAX_TOTAL_DAYS:
         result["note"] = f"Requested {requested_days} days exceeds the {MAX_TOTAL_DAYS}-day limit; showing the first {MAX_TOTAL_DAYS} days."
