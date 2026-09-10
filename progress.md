@@ -6,6 +6,20 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Two feature ideas captured, deliberately not built: Spotify playlists, Reddit-sourced place info
+
+Explicit instruction: document only, no code, before expanding either
+idea further. Wrote both up in `decisions.md` with enough of an
+architecture sketch to pick back up later without re-deriving it, and
+flagged what each would actually need resolved first: a live Spotify
+API free-tier/scope check, and for Reddit both a live terms check (its
+2023 API pricing change makes "confirm live, don't assume" matter more
+than usual here) and a real answer to the harder problem underneath --
+Reddit is real data, but not necessarily *reliable* data, which
+principle #7's "ground it in real data" doesn't by itself solve. Added
+one-line entries to `STATUS.md`'s feature table pointing at the
+`decisions.md` writeup. No tests, no suite change -- pure documentation.
+
 ## 2026-09-09 — Full account deletion shipped (DELETE /auth/account)
 
 New feature, no prior version existed: "the ability for the user to
