@@ -71,9 +71,12 @@ export default function PassportBadges({ passport }: { passport: Passport | null
             {passport.stamps.map((stamp) => (
               <li
                 key={stamp.trip_id}
-                className={`rounded-lg border p-3 text-sm font-medium ${ACCENT_CLASSES[stamp.accent] ?? ACCENT_CLASSES.indigo}`}
+                className={`flex flex-col gap-0.5 rounded-lg border p-3 text-sm font-medium ${ACCENT_CLASSES[stamp.accent] ?? ACCENT_CLASSES.indigo}`}
               >
                 {stamp.destination}
+                {stamp.in_progress && (
+                  <span className="text-xs font-normal opacity-80">In progress</span>
+                )}
               </li>
             ))}
           </ul>

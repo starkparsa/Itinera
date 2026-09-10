@@ -312,14 +312,20 @@ class ConversationDetail(BaseModel):
 
 class PassportStampOut(BaseModel):
     """One per real (non-edit-regenerated) Trip row -- see
-    stats_service.compute_trip_stats' is_edit filtering. accent is a
+    stats_service.compute_trip_stats' is_edit filtering -- further
+    deduplicated by passport_service.deduplicate_stamps (same
+    destination + same real start_date collapses to one). accent is a
     passport_service.STAMP_PALETTE name, not a hex value, so the frontend
-    controls the actual color tokens."""
+    controls the actual color tokens. in_progress (from
+    passport_service.is_trip_completed) is True whenever the trip's
+    completion can't be proven from a real date -- never guessed True
+    just because no date was given."""
 
     trip_id: int
     destination: str
     accent: str
     created_at: datetime
+    in_progress: bool
 
     model_config = ConfigDict(from_attributes=True)
 

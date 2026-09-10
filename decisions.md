@@ -1527,3 +1527,103 @@ before ever reaching a browser.
 never touches a different user's data; 4 frontend for
 `DeleteAccountButton.tsx`). Backend suite: 426 → 431. Frontend suite:
 43 → 47. `ruff check`/`tsc --noEmit`/`eslint` clean.
+
+## Real bug found live: html/body's global `overflow: hidden` broke scrolling on every non-chat page — fixed, 2026-09-09
+
+User reported the new Delete-account button (above) wasn't visible, then
+that the page couldn't be scrolled at all. Root cause was `globals.css`:
+a rule added earlier (see the UI styling entries' "chat single-scrollbar"
+fix) applied `html, body { height: 100%; overflow: hidden; }`
+**unconditionally, on every route** — correct for the chat UI (`ChatShell.tsx`'s
+own `h-dvh overflow-hidden` wrapper is meant to be the only scrollable
+region, via its inner message list's own `overflow-y-auto`), but it
+silently broke normal page scrolling on every OTHER route
+(`/profile`, `/trips`, `/login`) the moment their content grew past one
+viewport — there was no scrollbar anywhere for the user to reach.
+`/profile`'s Danger Zone section (present in the DOM, confirmed via the
+delete-account tests) was simply unreachable.
+
+**Fixed by scoping the lock to a `.chat-scroll-lock` class**, toggled on
+`<html>`/`<body>` by a small mount/unmount effect inside `ChatShell.tsx`
+itself — the lock only applies while a chat-shaped route ("/" or
+"/trips/[tripId]") actually has that component mounted, and is removed
+the instant it unmounts (navigating to `/profile`, etc.), restoring
+normal document scrolling everywhere else. `max-width: 100vw` (a
+harmless, page-agnostic horizontal-overflow guard) stays unconditional
+on `html`/`body`; only the vertical lock moved.
+
+No test added for the effect itself — `ChatShell.tsx` has real router/
+auth/data-fetching dependencies with no existing mocking infrastructure
+in this test suite, and standing that up was judged disproportionate to
+a three-line `classList.add`/`remove` effect. Verified live instead: a
+signed-out `/login` page (no `ChatShell` mounted) now measures
+`overflow: visible` on both `html` and `body` via a direct
+`getComputedStyle` check. *Revisit: if `ChatShell.tsx` ever gains proper
+test infrastructure for other reasons, backfill a mount/unmount
+assertion for this class then.*
+
+## Passport stamp deduplication + in-progress status — live, 2026-09-09
+
+Real bug reported from live data: the same destination could appear as
+many separate stamps (e.g. "Miami" ×6) — `GET /gamification/passport`
+made one stamp per non-edit `Trip` row with zero deduplication, and
+`generate_trip` creates a fresh `Trip` row on every `new_trip`-classified
+turn, so re-asking for the same city (testing, demoing, or genuinely
+re-planning) always added another stamp. User specified the exact rule:
+collapse duplicates only when the **date** also matches; never collapse
+when there's no date to compare; and show "In progress" on a stamp whose
+trip isn't confirmed complete.
+
+**`passport_service.py` gained two pure functions** (same "no DB access,
+trivially testable" shape as its existing `accent_for_destination`):
+- `deduplicate_stamps(trips)` — collapses trips sharing both a
+  destination (case/whitespace-insensitive) AND a real `start_date` into
+  one stamp, keeping the earliest (callers pass trips ordered by
+  `created_at`). A trip with `start_date is None` is **never** collapsed
+  with anything, including another dateless trip to the same
+  destination — with no date to compare, there's no way to tell "the
+  same trip asked twice" from "two separate trips to the same city," and
+  guessing would violate the same principle #7 discipline
+  `is_trip_completed` below follows. This was the user's explicit,
+  deliberate call, confirmed in their own words ("they can be created if
+  there is no date") — **existing dateless duplicates in the real dev
+  data are not retroactively cleaned up by this fix**, only future
+  same-date repeats stop stacking.
+- `is_trip_completed(start_date, total_days)` — True only when a real
+  `start_date` plus a real day count together prove the trip's date
+  range has already passed. No `start_date`, or zero itinerary days,
+  always reads as **not** completed (`in_progress: true` in the API) —
+  never guessed complete just because a trip looks old, the same "no
+  data beats a wrong answer" default this app already applies to
+  weather/place context.
+
+`routers/gamification.py`'s `get_passport` now eager-loads each trip's
+`items` (`selectinload`, avoiding an N+1) to compute a real day count,
+runs the dedup pass before building stamps, and sets each stamp's new
+`in_progress` field. `PassportStampOut`/`PassportStamp` (backend schema
+and frontend type) both gained the field; `PassportBadges.tsx` renders
+"In progress" under the destination when set.
+
+**A real test-infrastructure gap found while writing this, not a logic
+bug**: the new dedup tests post two "new trip" prompts in one test —
+`test_gamification_router.py` had never mocked `classify_intent` before
+(every existing test only ever posted once), so those two prompts hit
+the *real* Gemini classifier live. It occasionally classified the second
+"another 5 days in Paris" as `edit_trip` rather than `new_trip`
+(filtered out of stamps entirely, since only non-edit trips get one) —
+flaky exactly once, in a full-suite run, and gone (plus a ~40% suite
+runtime drop) the moment `classify_intent` was mocked like every other
+test file already does. `FAKE_ITINERARY`'s shape in this file was also
+found to use `"items"` as its top-level key where `routers/trips.py`
+actually reads `"days"` — a pre-existing, harmless quirk for every test
+that doesn't check item counts, but real enough that the one new test
+needing actual `ItineraryItem` rows needed its own correctly-shaped
+fixture instead.
+
+17 new/changed backend tests (10 pure-function tests in
+`test_passport_service.py`, 7 integration tests in
+`test_gamification_router.py`), 2 new/changed frontend tests
+(`PassportBadges.test.tsx`). Backend suite: 431 → 455 (455 confirmed
+stable across two full consecutive runs after the `classify_intent` fix,
+down from a flaky ~76-122s to a steady ~35-47s). Frontend suite: 47 →
+48. `ruff check`/`tsc --noEmit`/`eslint` clean.

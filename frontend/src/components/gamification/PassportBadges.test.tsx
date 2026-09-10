@@ -37,7 +37,7 @@ describe("PassportBadges", () => {
       level: 2,
       xp_points: 110,
       trip_count: 1,
-      stamps: [{ trip_id: 1, destination: "Lisbon", accent: "teal", created_at: "2026-09-01T00:00:00" }],
+      stamps: [{ trip_id: 1, destination: "Lisbon", accent: "teal", created_at: "2026-09-01T00:00:00", in_progress: false }],
       achievements: [
         { code: "first_trip", label: "First Trip", description: "Planned your first itinerary.", tier: "Common", earned_at: "2026-09-01T00:00:00" },
       ],
@@ -47,6 +47,19 @@ describe("PassportBadges", () => {
     expect(screen.getByText("Lisbon")).toBeInTheDocument();
     expect(screen.getByText("First Trip")).toBeInTheDocument();
     expect(screen.getByText("Common")).toBeInTheDocument();
+    expect(screen.queryByText("In progress")).not.toBeInTheDocument();
+  });
+
+  it("labels a stamp \"In progress\" when its trip isn't confirmed complete", () => {
+    const passport: Passport = {
+      ...EMPTY_PASSPORT,
+      trip_count: 1,
+      stamps: [{ trip_id: 1, destination: "Lisbon", accent: "teal", created_at: "2026-09-01T00:00:00", in_progress: true }],
+    };
+    renderWithToast(passport);
+
+    expect(screen.getByText("Lisbon")).toBeInTheDocument();
+    expect(screen.getByText("In progress")).toBeInTheDocument();
   });
 
   it("toasts once per newly unlocked code on mount", () => {
