@@ -806,6 +806,23 @@ def test_generate_conversation_title_fallback_truncates_a_long_prompt():
     assert result == "a" * 60 + "..."
 
 
+def test_generate_conversation_title_failure_is_logged_not_silent(caplog):
+    # Regression test (2026-09-10): a real conversation's title silently
+    # fell back to the raw prompt with nothing in the logs to explain why
+    # -- same class of gap the 2026-08-31 architecture review already
+    # fixed for agent_service.py's tool-calling loops. The fallback
+    # behavior itself is correct and unchanged (a conversation must never
+    # fail to be created just because titling it failed); this only
+    # asserts the failure is now visible.
+    with (
+        patch("app.llm_service._call_gemini", side_effect=RuntimeError("quota exceeded")),
+        caplog.at_level("ERROR", logger="app.llm_service"),
+    ):
+        llm_service.generate_conversation_title("plan a trip to Peru")
+
+    assert any("generate_conversation_title" in r.message and "failed" in r.message for r in caplog.records)
+
+
 def test_classify_intent_failure_fails_open_tour_guide_requested_false():
     # Same fail-open case as test_classify_intent_failure_fails_open_to_new_trip,
     # asserted specifically on the tour_guide_requested slot -- a classifier
