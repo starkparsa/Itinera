@@ -25,7 +25,7 @@ flowchart TB
         API["POST /trips/generate\n+ /conversations/*\n+ /auth/*"]
         Auth["auth.py: JWT verify"]
         LLM[llm_service.py]
-        Agent[agent_service.py\n3 tool-calling loops]
+        Agent[agent_service.py\n3 tool-calling loops +\n1 deterministic Places sweep]
         Tools[tools.py]
         Weather[weather_service.py]
         DateR[date_resolver.py]
@@ -40,6 +40,9 @@ flowchart TB
         OpenMeteo[(Open-Meteo)]
         Frankfurter[(Frankfurter)]
         Wikipedia[(Wikipedia API)]
+        Places[(Google Places API)]
+        Ticketmaster[(Ticketmaster API)]
+        Routes[(Google Routes API)]
     end
 
     subgraph Data
@@ -66,6 +69,9 @@ flowchart TB
     Agent --> Tools
     Tools -->|convert_currency| Frankfurter
     Tools -->|get_place_context| Wikipedia
+    Tools -->|get_place_details,\nfind_nearby_places| Places
+    Tools -->|find_events| Ticketmaster
+    Tools -->|compute_travel_time| Routes
     Weather --> OpenMeteo
     GCal -->|push events,\nrefresh tokens| Google
 
@@ -104,7 +110,7 @@ flowchart TD
     subgraph PBranch["new_trip / edit_trip branch"]
         direction TB
         P0["conversation.tour_guide_mode = False\n(unconditional — talking about\nplanning again always clears it)"]
-        P1["llm_service.generate_itinerary\n_infer_trip_meta (destination, day count)\n+ concurrent gather step:\n  currency loop, place-context loop\n(both agent_service.py, once per\nconversation, cached after)"]
+        P1["llm_service.generate_itinerary\n_infer_trip_meta (destination, day count)\n+ concurrent gather step:\n  currency loop, place-context loop,\n  named-place pool sweep\n(all agent_service.py, once per\nconversation, cached after)"]
         P2["_generate_chunk per CHUNK_SIZE_DAYS\nwindow (structured output,\nresponse_schema)"]
         P3["date_resolver.resolve_trip_start_date"]
         P4["Create Trip + ItineraryItem rows"]
@@ -118,14 +124,28 @@ flowchart TD
     Persist --> Response(["TripResponse JSON"])
 ```
 
-## 3. The three isolated tool-calling loops
+## 3. The three tool-calling loops, plus one deterministic sweep
 
 `agent_service.py` runs three **deliberately separate** Gemini
 function-calling loops — same underlying mechanism, different flags,
 different schemas, different caching rules, on purpose (so flipping one
 loop's kill switch can never make another loop's tool reachable, and so
 each loop's caching behavior matches what that data actually needs — see
-[`decisions.md`](../decisions.md)'s "Place context" entry for the full reasoning):
+[`decisions.md`](../decisions.md)'s "Place context" entry for the full
+reasoning). `QA_TOOL_SCHEMAS` and `PLANNING_TOOL_SCHEMAS` both point at
+the same five-tool declaration list (`get_place_context`,
+`get_place_details`, `find_nearby_places`, `find_events`,
+`compute_travel_time`) — only `CURRENCY_TOOL_SCHEMAS` (currency's own
+loop) is a different, single-tool set.
+
+Alongside those three *model-decided* loops, `gather_named_place_pool`
+(added 2026-09-09, see `decisions.md`) is **not** a tool-calling loop at
+all — it calls `tools.find_nearby_places` directly, once per fixed
+category, with no model in the loop deciding whether or how many times
+to call it. Added because the planning loop's own judgment capped
+`find_nearby_places` at 1-2 calls total (a cost control that left most
+of an itinerary's activities with no real place to name) — see this
+file's section 2, `P1`.
 
 ```mermaid
 flowchart LR
@@ -140,7 +160,7 @@ flowchart LR
     subgraph "answer_question_with_tools (Q&A place context)"
         direction TB
         Q1["QA_TOOL_CALLING_ENABLED\n(True)"]
-        Q2["tools.QA_TOOL_SCHEMAS\n(get_place_context only)"]
+        Q2["tools.QA_TOOL_SCHEMAS\n(5 tools: place_context,\nplace_details, find_nearby_places,\nfind_events, compute_travel_time)"]
         Q3["NEVER cached —\nfresh every question turn\n(a different place can be\nasked about each time)"]
         Q1 --> Q2 --> Q3
     end
@@ -148,14 +168,26 @@ flowchart LR
     subgraph "gather_place_context_for_itinerary (planning)"
         direction TB
         P1["PLANNING_TOOL_CALLING_ENABLED\n(True)"]
-        P2["tools.PLANNING_TOOL_SCHEMAS\n(get_place_context only)"]
+        P2["tools.PLANNING_TOOL_SCHEMAS\n(same 5 tools as QA)"]
         P3["Cached forever in\nConversation.agent_context\n(once per conversation,\nsame slot currency uses)"]
         P1 --> P2 --> P3
     end
 
+    subgraph "gather_named_place_pool (deterministic sweep, not a loop)"
+        direction TB
+        N1["No model decision —\nalways runs on a fresh gather"]
+        N2["tools.find_nearby_places,\ncalled once per fixed category\n(8 categories: restaurant, cafe,\nbar, night_club, tourist_attraction,\nmuseum, park, shopping_mall)"]
+        N3["Real names folded into\ntrip_context; only itinerary-used\nnames later persisted as\nSavedPlace rows"]
+        N1 --> N2 --> N3
+    end
+
     Tool["tools.get_place_context()\n(clients/wikipedia_client.py)"]
+    PlacesTool["tools.find_nearby_places()\n(clients/google_places_client.py)"]
     Q2 -.->|same underlying tool fn| Tool
     P2 -.->|same underlying tool fn| Tool
+    Q2 -.->|same underlying tool fn| PlacesTool
+    P2 -.->|same underlying tool fn| PlacesTool
+    N2 -.->|same underlying tool fn,\ncalled directly not via a loop| PlacesTool
 ```
 
 ## 4. Data model
