@@ -6,6 +6,39 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Full account deletion shipped (DELETE /auth/account)
+
+New feature, no prior version existed: "the ability for the user to
+delete their data completely when they delete their profile." Confirmed
+scope before building since it's irreversible and touches auth (full
+account deletion vs. wipe-and-keep-logged-in; a real profile-page button
+vs. backend-only) -- user chose full deletion with a real button.
+
+Refactored `routers/conversations.py`'s `delete_conversation` into a
+reusable `purge_conversation(db, conversation)` (the same
+messages-before-trips FK-ordering fix from the "purge a chat's trips"
+work above), so the new `delete_account` endpoint reuses it once per
+conversation instead of re-solving that ordering problem. Then removes
+`UserProfile`/`GoogleCalendarCredential`/`UserStats`/`UserAchievement`
+(bulk deletes, no ORM children to worry about), then any
+conversation-less orphan trip, then the `User` row itself. Deliberately
+does NOT revoke the Google OAuth grant at Google's end -- a distinct
+piece of work from deleting this app's own copy of the data, noted as a
+scope line rather than silently skipped.
+
+`DeleteAccountButton.tsx` on `/profile`, same confirm-before-destroy
+`AlertDialog` pattern `Sidebar.tsx` already uses, signs the user out
+immediately on success. Real markup bug caught by a test before ever
+reaching a browser: `<AlertDialogTrigger asChild><Button>` produced two
+nested `<button>` elements, since this UI kit (`@base-ui/react`) doesn't
+support `asChild` merging the way Radix does -- fixed by applying
+`buttonVariants(...)` to the trigger's own className directly, matching
+how `Sidebar.tsx`'s own delete-chat trigger already does it.
+
+9 new tests (5 backend, mirroring `test_ownership_isolation.py`'s
+two-user pattern; 4 frontend). Backend suite: 426 → 431. Frontend:
+43 → 47. `ruff check`/`tsc --noEmit`/`eslint` clean.
+
 ## 2026-09-09 — Deleting a chat now purges its trip(s) too
 
 User explicitly reversed a considered, documented design decision from
