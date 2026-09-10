@@ -647,7 +647,7 @@ def generate_trip(
         if not conversation:
             raise HTTPException(status_code=404, detail="Conversation not found")
     else:
-        title = trip_request.prompt[:60] + ("..." if len(trip_request.prompt) > 60 else "")
+        title = llm_service.generate_conversation_title(trip_request.prompt)
         conversation = models.Conversation(user_id=user.id, title=title)
         db.add(conversation)
         db.flush()

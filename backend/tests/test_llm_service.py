@@ -7,6 +7,7 @@ from app import llm_service
 from app.llm_service import (
     ChunkItineraryDay,
     ChunkItineraryItem,
+    ConversationTitleResult,
     IntentResult,
     ItineraryChunk,
     TripMeta,
@@ -25,6 +26,20 @@ def mock_agent_context():
         patch("app.llm_service.agent_service.gather_place_context_for_itinerary", return_value=("", [])),
     ):
         yield
+
+
+@pytest.fixture(autouse=True)
+def mock_conversation_title():
+    # Shadows conftest.py's own autouse fixture of the same name (pytest
+    # resolves the closest-scoped fixture first) -- that one stubs
+    # generate_conversation_title itself, a sane default for every OTHER
+    # test file that just wants conversation creation to not make a real
+    # Gemini call for a title it doesn't care about. This file's own tests
+    # test generate_conversation_title's actual internals directly, so
+    # that stub would make them meaningless (every call would return the
+    # stub's canned answer regardless of how _call_gemini is mocked). A
+    # no-op override for this file only.
+    yield
 
 
 def _chunk(day_activity_pairs: list[tuple[int, str]]) -> ItineraryChunk:
@@ -593,6 +608,42 @@ def test_classify_intent_extracts_tour_guide_requested():
         assert llm_service.classify_intent(
             "can you be my tour guide and take me through this place", "",
         ) == ("question", True)
+
+
+def test_generate_conversation_title_returns_the_models_title():
+    with patch(
+        "app.llm_service._call_gemini",
+        return_value=ConversationTitleResult(title="NYC For Alex O'Connor's Show"),
+    ):
+        assert llm_service.generate_conversation_title(
+            "I want to go to New York to go to Alex O'Connor's show",
+        ) == "NYC For Alex O'Connor's Show"
+
+
+def test_generate_conversation_title_truncates_a_too_long_title():
+    long_title = "A " * 40
+    with patch("app.llm_service._call_gemini", return_value=ConversationTitleResult(title=long_title)):
+        result = llm_service.generate_conversation_title("plan a trip")
+
+    assert len(result) <= 60
+
+
+def test_generate_conversation_title_falls_back_to_prompt_truncation_on_empty_title():
+    with patch("app.llm_service._call_gemini", return_value=ConversationTitleResult(title="")):
+        assert llm_service.generate_conversation_title("plan a trip to Peru") == "plan a trip to Peru"
+
+
+def test_generate_conversation_title_falls_back_on_failure():
+    with patch("app.llm_service._call_gemini", side_effect=RuntimeError("schema mismatch")):
+        assert llm_service.generate_conversation_title("plan a trip to Peru") == "plan a trip to Peru"
+
+
+def test_generate_conversation_title_fallback_truncates_a_long_prompt():
+    long_prompt = "a" * 100
+    with patch("app.llm_service._call_gemini", side_effect=RuntimeError("down")):
+        result = llm_service.generate_conversation_title(long_prompt)
+
+    assert result == "a" * 60 + "..."
 
 
 def test_classify_intent_failure_fails_open_tour_guide_requested_false():
