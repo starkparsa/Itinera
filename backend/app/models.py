@@ -110,14 +110,18 @@ class Trip(Base):
     id = Column(Integer, primary_key=True, index=True)
     # Indexed -- see Conversation.user_id's comment above.
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    # ondelete="SET NULL": deleting a conversation shouldn't be blocked by (or
-    # cascade-delete) trips it produced -- Postgres (like the MySQL this
-    # project migrated off of, see decisions.md's Database entry) enforces
-    # FK constraints by default (unlike SQLite, which is why this only
-    # surfaced against a real database), so without this, deleting any
-    # conversation that has generated a trip raises an IntegrityError. The
-    # trip and its itinerary survive; it just becomes unlinked from the
-    # (now-gone) chat thread.
+    # ondelete="SET NULL": a DB-level safety net, not this app's actual
+    # delete behavior -- without it, Postgres (like the MySQL this project
+    # migrated off of, see decisions.md's Database entry) would raise an
+    # IntegrityError on any raw/ad hoc conversation delete that doesn't go
+    # through routers/conversations.py's own explicit purge logic. As of
+    # 2026-09-09 (explicit product decision, reversing this column's
+    # original "orphan survives" design -- see decisions.md), deleting a
+    # chat through the real /conversations/{id} DELETE endpoint explicitly
+    # deletes every Trip row with this conversation_id first (which
+    # cascades to that trip's own items/saved_places via their own
+    # relationships below) -- SET NULL only fires for a path that skips
+    # that endpoint entirely, which no code in this app currently does.
     # Indexed for the same reason as every other FK here -- looked up on
     # every question/edit turn (routers/trips.py's latest_trip/previous_trip
     # queries) and on every conversation reload.

@@ -78,8 +78,8 @@ export default function Sidebar({
                     <AlertDialogHeader>
                       <AlertDialogTitle>Delete this chat?</AlertDialogTitle>
                       <AlertDialogDescription>
-                        &quot;{conv.title || "New chat"}&quot; and its full history will be permanently deleted.
-                        This can&apos;t be undone.
+                        &quot;{conv.title || "New chat"}&quot;, its full history, and any trip it planned will
+                        all be permanently deleted. This can&apos;t be undone.
                       </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>

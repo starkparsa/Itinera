@@ -693,8 +693,11 @@ def list_trips(
     the same trip duplicated once per edit -- confirmed live (a single
     Miami conversation refined 4 times appeared as 4 separate "Miami"
     cards). Only the latest Trip per conversation_id is shown here;
-    conversation_id-less trips (an orphan whose conversation was deleted,
-    or one predating conversation linkage) each stand on their own.
+    conversation_id-less trips (one predating conversation linkage, or a
+    genuine orphan from some path that skipped routers/conversations.py's
+    own delete logic -- see models.py's Trip.conversation_id comment;
+    deleting a chat through the real endpoint no longer creates new
+    orphans as of 2026-09-09) each stand on their own.
 
     Two separate queries unioned, not one GROUP BY on
     coalesce(conversation_id, id) -- that first version had a real

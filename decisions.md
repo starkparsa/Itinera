@@ -1355,3 +1355,48 @@ the right foundation to extend (the service worker already exists and is
 registered) — but the caching strategy for per-user, server-owned data
 is a new design question, not a small addition to `sw.js`'s current
 five-asset allowlist.*
+
+## Deleting a chat now purges its trip(s) too — reversed, 2026-09-09
+
+**Original design (2026-08-31, see models.py's `Trip.conversation_id`
+comment): deleting a conversation deliberately left any trip it
+generated alive, just unlinked** (`ondelete="SET NULL"` on the FK) — the
+reasoning at the time was that a real itinerary shouldn't vanish just
+because someone cleared a chat thread, and `routers/trips.py`'s
+`list_trips` explicitly kept surfacing these as standalone "orphan"
+cards on Your Trips.
+
+**User explicitly reversed this**: "when I delete a chat I want a purge
+in the database as well." Presented the exact tradeoff (trip survives
+vs. everything gone) before changing anything, since this was a
+considered, documented decision, not an oversight — user chose full
+purge.
+
+`routers/conversations.py`'s `delete_conversation` now explicitly
+deletes every `Trip` row sharing that `conversation_id` (there can be
+several — `generate_trip` creates a new Trip row per new_trip/edit_trip
+turn, never updates one in place, same fact `list_trips`'s own docstring
+already documents) before deleting the conversation itself. Each Trip's
+own existing ORM cascades (`items`/`saved_places`,
+`cascade="all, delete-orphan"`) clean up its `ItineraryItem`/`SavedPlace`
+rows in turn — no new cascade code needed there.
+
+**Ordering detail that would otherwise 500**: `Message.trip_id` has no
+`ON DELETE` clause, so a Trip can't be deleted while a message in the
+same conversation still references it. Messages are deleted explicitly
+first (not left to `Conversation.messages`'s own cascade, which would
+otherwise run *after* the Trip deletion the code needs to do first).
+
+The FK's `ondelete="SET NULL"` stays as a DB-level safety net for any
+path that skips this endpoint's explicit logic (none currently exist) —
+removing it isn't necessary since the real deletion now happens in
+Python before the DB constraint would ever need to fire. Frontend's
+delete-confirmation copy (`Sidebar.tsx`) updated to say the trip goes
+too, not just "its full history," so this isn't a surprise.
+
+4 new/changed backend tests (purges a single trip's Trip/ItineraryItem
+rows; purges every Trip row across multiple edits in one conversation;
+the original does-not-500 regression test kept, renamed since its old
+name asserted the trip survives, which is no longer true). Backend
+suite: 434 → 436. Frontend suite unaffected (43, no test asserted the
+old copy text). `ruff check`/`tsc --noEmit` clean.
