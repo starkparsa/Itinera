@@ -248,6 +248,8 @@ plain Q&A).
 | Maps/routing | Real travel time live, 2026-09-09 (`compute_travel_time`, Google Routes API) — no map UI, turn-by-turn, or live traffic; see `decisions.md` |
 | Cross-trip preference memory (pgvector) | Not built — deliberately last |
 | PDF export | Deferred indefinitely |
+| Spotify travel playlists | Not built — considered 2026-09-09, needs a live free-tier/API-scope check before any code (see `decisions.md`) |
+| Reddit-sourced place info (real traveler opinions) | Not built — considered 2026-09-09, needs a live free-tier/terms check and a real answer to the content-quality problem before any code (see `decisions.md`) |
 
 ## Next action
 

@@ -1318,3 +1318,70 @@ the right foundation to extend (the service worker already exists and is
 registered) — but the caching strategy for per-user, server-owned data
 is a new design question, not a small addition to `sw.js`'s current
 five-asset allowlist.*
+## Spotify playlists + Reddit-sourced place info — considered, 2026-09-09, deliberately not built yet
+
+Two ideas raised together, explicitly as notes to expand later, not to
+build now — captured here so neither gets silently lost, same reason
+the shareable-passport-card/seasonal-badges entry above exists.
+
+**Spotify integration: a curated travel playlist per trip.** Concept: a
+short, real playlist that pairs with a trip's destination/vibe (e.g. a
+genre or scene associated with the destination, or matched to
+pace/mood — a "Leisurely" trip and a "Packed" one plausibly want
+different energy), surfaced as its own Trip Hub card or folded into the
+itinerary the way weather/events already are. Real open questions
+before any code:
+- **Free-tier check, live, before writing anything** (CLAUDE.md's
+  $0-budget principle) — Spotify's Web API's catalog search is free via
+  the client-credentials flow (no per-user login needed for public
+  data), but confirm current terms and whether the specific
+  "recommendations"-style endpoint this would want is still available
+  under it — Spotify's API surface has changed access tiers before.
+- **Scope: suggestions only, or save-to-account?** A curated list
+  shown in the UI needs only client-credentials auth (simple, matches
+  this app's existing pattern for Places/Ticketmaster — no user-facing
+  OAuth). Letting a user save the playlist to their own Spotify account
+  would need real per-user OAuth (a new, bigger auth surface, on top of
+  Google's), and should not be assumed as in-scope without a separate
+  decision.
+- **Tool shape, if built**: same pattern as `find_events`/
+  `compute_travel_time` — a thin `spotify_client.py` (raw API wrapper)
+  plus a `tools.py` function returning a small, flat track list
+  (name/artist/preview link), reached through the existing QA/planning
+  tool-calling loops, with the same "never invent a track, say so if
+  the API found nothing" discipline every other tool here already
+  follows.
+
+**Reddit-sourced place info: real traveler opinions as a fourth data
+source.** Concept: `get_place_context` (Wikipedia, encyclopedic) and
+`get_place_details`/`find_nearby_places` (Google Places, structured/
+current) both already exist, but neither captures "what real travelers
+actually say" — hidden gems, warnings, first-hand tips — the way a
+relevant subreddit thread (r/travel, or a city/country-specific
+subreddit) can. Real open questions before any code, bigger than
+Spotify's:
+- **Free-tier/terms check, live, before writing anything** — Reddit's
+  API pricing changed substantially in 2023 for higher-volume/
+  commercial use; whether this app's likely call volume stays under a
+  genuinely free tier needs confirming against Reddit's *current* terms,
+  not assumed from memory, exactly the same discipline already applied
+  to Maps/routing and the Google Maps MCP server above.
+- **Content-quality problem this data source has that the other three
+  don't**: Wikipedia/Places/Ticketmaster are curated or structured;
+  Reddit comments are unstructured opinions, sometimes wrong, sometimes
+  out of date, occasionally in bad faith. Grounding a prompt in "real
+  data" (principle #7) is supposed to prevent invented facts — but real
+  data that's itself unreliable doesn't fully solve that problem, it
+  relocates it. Any real design needs an actual answer for this (e.g.
+  requiring a comment-score/age threshold, summarizing multiple threads
+  rather than quoting one, explicitly labeling it as "traveler opinion,"
+  not verified fact) — not solved here, flagged as the hard part.
+- **Architecture sketch, if built**: a `reddit_client.py` (raw wrapper
+  around Reddit's search API, OAuth "read-only" app auth, no per-user
+  login needed) plus a `tools.py` function (e.g.
+  `get_traveler_opinions(destination, topic)`), same tool-calling-loop
+  integration as every other place tool here.
+
+**Both deliberately deferred, not scoped further than this, per explicit
+instruction — do not start building either without a real go-ahead and
+the live free-tier/terms checks above.**
