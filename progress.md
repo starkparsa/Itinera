@@ -6,6 +6,42 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — A real signed-in click-through surfaced a real gap: committed-event misses now block the itinerary entirely
+
+Ran the real signed-in click-through requested earlier this session
+(servers up, real Google sign-in, real `/profile` 200, real trip
+generation via the actual browser). Verified: user row real, onboarding
+data real, Calendar credential real, `Trip #41` created for real just
+now. One thing this surfaced: a request that genuinely committed to a
+specific show ("I want to go to New York to go to Alex O'Connor's
+show") got a real Ticketmaster miss (verified directly -- no scheduled
+show under that name or his stage name, "Rex Orange County", any
+spelling tried), but the itinerary still planned a full generic New York
+trip, with "not currently scheduled" buried inside one day's activity
+notes.
+
+First fix: a `COMMITTED_EVENT_ID`-style marker
+(`EVENT_NOT_FOUND: <what was asked for>`) turning that fact into a
+`TripResponse.note` banner (see `TripView.tsx`'s `Alert`) instead of
+buried prose -- shipped, tested, reasoned through. User then explicitly
+overrode it: don't plan a substitute general trip at all when the
+specific thing asked for can't be confirmed. Reworked to an early return
+inside `generate_itinerary` itself (before any chunk is written, not
+just before one is shown) and a no-Trip-created response from
+`routers/trips.py`, the same shape `_handle_off_topic` already uses.
+Deliberately scoped to only the fresh planning-loop gather (never the
+`cached_agent_context` reuse branch, so one failed attempt can't block a
+later unrelated turn forever) and deliberately doesn't cache
+`conversation.agent_context` on this path (ticket availability changes;
+a later retry should re-check fresh).
+
+14 new/changed tests across `test_llm_service.py` (bails out before any
+chunk call; a cached miss doesn't re-trigger the block),
+`test_trips_router.py` (no Trip row created; messages still persisted;
+the ordinary success path is unaffected), and `test_event_planning.py`
+(the new marker's extraction, mirroring `extract_committed_event_id`
+exactly). Backend suite 424 → 434. `ruff check` clean.
+
 ## 2026-09-09 — Real travel-time data shipped: compute_travel_time, researched then built
 
 Picked up the travel-time research deferred in the entry below. Verified

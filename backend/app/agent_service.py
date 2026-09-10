@@ -204,13 +204,30 @@ facts (the real date, time, and venue from the tool result, never \
 invented) to anchor the itinerary around. Omit that line entirely for \
 every browsing/uncommitted case -- when in doubt, treat it as browsing.
 
+CRITICAL -- a commitment that comes back empty must be surfaced, not \
+quietly absorbed into the itinerary: if the request truly commits (by \
+the same test above) but find_events returns an "error" (nothing \
+found), do NOT fold "no dates found" into one day's activity text and \
+otherwise proceed as if this were a generic request -- add a line \
+prefixed exactly with "EVENT_NOT_FOUND: <the artist/event/show the \
+traveler asked for, in their own words>" on its own line, and nothing \
+else needs to be in your summary for this case. This line tells the \
+caller to STOP here and tell the traveler plainly instead of planning \
+any itinerary at all -- the traveler specifically asked to go to this \
+show, not for a generic trip to the same city, so a substitute general \
+itinerary would not be what they asked for. Never emit this line for a \
+browsing/uncommitted request that simply found no matches -- that's the \
+ordinary case and doesn't need a special callout, and the itinerary \
+should be written normally.
+
 Default to detail="brief" for get_place_context/get_place_details -- \
 itinerary generation needs a short, useful fact base, not a full history. \
 Reply with a short plain-text summary, 2-5 sentences, of anything useful \
 you found that should inform the itinerary (plus the COMMITTED_EVENT_ID \
-line when it applies). Do not write the itinerary itself here, and do \
-not adopt a narrative or "tour guide" tone -- this summary is internal \
-grounding for another step, not a reply shown to the user.
+or EVENT_NOT_FOUND line when either applies -- never both). Do not \
+write the itinerary itself here, and do not adopt a narrative or "tour \
+guide" tone -- this summary is internal grounding for another step, not \
+a reply shown to the user.
 
 If a tool result contains an "error" field, that specific place's, \
 event's, or route's data is unavailable -- do not invent a \
