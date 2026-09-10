@@ -1640,3 +1640,100 @@ inside its existing `<li>`, keeping the same accent-colored styling
 opacity affordance so it reads as clickable. 1 new test (link `href`
 matches the stamp's `trip_id`) — frontend suite 48 → 49. `tsc --noEmit`/
 `eslint` clean.
+
+## LLM-generated conversation titles — live, 2026-09-09
+
+Real, live-reported gap: a new conversation's sidebar title was the raw
+first-message prompt truncated to 60 chars (`routers/trips.py`) — cheap,
+but two similarly-worded requests ("give me a 5 day trip to miami"
+asked twice, or several "I want to go to New York..." variants)
+produced near-identical, hard-to-tell-apart sidebar entries (confirmed
+from a real screenshot). Presented two options before building: free
+(destination + day count, reusing already-computed data) vs. a real
+short LLM-generated title (small extra cost, more distinctive) — user
+chose the LLM title.
+
+**`llm_service.generate_conversation_title(prompt)`** — same "small
+classifier-sized call" shape as `classify_intent`/`_infer_trip_meta`
+above (`TITLE_INSTRUCTIONS` + a `ConversationTitleResult(title: str)`
+schema), generated once at conversation creation from the first message
+alone, never regenerated. Fails safe to the old plain-truncation
+behavior on any error (missing field, a Gemini/Groq outage) — a
+conversation must never fail to create just because titling it failed.
+`routers/trips.py`'s conversation-creation branch calls it in place of
+the old truncation. Live-verified against the real API: "I want to go
+to New York to go to Alex O'Connor's show" → "NYC For Alex O'Connor's
+Show"; two identical "give me a 5 day trip to miami" prompts both
+converged to "Five Day Miami Trip" — expected and correct, since two
+genuinely identical requests should read as the same trip.
+
+**A real test-blast-radius gap found while wiring this in, not a logic
+bug**: 7 test files call `POST /trips/generate` (`test_trips_router.py`,
+`test_ownership_isolation.py`, `test_calendar_export.py`,
+`test_calendar_push_router.py`, `test_cors_and_rate_limiting.py`,
+`test_delete_account.py`, `test_gamification_router.py`), and none of
+them predate this function or mock it — every conversation-creating
+call in all seven would otherwise hit the real Gemini API on every test
+run (slow, flaky, a real cost), the same class of gap the earlier
+unmocked-`classify_intent` fix in `test_gamification_router.py` already
+was. Fixed with a new **autouse fixture in `conftest.py`** (mirroring
+`override_auth`'s own precedent for a suite-wide default) that stubs
+`generate_conversation_title` to echo the prompt back — a test that
+cares what the title actually is (two in `test_trips_router.py`) can
+still override it with its own nested `patch(...)`, which wins.
+
+**One real fixture-shadowing subtlety this surfaced**: `test_llm_service.py`'s
+own new tests test `generate_conversation_title`'s internals directly
+(mocking `_call_gemini`, the function it calls) — the new global autouse
+fixture stubbing the whole function out would make those tests
+meaningless (every call returns the stub's canned echo regardless of
+how `_call_gemini` is mocked). Fixed with a same-named, file-local
+autouse fixture in `test_llm_service.py` that's a deliberate no-op —
+pytest resolves the closest-scoped fixture first, so this cleanly
+shadows the global default for this one file, which is the only one
+that needs the real function's own behavior exercised.
+
+10 new/changed backend tests (5 for `generate_conversation_title`
+itself in `test_llm_service.py`; 2 updated in `test_trips_router.py` to
+mock the new function explicitly). Backend suite: 455 → 460, confirmed
+stable (no flakiness from the 7-file blast radius). `ruff check` clean.
+
+## Pace vocabulary made unconditional — closed a real gap in the 2026-09-09 pace-mapping work
+
+User reported live: "I asked for a 3 day balanced trip why am I getting
+3 things to do in day?" `PACE_GUIDANCE`'s concrete numbers (Leisurely
+3-4 / Balanced 5-6 / Packed 6-8 activities/day) only ever reached the
+model through `_build_user_profile_note` — the traveler's *stored*
+onboarding preference. A pace word stated directly in the request
+itself ("a 3 day **balanced** trip") never touched `PACE_GUIDANCE` at
+all; the model saw the bare word with zero numeric grounding and picked
+something on its own (3/day — closer to "Leisurely," despite the word
+"balanced").
+
+**Moved `PACE_GUIDANCE` from `routers/trips.py` into `llm_service.py`**
+(the general-vocabulary concept doesn't belong to the profile-note
+builder specifically) and added `PACE_VOCABULARY_NOTE`, embedded
+**unconditionally** into `CHUNK_INSTRUCTIONS_TEMPLATE` — every chunk
+generation call now carries the same three concrete definitions
+regardless of whether a stored profile note exists, with explicit
+instruction that the *current request's own wording* takes priority
+over a different pace mentioned in the profile note. `routers/trips.py`
+aliases `PACE_GUIDANCE = llm_service.PACE_GUIDANCE` rather than
+duplicating it, so both paths can never drift out of agreement again;
+existing `from app.routers.trips import PACE_GUIDANCE` imports keep
+working unchanged.
+
+**Live-verified against the real API, not just mocked**: "a 3 day
+balanced trip to Lisbon" now produces 3 days at 5 activities each
+(within Balanced's 5-6 range) — confirmed on a clean run after one
+transient rate-limit hiccup from rapid back-to-back manual testing
+(same call, `_infer_trip_meta` alone briefly fell back to its own
+existing fail-open default under concurrent load — unrelated to this
+fix, and already-documented existing behavior, not a new bug).
+
+2 new tests (`test_pace_vocabulary_is_always_present_in_the_chunk_prompt`,
+`test_pace_vocabulary_states_request_wording_takes_priority`), 1
+existing test's assertion sharpened (`"stated preferences"` was too
+generic a substring once `PACE_VOCABULARY_NOTE` legitimately also
+contains that phrase, as a forward-reference to the profile-note
+section). Backend suite: 460 → 462. `ruff check` clean.
