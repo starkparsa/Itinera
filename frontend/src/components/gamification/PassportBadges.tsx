@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/components/ui/toast";
 import type { Achievement, Passport } from "@/lib/types";
@@ -69,11 +70,20 @@ export default function PassportBadges({ passport }: { passport: Passport | null
         ) : (
           <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3">
             {passport.stamps.map((stamp) => (
-              <li
-                key={stamp.trip_id}
-                className={`rounded-lg border p-3 text-sm font-medium ${ACCENT_CLASSES[stamp.accent] ?? ACCENT_CLASSES.indigo}`}
-              >
-                {stamp.destination}
+              <li key={stamp.trip_id}>
+                {/* Every stamp is a real, already-generated trip -- its Trip
+                    Hub page (/trips/[tripId]) is also that trip's chat, so
+                    this is "go back to the conversation that earned this
+                    stamp," not a dead decorative tile. */}
+                <Link
+                  href={`/trips/${stamp.trip_id}`}
+                  className={`flex flex-col gap-0.5 rounded-lg border p-3 text-sm font-medium transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${ACCENT_CLASSES[stamp.accent] ?? ACCENT_CLASSES.indigo}`}
+                >
+                  {stamp.destination}
+                  {stamp.in_progress && (
+                    <span className="text-xs font-normal opacity-80">In progress</span>
+                  )}
+                </Link>
               </li>
             ))}
           </ul>

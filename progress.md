@@ -6,6 +6,54 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Two real bugs found live: a global scroll lock, and duplicate passport stamps
+
+User couldn't find the new Delete-account button, then reported they
+couldn't scroll `/profile` at all. Root cause: `globals.css`'s
+`html, body { overflow: hidden }` (added for the chat UI's single-
+scrollbar contract) was global, not scoped -- it silently broke normal
+scrolling on every non-chat page the moment content grew past one
+viewport. Fixed by moving the lock behind a `.chat-scroll-lock` class
+`ChatShell.tsx` toggles on mount/unmount, so only chat-shaped routes get
+it. Verified live: `/login` (no `ChatShell`) now measures
+`overflow: visible`.
+
+Same session, a second real bug from live data: the same destination
+showing many separate passport stamps (e.g. "Miami" ×6) -- one stamp per
+Trip row, zero deduplication, and `generate_trip` makes a fresh row on
+every new-trip turn. Got the exact fix spec from the user: collapse
+duplicates only when the date also matches; never collapse when there's
+no date; label "In progress" when a trip isn't confirmed complete.
+Implemented as two new pure functions in `passport_service.py`
+(`deduplicate_stamps`, `is_trip_completed`), both following the "no data
+beats a wrong answer" default already used for weather/place context --
+no date given always reads as not-completed, never guessed done.
+Explicit, deliberate limitation carried over from the user's own spec:
+existing dateless duplicates in the real dev data are NOT retroactively
+cleaned up by this fix, only future same-date repeats stop stacking.
+
+Found a real test-infrastructure gap while writing the new dedup tests:
+`test_gamification_router.py` had never mocked `classify_intent` (every
+prior test only ever posted one trip), so two-post tests hit the real
+Gemini classifier and occasionally misclassified the second post as
+`edit_trip` -- one flaky full-suite failure, gone (plus a real ~40%
+suite runtime drop) once mocked like every other test file already does.
+Also found `FAKE_ITINERARY`'s top-level key in that file doesn't match
+what `routers/trips.py` actually reads (`"items"` vs. `"days"`) --
+harmless for existing tests, but needed a correctly-shaped fixture for
+the one new test that checks real item counts.
+
+17 new/changed backend tests, 2 new/changed frontend tests. Backend
+suite: 431 → 455 (confirmed stable across two consecutive full runs).
+Frontend: 47 → 48. `ruff check`/`tsc --noEmit`/`eslint` clean.
+
+Same-day follow-up: made stamps clickable, routing back to that trip's
+Trip Hub page -- which is also that trip's chat (`ChatShell.tsx`'s own
+routing already sends any conversation with a generated itinerary
+there), so a stamp pointed at real, reachable content, not a dead tile.
+Wrapped each in a `next/link`, kept the accent styling, added a
+focus-visible ring and hover affordance. 1 new test. Frontend: 48 → 49.
+
 ## 2026-09-09 — Two feature ideas captured, deliberately not built: Spotify playlists, Reddit-sourced place info
 
 Explicit instruction: document only, no code, before expanding either

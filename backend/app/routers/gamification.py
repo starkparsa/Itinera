@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .. import gamification_service, models, passport_service, schemas, stats_service
 from ..auth import get_current_user
@@ -21,18 +21,28 @@ def get_passport(user: models.User = Depends(get_current_user), db: Session = De
 
     real_trips = (
         db.query(models.Trip)
+        .options(selectinload(models.Trip.items))
         .filter(models.Trip.user_id == user.id, models.Trip.is_edit.is_(False))
         .order_by(models.Trip.created_at)
         .all()
     )
+    # Same destination + same real start_date -- the same trip
+    # replanned/regenerated (or a test/demo artifact), collapsed to one
+    # stamp. A dateless trip is never collapsed with anything, including
+    # another dateless trip to the same city -- see
+    # passport_service.deduplicate_stamps' own docstring for why.
+    deduped_trips = passport_service.deduplicate_stamps(real_trips)
     stamps = [
         schemas.PassportStampOut(
             trip_id=t.id,
             destination=t.destination,
             accent=passport_service.accent_for_destination(t.destination),
             created_at=t.created_at,
+            in_progress=not passport_service.is_trip_completed(
+                t.start_date, max((i.day_number for i in t.items), default=0),
+            ),
         )
-        for t in real_trips
+        for t in deduped_trips
     ]
 
     achievements = (

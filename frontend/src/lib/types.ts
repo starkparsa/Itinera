@@ -142,6 +142,9 @@ export interface PassportStamp {
   destination: string;
   accent: string;
   created_at: string;
+  // True whenever the trip's completion can't be proven from a real
+  // date -- never guessed True just because none was given.
+  in_progress: boolean;
 }
 
 export interface Achievement {

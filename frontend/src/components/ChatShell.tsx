@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState } from "react";
+import { createContext, useContext, useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Menu, Luggage } from "lucide-react";
@@ -133,6 +133,26 @@ export default function ChatShell({
     messages,
     pending.kind,
   );
+
+  // This shell's own root wrapper (below) is a fixed-height, overflow-hidden
+  // box with its own internal scroll region (the message list) -- but that
+  // only actually prevents a second, page-level scrollbar if html/body
+  // themselves are also height-locked (see globals.css's `.chat-scroll-lock`
+  // comment for the full history: an earlier version applied that lock
+  // unconditionally, which broke normal scrolling on every page that
+  // *doesn't* render this shell). Toggled here, not in globals.css itself,
+  // so the lock only ever applies while a chat-shaped route ("/" or
+  // "/trips/[tripId]") actually has this component mounted -- removed again
+  // on unmount so navigating to a plain page (e.g. "/profile") restores
+  // normal document scrolling.
+  useEffect(() => {
+    document.documentElement.classList.add("chat-scroll-lock");
+    document.body.classList.add("chat-scroll-lock");
+    return () => {
+      document.documentElement.classList.remove("chat-scroll-lock");
+      document.body.classList.remove("chat-scroll-lock");
+    };
+  }, []);
 
   async function refreshConversationList() {
     setConversations(await listConversations());
