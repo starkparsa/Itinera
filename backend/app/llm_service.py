@@ -88,6 +88,10 @@ OFF_TOPIC_REPLY = (
 # Gemini constrains generation to match these shapes natively.
 
 
+class ConversationTitleResult(BaseModel):
+    title: str
+
+
 class IntentResult(BaseModel):
     intent: Literal["new_trip", "edit_trip", "question", "off_topic"]
     # Defaults False so a partial Groq fallback response missing this field
@@ -238,6 +242,40 @@ only be true when intent is "question" -- a message that also asks to \
 change the itinerary is "new_trip"/"edit_trip" and tour_guide_requested \
 must be false for it.
 """
+
+# A brand-new conversation's sidebar title used to be the raw prompt
+# truncated to 60 chars -- cheap, but two similarly-worded requests (e.g.
+# "give me a 5 day trip to miami" asked twice) produced near-identical,
+# hard-to-tell-apart sidebar entries. This is a real, distinct summary
+# instead, same "small classifier-sized call" shape as INTENT_INSTRUCTIONS
+# above -- generated once, at conversation creation, never regenerated.
+TITLE_INSTRUCTIONS = """Given the first message in a new travel-planning \
+conversation, write a short, distinctive title for it: 3-6 words, title \
+case, no trailing punctuation or quotation marks. Capture what's \
+actually specific about THIS request -- a destination, a named event or \
+artist, a notable detail -- rather than generic phrasing like "Trip \
+Planning" or "New Chat". Examples: "Tokyo Cherry Blossom Trip", "NYC For \
+Alex O'Connor's Show", "Relaxed Miami Weekend", "Packing Advice For \
+Iceland"."""
+
+
+def generate_conversation_title(prompt: str) -> str:
+    """Short, distinctive sidebar title for a brand-new conversation,
+    generated once from its first message -- see TITLE_INSTRUCTIONS above
+    for why. Fails safe to a plain truncation of the prompt on any error
+    (missing schema field, a Gemini/Groq outage, etc.) -- a conversation
+    must never fail to be created just because titling it failed."""
+    fallback = prompt[:60] + ("..." if len(prompt) > 60 else "")
+    try:
+        result = _call_gemini(
+            f"{TITLE_INSTRUCTIONS}\n\nMessage: {prompt}",
+            response_schema=ConversationTitleResult, max_output_tokens=50,
+        )
+        title = (result.title or "").strip()
+        return title[:60] if title else fallback
+    except Exception:
+        return fallback
+
 
 QUESTION_SYSTEM_PROMPT = f"""You are a travel-planning assistant. Answer the \
 user's question conversationally and concisely (2-5 sentences), using the \
