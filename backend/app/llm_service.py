@@ -1,4 +1,5 @@
 import concurrent.futures
+import logging
 from typing import Literal
 
 from google.genai import errors as genai_errors
@@ -6,6 +7,8 @@ from google.genai import types
 from pydantic import BaseModel
 
 from . import agent_service, event_planning, gemini_client, groq_service
+
+logger = logging.getLogger(__name__)
 
 # GEMINI_MODEL/_THINKING_CONFIG/_get_client are aliases onto gemini_client
 # (2026-08-31 architecture review, Tier 2) -- that module is the single
@@ -264,7 +267,18 @@ def generate_conversation_title(prompt: str) -> str:
     generated once from its first message -- see TITLE_INSTRUCTIONS above
     for why. Fails safe to a plain truncation of the prompt on any error
     (missing schema field, a Gemini/Groq outage, etc.) -- a conversation
-    must never fail to be created just because titling it failed."""
+    must never fail to be created just because titling it failed.
+
+    That failure used to be completely silent -- a live gap found
+    2026-09-10: a real conversation's title fell back to the raw prompt
+    (a transient Gemini failure, most likely a rate limit from concurrent
+    testing traffic at the time) with nothing in the logs to explain why
+    that one chat looked different from every other. Same class of gap
+    the 2026-08-31 architecture review already fixed for agent_service.py's
+    tool-calling loops (see that module's _run_tool_loop docstring) --
+    logging here doesn't change the fail-safe behavior, it just makes a
+    real failure visible instead of indistinguishable from "the model
+    just returned the raw prompt as the title."""
     fallback = prompt[:60] + ("..." if len(prompt) > 60 else "")
     try:
         result = _call_gemini(
@@ -274,6 +288,7 @@ def generate_conversation_title(prompt: str) -> str:
         title = (result.title or "").strip()
         return title[:60] if title else fallback
     except Exception:
+        logger.exception("generate_conversation_title failed, falling back to raw-prompt truncation")
         return fallback
 
 
