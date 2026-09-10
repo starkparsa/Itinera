@@ -5,6 +5,7 @@ import { auth } from "@/auth";
 import { getProfile, getPassport } from "@/lib/backend";
 import RouteErrorState from "@/components/RouteErrorState";
 import ProfileEditorButton from "@/components/onboarding/ProfileEditorButton";
+import DeleteAccountButton from "@/components/onboarding/DeleteAccountButton";
 import PassportBadges from "@/components/gamification/PassportBadges";
 
 function Field({ label, value }: { label: string; value: string | null | undefined }) {
@@ -79,6 +80,19 @@ export default async function ProfilePage() {
           <section className="flex flex-col gap-4">
             <h2 className="text-sm font-semibold text-muted-foreground">Your passport</h2>
             <PassportBadges passport={passport} />
+          </section>
+
+          <section className="flex flex-col gap-3 rounded-lg border border-destructive/30 p-4">
+            <div>
+              <h2 className="text-sm font-semibold text-destructive">Danger zone</h2>
+              <p className="text-sm text-muted-foreground">
+                Permanently delete your account, trips, chat history, and profile answers. This can&apos;t be
+                undone.
+              </p>
+            </div>
+            <div>
+              <DeleteAccountButton />
+            </div>
           </section>
         </div>
       )}

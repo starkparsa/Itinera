@@ -8,6 +8,7 @@ from .. import google_calendar, models, password_auth, schemas
 from ..auth import get_current_user
 from ..database import get_db
 from ..rate_limit import limiter
+from . import conversations
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 # Auth events only (signup, login success/failure) -- a security-monitoring
@@ -122,3 +123,49 @@ def google_calendar_status(user: models.User = Depends(get_current_user), db: Se
         is not None
     )
     return {"connected": connected}
+
+
+@router.delete("/account")
+def delete_account(user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Permanently deletes the authenticated user's account and every row
+    it owns -- explicit user request, 2026-09-09 ("the ability for the
+    user to delete their data completely when they delete their
+    profile"). Irreversible, no soft-delete, no grace period -- the
+    frontend's own confirmation dialog is the only guard, same pattern
+    conversations.delete_conversation already uses.
+
+    Reuses conversations.purge_conversation for every conversation this
+    user owns (gets the same messages-before-trips FK ordering right
+    that function already had to solve), then removes the other tables a
+    User can own 1:1/1:many (UserProfile, GoogleCalendarCredential,
+    UserStats, UserAchievement -- none of these have further children
+    needing their own cascade), then any trip left with no conversation
+    at all (a legacy orphan, or one from a future path that doesn't go
+    through routers/conversations.py), then the User row itself.
+
+    Does NOT revoke the Google OAuth grant at Google's own end -- this
+    deletes this app's copy of the data; a user who also wants Google's
+    side revoked can do that separately at
+    myaccount.google.com/permissions. A deliberate scope line, not an
+    oversight -- see decisions.md.
+    """
+    for conversation in db.query(models.Conversation).filter(models.Conversation.user_id == user.id).all():
+        conversations.purge_conversation(db, conversation)
+
+    # Conversation-less trips (a legacy orphan predating the
+    # conversation_id link, or any future path that skips
+    # routers/conversations.py's own purge) -- the loop above only
+    # touches trips tied to a conversation it's deleting.
+    for trip in db.query(models.Trip).filter(models.Trip.user_id == user.id).all():
+        db.delete(trip)
+
+    db.query(models.UserProfile).filter(models.UserProfile.user_id == user.id).delete()
+    db.query(models.GoogleCalendarCredential).filter(models.GoogleCalendarCredential.user_id == user.id).delete()
+    db.query(models.UserStats).filter(models.UserStats.user_id == user.id).delete()
+    db.query(models.UserAchievement).filter(models.UserAchievement.user_id == user.id).delete()
+
+    user_id = user.id  # captured before delete -- the ORM instance expires after commit
+    db.delete(user)
+    db.commit()
+    logger.info("Account deleted: user_id=%s", user_id)
+    return {"deleted": True}

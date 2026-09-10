@@ -383,12 +383,15 @@ def test_delete_conversation_removes_it():
     assert get_response.status_code == 404
 
 
-def test_delete_conversation_with_a_generated_trip_does_not_500():
-    # Regression test: Trip.conversation_id used to have no ondelete behavior,
-    # so deleting a conversation that had already generated a trip violated
-    # the FK constraint and raised a 500 against any DB that enforces FKs
-    # (MySQL does by default; the old test above didn't catch it because
-    # SQLite doesn't unless PRAGMA foreign_keys=ON is set -- see database.py).
+def test_delete_conversation_does_not_500_when_it_has_a_generated_trip():
+    # Regression test: Trip.conversation_id used to have no ondelete
+    # behavior, so deleting a conversation that had already generated a
+    # trip violated the FK constraint and raised a 500 against any DB
+    # that enforces FKs (MySQL does by default; the old test above didn't
+    # catch it because SQLite doesn't unless PRAGMA foreign_keys=ON is
+    # set -- see database.py). Still relevant now that the trip is
+    # deliberately purged along with the conversation (2026-09-09,
+    # explicit product decision) -- see the next test for that behavior.
     with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
         response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
     trip_id = response.json()["trip_id"]
@@ -398,10 +401,56 @@ def test_delete_conversation_with_a_generated_trip_does_not_500():
     delete_response = client.delete(f"/conversations/{conv_id}")
     assert delete_response.status_code == 200
 
-    # The trip itself should survive, just unlinked from the deleted conversation.
-    trip_response = client.get(f"/trips/{trip_id}")
-    assert trip_response.status_code == 200
-    assert trip_response.json()["destination"] == "Austin"
+
+def test_delete_conversation_purges_its_trip_and_itinerary_items():
+    # Explicit product decision, 2026-09-09: deleting a chat purges
+    # everything it produced, not just the chat thread itself -- reverses
+    # the original "orphaned trip survives on Your Trips" design.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    trip_id = response.json()["trip_id"]
+    conv_id = response.json()["conversation_id"]
+    assert trip_id is not None
+
+    client.delete(f"/conversations/{conv_id}")
+
+    assert client.get(f"/trips/{trip_id}").status_code == 404
+
+    db = SessionLocal()
+    try:
+        assert db.query(models.Trip).filter(models.Trip.id == trip_id).first() is None
+        assert db.query(models.ItineraryItem).filter(models.ItineraryItem.trip_id == trip_id).count() == 0
+    finally:
+        db.close()
+
+
+def test_delete_conversation_purges_every_trip_it_generated_across_edits():
+    # generate_trip creates a brand-new Trip row on every new_trip/
+    # edit_trip turn (never updates one in place, see list_trips'
+    # docstring) -- a conversation refined a few times has multiple Trip
+    # rows sharing one conversation_id, and deleting the chat must purge
+    # every one of them, not just the latest.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        first = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
+    conv_id = first.json()["conversation_id"]
+    first_trip_id = first.json()["trip_id"]
+
+    with patch("app.llm_service.generate_itinerary", return_value={**FAKE_ITINERARY, "destination": "Austin"}):
+        second = client.post(
+            "/trips/generate",
+            json={"prompt": "actually make it more relaxed", "conversation_id": conv_id},
+        )
+    second_trip_id = second.json()["trip_id"]
+    assert second_trip_id != first_trip_id
+
+    client.delete(f"/conversations/{conv_id}")
+
+    db = SessionLocal()
+    try:
+        remaining = db.query(models.Trip).filter(models.Trip.id.in_([first_trip_id, second_trip_id])).count()
+        assert remaining == 0
+    finally:
+        db.close()
 
 
 # ---------- intent routing: off-topic, question, and skip-heavy-pipeline behavior ----------
@@ -1545,3 +1594,53 @@ def test_committed_event_lookup_failure_falls_through_cleanly():
 
     assert response.status_code == 200
     assert response.json()["start_date"] is None
+
+
+def test_generate_trip_does_not_create_a_trip_when_a_committed_event_is_not_found():
+    # Explicit product decision: a request that truly commits to a named
+    # show ("go to X's show") but find_events genuinely finds nothing
+    # must NOT fall back to planning a general trip the user didn't ask
+    # for -- no Trip row, no itinerary, just a plain reply saying so. Same
+    # no-Trip-created shape _handle_off_topic already uses.
+    fake_result_not_found = {"destination": "New York", "days": [], "event_not_found": "Alex O'Connor"}
+    with patch("app.llm_service.generate_itinerary", return_value=fake_result_not_found):
+        response = client.post(
+            "/trips/generate", json={"prompt": "I want to go to New York to go to Alex O'Connor's show"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["trip_id"] is None
+    assert "Alex O'Connor" in body["reply"]
+    assert "New York" in body["reply"]
+
+    db = SessionLocal()
+    try:
+        assert db.query(models.Trip).count() == 0
+    finally:
+        db.close()
+
+
+def test_generate_trip_still_persists_messages_when_event_not_found():
+    fake_result_not_found = {"destination": "New York", "days": [], "event_not_found": "Alex O'Connor"}
+    with patch("app.llm_service.generate_itinerary", return_value=fake_result_not_found):
+        response = client.post(
+            "/trips/generate", json={"prompt": "I want to go to New York to go to Alex O'Connor's show"},
+        )
+
+    conv_id = response.json()["conversation_id"]
+    messages = client.get(f"/conversations/{conv_id}").json()["messages"]
+    assert len(messages) == 2
+    assert messages[0]["role"] == "user"
+    assert messages[1]["role"] == "assistant"
+    assert "Alex O'Connor" in messages[1]["content"]
+
+
+def test_generate_trip_plans_normally_when_event_not_found_key_is_absent():
+    # Sanity check: the common case (no event-not-found signal at all)
+    # must be completely unaffected by this branch.
+    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+        response = client.post("/trips/generate", json={"prompt": "any jazz shows while I'm in Austin?"})
+
+    assert response.status_code == 200
+    assert response.json()["trip_id"] is not None

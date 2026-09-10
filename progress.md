@@ -20,6 +20,107 @@ principle #7's "ground it in real data" doesn't by itself solve. Added
 one-line entries to `STATUS.md`'s feature table pointing at the
 `decisions.md` writeup. No tests, no suite change -- pure documentation.
 
+## 2026-09-09 — Full account deletion shipped (DELETE /auth/account)
+
+New feature, no prior version existed: "the ability for the user to
+delete their data completely when they delete their profile." Confirmed
+scope before building since it's irreversible and touches auth (full
+account deletion vs. wipe-and-keep-logged-in; a real profile-page button
+vs. backend-only) -- user chose full deletion with a real button.
+
+Refactored `routers/conversations.py`'s `delete_conversation` into a
+reusable `purge_conversation(db, conversation)` (the same
+messages-before-trips FK-ordering fix from the "purge a chat's trips"
+work above), so the new `delete_account` endpoint reuses it once per
+conversation instead of re-solving that ordering problem. Then removes
+`UserProfile`/`GoogleCalendarCredential`/`UserStats`/`UserAchievement`
+(bulk deletes, no ORM children to worry about), then any
+conversation-less orphan trip, then the `User` row itself. Deliberately
+does NOT revoke the Google OAuth grant at Google's end -- a distinct
+piece of work from deleting this app's own copy of the data, noted as a
+scope line rather than silently skipped.
+
+`DeleteAccountButton.tsx` on `/profile`, same confirm-before-destroy
+`AlertDialog` pattern `Sidebar.tsx` already uses, signs the user out
+immediately on success. Real markup bug caught by a test before ever
+reaching a browser: `<AlertDialogTrigger asChild><Button>` produced two
+nested `<button>` elements, since this UI kit (`@base-ui/react`) doesn't
+support `asChild` merging the way Radix does -- fixed by applying
+`buttonVariants(...)` to the trigger's own className directly, matching
+how `Sidebar.tsx`'s own delete-chat trigger already does it.
+
+9 new tests (5 backend, mirroring `test_ownership_isolation.py`'s
+two-user pattern; 4 frontend). Backend suite: 426 → 431. Frontend:
+43 → 47. `ruff check`/`tsc --noEmit`/`eslint` clean.
+
+## 2026-09-09 — Deleting a chat now purges its trip(s) too
+
+User explicitly reversed a considered, documented design decision from
+2026-08-31: deleting a conversation used to leave any trip it generated
+alive as an "orphan," still fully visible on Your Trips
+(`Trip.conversation_id`'s `ondelete="SET NULL"`, `list_trips`'s own
+comment on surfacing those). Presented the tradeoff before changing
+anything, since it was deliberate, not an oversight -- user chose full
+purge.
+
+`routers/conversations.py`'s `delete_conversation` now explicitly
+deletes every Trip row for that conversation_id (a conversation refined
+across several edit turns has more than one) before deleting the
+conversation -- each Trip's existing `items`/`saved_places` cascades
+handle their own cleanup. Messages are deleted first, not left to the
+Conversation's own cascade -- `Message.trip_id` has no `ON DELETE`
+clause, so a Trip can't be deleted while a message in the same
+conversation still points at it. Reasoned through that ordering before
+writing the deletion code, not found by a failing test after the fact --
+deleting a Trip while a Message still pointed at it via trip_id would
+have been a real FK violation against Postgres (SQLite's tests wouldn't
+have caught it without `PRAGMA foreign_keys=ON`, same class of gap this
+app's own history already has one real incident from).
+
+Updated `Sidebar.tsx`'s delete-confirmation copy too -- it only
+mentioned "full history" before, which is no longer the whole story now
+that the trip goes too.
+
+4 new/changed backend tests. Backend suite: 434 → 436. Frontend: 43
+unaffected (no test pinned the old copy). `ruff check`/`tsc --noEmit`
+clean.
+
+## 2026-09-09 — A real signed-in click-through surfaced a real gap: committed-event misses now block the itinerary entirely
+
+Ran the real signed-in click-through requested earlier this session
+(servers up, real Google sign-in, real `/profile` 200, real trip
+generation via the actual browser). Verified: user row real, onboarding
+data real, Calendar credential real, `Trip #41` created for real just
+now. One thing this surfaced: a request that genuinely committed to a
+specific show ("I want to go to New York to go to Alex O'Connor's
+show") got a real Ticketmaster miss (verified directly -- no scheduled
+show under that name or his stage name, "Rex Orange County", any
+spelling tried), but the itinerary still planned a full generic New York
+trip, with "not currently scheduled" buried inside one day's activity
+notes.
+
+First fix: a `COMMITTED_EVENT_ID`-style marker
+(`EVENT_NOT_FOUND: <what was asked for>`) turning that fact into a
+`TripResponse.note` banner (see `TripView.tsx`'s `Alert`) instead of
+buried prose -- shipped, tested, reasoned through. User then explicitly
+overrode it: don't plan a substitute general trip at all when the
+specific thing asked for can't be confirmed. Reworked to an early return
+inside `generate_itinerary` itself (before any chunk is written, not
+just before one is shown) and a no-Trip-created response from
+`routers/trips.py`, the same shape `_handle_off_topic` already uses.
+Deliberately scoped to only the fresh planning-loop gather (never the
+`cached_agent_context` reuse branch, so one failed attempt can't block a
+later unrelated turn forever) and deliberately doesn't cache
+`conversation.agent_context` on this path (ticket availability changes;
+a later retry should re-check fresh).
+
+14 new/changed tests across `test_llm_service.py` (bails out before any
+chunk call; a cached miss doesn't re-trigger the block),
+`test_trips_router.py` (no Trip row created; messages still persisted;
+the ordinary success path is unaffected), and `test_event_planning.py`
+(the new marker's extraction, mirroring `extract_committed_event_id`
+exactly). Backend suite 424 → 434. `ruff check` clean.
+
 ## 2026-09-09 — Real travel-time data shipped: compute_travel_time, researched then built
 
 Picked up the travel-time research deferred in the entry below. Verified

@@ -421,6 +421,43 @@ card was built and merged (PR #40) — see this file's "Four follow-on
 features" entry below for the approach (live per-trip fetch, 6h TTL, no
 new table).*
 
+**A commitment that finds nothing now blocks the itinerary entirely,
+not just a note — live 2026-09-09, real gap found via a real live
+click-through.** Live-verified case: "I want to go to New York to go to
+Alex O'Connor's show" (a genuine commitment, per the test above) hit a
+real Ticketmaster miss (confirmed directly against the API — no
+scheduled New York show under that name or his stage name, "Rex Orange
+County", in any spelling tried) — but the app still planned a full
+generic New York trip, with the "not currently scheduled" fact buried
+inside one day's activity notes rather than surfaced plainly. First fix
+attempt added a `COMMITTED_EVENT_ID`-style marker
+(`EVENT_NOT_FOUND: <what was asked for>`) that turned this into a
+`TripResponse.note` banner while still planning the substitute general
+trip — the user then explicitly said no: **don't plan anything at all
+when the specific thing asked for can't be confirmed.**
+
+Implemented as an early return inside `generate_itinerary` itself, not a
+post-hoc check: when the fresh planning-loop gather (never the
+`cached_agent_context` reuse branch — see below) finds the
+`EVENT_NOT_FOUND:` marker, it returns
+`{"destination", "days": [], "event_not_found": "..."}` *before* a
+single itinerary chunk is generated — not just before showing one.
+`routers/trips.py`'s `_handle_new_or_edit_trip` checks for that key and,
+when present, returns the same no-Trip-created shape
+`_handle_off_topic` already uses (a plain reply, real persisted
+messages, `trip_id: null`) instead of building a `Trip` row at all.
+
+**Deliberately checked only in the fresh-gather branch, not the
+`cached_agent_context` one** — a later, unrelated turn in the same
+conversation reusing cached agent context must not keep getting blocked
+forever by one earlier failed commitment attempt; letting the check
+apply there would need `EVENT_NOT_FOUND: ...` to somehow un-cache
+itself, which it can't. Also deliberately does NOT cache
+`conversation.agent_context` on the abort path at all (unlike the normal
+success path) — ticket availability changes over time, so a later retry
+in the same conversation should re-check Ticketmaster fresh rather than
+being permanently blocked by this attempt's real "not found" result.
+
 **Ticketmaster's `keyword` param does literal name-matching, not genre
 matching — confirmed live, not assumed.** Searching `keyword="jazz"`
 returned "Miami Heat vs. Utah Jazz" (matched on the opposing team's
@@ -1385,3 +1422,108 @@ Spotify's:
 **Both deliberately deferred, not scoped further than this, per explicit
 instruction — do not start building either without a real go-ahead and
 the live free-tier/terms checks above.**
+
+## Deleting a chat now purges its trip(s) too — reversed, 2026-09-09
+
+**Original design (2026-08-31, see models.py's `Trip.conversation_id`
+comment): deleting a conversation deliberately left any trip it
+generated alive, just unlinked** (`ondelete="SET NULL"` on the FK) — the
+reasoning at the time was that a real itinerary shouldn't vanish just
+because someone cleared a chat thread, and `routers/trips.py`'s
+`list_trips` explicitly kept surfacing these as standalone "orphan"
+cards on Your Trips.
+
+**User explicitly reversed this**: "when I delete a chat I want a purge
+in the database as well." Presented the exact tradeoff (trip survives
+vs. everything gone) before changing anything, since this was a
+considered, documented decision, not an oversight — user chose full
+purge.
+
+`routers/conversations.py`'s `delete_conversation` now explicitly
+deletes every `Trip` row sharing that `conversation_id` (there can be
+several — `generate_trip` creates a new Trip row per new_trip/edit_trip
+turn, never updates one in place, same fact `list_trips`'s own docstring
+already documents) before deleting the conversation itself. Each Trip's
+own existing ORM cascades (`items`/`saved_places`,
+`cascade="all, delete-orphan"`) clean up its `ItineraryItem`/`SavedPlace`
+rows in turn — no new cascade code needed there.
+
+**Ordering detail that would otherwise 500**: `Message.trip_id` has no
+`ON DELETE` clause, so a Trip can't be deleted while a message in the
+same conversation still references it. Messages are deleted explicitly
+first (not left to `Conversation.messages`'s own cascade, which would
+otherwise run *after* the Trip deletion the code needs to do first).
+
+The FK's `ondelete="SET NULL"` stays as a DB-level safety net for any
+path that skips this endpoint's explicit logic (none currently exist) —
+removing it isn't necessary since the real deletion now happens in
+Python before the DB constraint would ever need to fire. Frontend's
+delete-confirmation copy (`Sidebar.tsx`) updated to say the trip goes
+too, not just "its full history," so this isn't a surprise.
+
+4 new/changed backend tests (purges a single trip's Trip/ItineraryItem
+rows; purges every Trip row across multiple edits in one conversation;
+the original does-not-500 regression test kept, renamed since its old
+name asserted the trip survives, which is no longer true). Backend
+suite: 434 → 436. Frontend suite unaffected (43, no test asserted the
+old copy text). `ruff check`/`tsc --noEmit` clean.
+
+## Full account deletion — live, 2026-09-09 (DELETE /auth/account)
+
+Explicit new feature request: "the ability for the user to delete their
+data completely when they delete their profile." No prior version of
+this existed at all -- no soft-delete flag, no deactivation state,
+nothing. Confirmed scope with the user before building, since this is
+irreversible and touches auth: (1) full account deletion (User row
+gone, a later sign-in creates a brand-new account) vs. wiping data but
+keeping the account logged in — chose full deletion; (2) a real
+"Delete account" button on `/profile` vs. backend-only for now — chose
+the real button.
+
+**`routers/conversations.py`'s existing `delete_conversation` was
+refactored into a reusable `purge_conversation(db, conversation)`**
+(same messages-before-trips FK-ordering logic the "purge a chat's
+trips" work above already solved), so `routers/auth.py`'s new
+`delete_account` endpoint calls it once per conversation the user owns
+instead of duplicating that ordering logic. `delete_account` then
+removes every other table a `User` can own — `UserProfile`,
+`GoogleCalendarCredential`, `UserStats`, `UserAchievement` (bulk
+`Query.delete()`, since none of these have further ORM children needing
+their own cascade) — then any trip left with no conversation at all (a
+legacy orphan, or any future path that skips
+`routers/conversations.py`'s own purge), then the `User` row itself.
+
+**Deliberately does NOT revoke the Google OAuth grant at Google's own
+end.** This endpoint deletes this app's copy of the data; a user who
+also wants Google's side revoked can do that separately at
+myaccount.google.com/permissions. A real scope line drawn on purpose,
+not an oversight — real remote-revocation would mean a live call to
+Google's revoke endpoint with its own failure handling that shouldn't
+block the local deletion either way, a distinct piece of work from "the
+ability to delete their data completely" as asked.
+
+**Frontend**: `DeleteAccountButton.tsx` (client component) — a
+danger-zone section on `/profile`, the same confirm-before-destroy
+`AlertDialog` pattern `Sidebar.tsx`'s delete-chat button already uses.
+On success, calls `signOutAction()` immediately — the session JWT would
+otherwise keep passing signature verification even though every backend
+call now 401s/404s against a user row that no longer exists, so staying
+logged in client-side would be misleading. On failure, surfaces the
+real error via toast and leaves the account untouched.
+
+**A real markup bug found building this, not a logic one**: initially
+wrapped a `<Button>` inside `<AlertDialogTrigger asChild>`, matching a
+Radix-style convention -- but this UI kit is built on `@base-ui/react`,
+which doesn't support `asChild` merging the way Radix does, so it
+rendered two nested `<button>` elements (confirmed via a failing
+Testing-Library query: `getByRole` found two elements with the same
+accessible name). Fixed by applying `buttonVariants(...)` directly to
+the trigger's own `className`, the same convention `Sidebar.tsx`'s own
+delete-chat trigger already uses -- caught by the new component test
+before ever reaching a browser.
+
+9 new tests (5 backend in `test_delete_account.py`, mirroring
+`test_ownership_isolation.py`'s two-user pattern to confirm the purge
+never touches a different user's data; 4 frontend for
+`DeleteAccountButton.tsx`). Backend suite: 426 → 431. Frontend suite:
+43 → 47. `ruff check`/`tsc --noEmit`/`eslint` clean.

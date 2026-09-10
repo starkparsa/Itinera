@@ -467,6 +467,28 @@ def _handle_new_or_edit_trip(
         logger.exception("Itinerary generation failed for conversation %s", conversation.id)
         raise HTTPException(status_code=502, detail=f"LLM generation failed: {exc}")
 
+    # The request truly committed to a specific named event/show ("plan a
+    # trip around X's show") but find_events genuinely found nothing
+    # (generate_itinerary's own "EVENT_NOT_FOUND:" check, run before any
+    # itinerary chunk was written -- see its docstring). Explicit user
+    # call: don't plan a substitute general trip in that case -- no Trip
+    # row, no itinerary, just tell them plainly, the same no-Trip-created
+    # shape _handle_off_topic already uses. Deliberately does NOT cache
+    # conversation.agent_context here (unlike the normal path below) --
+    # ticket availability can change, so a later retry in this same
+    # conversation should re-check Ticketmaster fresh, not be blocked
+    # forever by this attempt's "not found" result.
+    if result.get("event_not_found"):
+        reply_text = (
+            f"I couldn't find a scheduled show for \"{result['event_not_found']}\" in "
+            f"{result.get('destination') or 'that destination'} on Ticketmaster, so I didn't "
+            "plan a trip around it. Want a general trip there instead, or should I check again later?"
+        )
+        db.add(models.Message(conversation_id=conversation.id, role="user", content=trip_request.prompt))
+        db.add(models.Message(conversation_id=conversation.id, role="assistant", content=reply_text))
+        db.commit()
+        return schemas.TripResponse(conversation_id=conversation.id, reply=reply_text)
+
     # Only surface agent findings in *this* response when they were freshly
     # gathered on this turn -- on later edit/regenerate turns the same
     # (possibly stale) findings are reused from the cache, but re-showing
@@ -671,8 +693,11 @@ def list_trips(
     the same trip duplicated once per edit -- confirmed live (a single
     Miami conversation refined 4 times appeared as 4 separate "Miami"
     cards). Only the latest Trip per conversation_id is shown here;
-    conversation_id-less trips (an orphan whose conversation was deleted,
-    or one predating conversation linkage) each stand on their own.
+    conversation_id-less trips (one predating conversation linkage, or a
+    genuine orphan from some path that skipped routers/conversations.py's
+    own delete logic -- see models.py's Trip.conversation_id comment;
+    deleting a chat through the real endpoint no longer creates new
+    orphans as of 2026-09-09) each stand on their own.
 
     Two separate queries unioned, not one GROUP BY on
     coalesce(conversation_id, id) -- that first version had a real

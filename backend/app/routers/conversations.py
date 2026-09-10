@@ -145,6 +145,32 @@ def get_conversation(
     )
 
 
+def purge_conversation(db: Session, conversation: models.Conversation) -> None:
+    """Deletes a conversation and everything it produced -- explicit
+    product decision, 2026-09-09, reversing the original "orphaned trip
+    survives" design (see models.py's Trip.conversation_id comment and
+    routers/trips.py's list_trips docstring for that original reasoning,
+    and decisions.md for why it changed). Does NOT commit -- callers own
+    the transaction (delete_conversation below commits once for a single
+    chat; routers/auth.py's delete_account commits once after purging
+    every conversation, not once per conversation).
+
+    Messages are deleted first, not left to Conversation's own cascade
+    (`messages` relationship, cascade="all, delete-orphan") -- some of
+    them reference a trip via Message.trip_id (that FK has no ON DELETE
+    clause), so a Trip can't be deleted while a message still points at
+    it. Deleting each Trip via the ORM (not a bulk query) lets its own
+    existing cascades (items/saved_places, cascade="all, delete-orphan")
+    clean those up in turn -- no separate code needed for either.
+    """
+    for message in conversation.messages:
+        db.delete(message)
+    trips = db.query(models.Trip).filter(models.Trip.conversation_id == conversation.id).all()
+    for trip in trips:
+        db.delete(trip)
+    db.delete(conversation)
+
+
 @router.delete("/{conversation_id}")
 def delete_conversation(
     conversation_id: int, user: models.User = Depends(get_current_user), db: Session = Depends(get_db),
@@ -159,6 +185,6 @@ def delete_conversation(
     if not conversation:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    db.delete(conversation)
+    purge_conversation(db, conversation)
     db.commit()
     return {"deleted": True}
