@@ -188,7 +188,10 @@ def test_generate_trip_surfaces_note_from_llm_result():
 
 
 def test_first_message_creates_a_new_conversation():
-    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.llm_service.generate_conversation_title", return_value="Austin Weekend Getaway"),
+    ):
         response = client.post("/trips/generate", json={"prompt": "weekend in Austin"})
 
     body = response.json()
@@ -197,7 +200,7 @@ def test_first_message_creates_a_new_conversation():
     conv_response = client.get(f"/conversations/{body['conversation_id']}")
     assert conv_response.status_code == 200
     conv = conv_response.json()
-    assert conv["title"].startswith("weekend in Austin")
+    assert conv["title"] == "Austin Weekend Getaway"
     assert len(conv["messages"]) == 2  # user message + assistant message
     assert conv["messages"][0]["role"] == "user"
     assert conv["messages"][1]["role"] == "assistant"
@@ -362,7 +365,10 @@ def test_generate_trip_with_unknown_conversation_id_returns_404():
 
 
 def test_list_conversations_returns_most_recent_first():
-    with patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY):
+    with (
+        patch("app.llm_service.generate_itinerary", return_value=FAKE_ITINERARY),
+        patch("app.llm_service.generate_conversation_title", side_effect=lambda prompt: prompt),
+    ):
         client.post("/trips/generate", json={"prompt": "first trip"})
         client.post("/trips/generate", json={"prompt": "second trip"})
 

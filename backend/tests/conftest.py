@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch
 
 # Must run before app.database is imported anywhere -- swaps the DB target
 # to an in-memory SQLite so tests don't need a live MySQL instance (CI runs
@@ -9,7 +10,7 @@ import pytest
 from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from app import models
+from app import llm_service, models
 from app.auth import get_current_user
 from app.database import get_db
 from app.main import app
@@ -42,6 +43,23 @@ def override_auth():
     app.dependency_overrides[get_current_user] = _test_current_user
     yield
     app.dependency_overrides.pop(get_current_user, None)
+
+
+@pytest.fixture(autouse=True)
+def mock_conversation_title():
+    # generate_conversation_title (llm_service.py) makes a real Gemini call
+    # -- every existing test that creates a conversation via
+    # POST /trips/generate predates this function and never mocks it, so
+    # without this default every one of those calls (dozens, across 7 test
+    # files) would hit the real API: slow, flaky, and a real cost, the same
+    # class of gap test_gamification_router.py's unmocked classify_intent
+    # turned out to be. Echoes the prompt back by default (matching the old
+    # truncation behavior closely enough for tests that don't care what the
+    # title actually is) -- a test that DOES care (e.g. asserting a specific
+    # title) can still override this with its own nested `patch(...)`,
+    # which takes precedence over this outer one.
+    with patch.object(llm_service, "generate_conversation_title", side_effect=lambda prompt: prompt[:60]):
+        yield
 
 
 @pytest.fixture(autouse=True)

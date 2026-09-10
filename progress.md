@@ -6,6 +6,39 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — LLM-generated conversation titles, replacing raw-prompt truncation
+
+Real gap reported from a live screenshot: the sidebar's chat titles were
+just the first message truncated to 60 chars, so several similarly-
+worded requests ("give me a 5 day trip to miami" x2-3, "I want to go to
+New York..." x2) were nearly indistinguishable at a glance. Presented
+two fixes: free (destination + day count, already computed elsewhere)
+vs. a real LLM-generated title (small extra cost, more distinctive) --
+user chose the LLM title.
+
+Added `llm_service.generate_conversation_title`, same shape as
+`classify_intent`, generated once at conversation creation and never
+regenerated; fails safe to the old truncation on any error. Live-
+verified against the real API, not just mocked: the Alex O'Connor
+request titled itself "NYC For Alex O'Connor's Show"; two genuinely
+identical Miami prompts both converged to "Five Day Miami Trip" --
+correct, since they really are the same request.
+
+Wiring this in surfaced a real test-blast-radius problem, not a logic
+bug: 7 test files call `POST /trips/generate` and none of them mock the
+new function, so every one would've started hitting the real Gemini API
+on every run -- the same class of gap the earlier unmocked-
+`classify_intent` flake already was. Fixed with a new autouse fixture in
+`conftest.py` (same precedent as `override_auth`) stubbing the function
+suite-wide by default. That in turn broke `test_llm_service.py`'s own
+tests of the function's actual internals (the stub swallowed their
+`_call_gemini` mocks entirely) -- fixed with a same-named, file-local
+no-op fixture that shadows the global default for that one file, the
+only one that needs the real behavior.
+
+10 new/changed backend tests. Backend suite: 455 → 460, confirmed
+stable. `ruff check` clean.
+
 ## 2026-09-09 — Two real bugs found live: a global scroll lock, and duplicate passport stamps
 
 User couldn't find the new Delete-account button, then reported they
