@@ -421,6 +421,43 @@ card was built and merged (PR #40) — see this file's "Four follow-on
 features" entry below for the approach (live per-trip fetch, 6h TTL, no
 new table).*
 
+**A commitment that finds nothing now blocks the itinerary entirely,
+not just a note — live 2026-09-09, real gap found via a real live
+click-through.** Live-verified case: "I want to go to New York to go to
+Alex O'Connor's show" (a genuine commitment, per the test above) hit a
+real Ticketmaster miss (confirmed directly against the API — no
+scheduled New York show under that name or his stage name, "Rex Orange
+County", in any spelling tried) — but the app still planned a full
+generic New York trip, with the "not currently scheduled" fact buried
+inside one day's activity notes rather than surfaced plainly. First fix
+attempt added a `COMMITTED_EVENT_ID`-style marker
+(`EVENT_NOT_FOUND: <what was asked for>`) that turned this into a
+`TripResponse.note` banner while still planning the substitute general
+trip — the user then explicitly said no: **don't plan anything at all
+when the specific thing asked for can't be confirmed.**
+
+Implemented as an early return inside `generate_itinerary` itself, not a
+post-hoc check: when the fresh planning-loop gather (never the
+`cached_agent_context` reuse branch — see below) finds the
+`EVENT_NOT_FOUND:` marker, it returns
+`{"destination", "days": [], "event_not_found": "..."}` *before* a
+single itinerary chunk is generated — not just before showing one.
+`routers/trips.py`'s `_handle_new_or_edit_trip` checks for that key and,
+when present, returns the same no-Trip-created shape
+`_handle_off_topic` already uses (a plain reply, real persisted
+messages, `trip_id: null`) instead of building a `Trip` row at all.
+
+**Deliberately checked only in the fresh-gather branch, not the
+`cached_agent_context` one** — a later, unrelated turn in the same
+conversation reusing cached agent context must not keep getting blocked
+forever by one earlier failed commitment attempt; letting the check
+apply there would need `EVENT_NOT_FOUND: ...` to somehow un-cache
+itself, which it can't. Also deliberately does NOT cache
+`conversation.agent_context` on the abort path at all (unlike the normal
+success path) — ticket availability changes over time, so a later retry
+in the same conversation should re-check Ticketmaster fresh rather than
+being permanently blocked by this attempt's real "not found" result.
+
 **Ticketmaster's `keyword` param does literal name-matching, not genre
 matching — confirmed live, not assumed.** Searching `keyword="jazz"`
 returned "Miami Heat vs. Utah Jazz" (matched on the opposing team's

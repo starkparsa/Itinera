@@ -260,12 +260,10 @@ password-blacklist hardening pass) merged 2026-09-07/08, plus a fix
 the three build-order candidates below depend on any of that work.
 Gamification was an intentional, discussed jump ahead of
 Maps/routing in this order, not a silent reorder (see `decisions.md`'s
-"Four follow-on features" entry). One item still open from the
-onboarding pass, not resolved by any of the four: a real signed-in
-click-through of `OnboardingFlow` — a documented runbook now exists
-(`docs/manual-auth-testing.md`, PR #41) but actually running it needs
-the user's own Google credentials, still not automatable. Doesn't block
-the three below:
+"Four follow-on features" entry). The one item that had been open since
+the onboarding pass — a real signed-in click-through — is now done
+(2026-09-09, see this file's "Known blockers" section below for what it
+verified and the one real gap it surfaced). Remaining:
 1. ~~Build-order item 4: Maps/routing~~ — the travel-time slice is live
    (2026-09-09, `compute_travel_time`); a full map UI/turn-by-turn/live
    traffic feature remains unstarted if ever picked back up.
@@ -280,12 +278,13 @@ the three below:
   real free tier** — `mobile_number` is collected (a real, committed
   feature), but sending itself, a scheduling mechanism, and opt-in UX are
   all separate, larger scope not yet started.
-- **A real signed-in click-through of onboarding hasn't happened** —
-  everything up to the OAuth handshake was verified live against real
-  running servers; completing sign-in needs the user's own Google
-  credentials, which isn't something to automate. `docs/manual-auth-testing.md`
-  (PR #41) is now the documented runbook for actually doing this — the
-  blocker is running it, not knowing how.
+- ~~A real signed-in click-through of onboarding hasn't happened~~ —
+  **done, 2026-09-09.** Real Google sign-in, real `/profile` 200, real
+  onboarding data, real Calendar credential, real trip generation all
+  confirmed against the live dev database. Surfaced one real gap along
+  the way — see `decisions.md`'s Event discovery entry (a committed-to
+  event that Ticketmaster can't find now correctly blocks the itinerary
+  entirely, rather than silently substituting a generic trip).
 - **Flight tracking has no backend data source at all** — the one Trip
   Hub card still genuinely unbuilt, not merely unwired.
 - **Google OAuth consent screen is still in "Testing" status** — caps

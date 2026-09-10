@@ -25,6 +25,18 @@ SETTLE_IN_DAYS = 2
 # prose.
 _COMMITTED_EVENT_ID_PATTERN = re.compile(r"^COMMITTED_EVENT_ID:\s*(\S+)\s*$", re.MULTILINE)
 
+# Matches PLANNING_TOOL_SYSTEM_PROMPT's exact required line
+# ("EVENT_NOT_FOUND: <what was searched>") -- the counterpart to
+# COMMITTED_EVENT_ID for the case where the request's wording truly
+# commits to a specific named event/artist, but find_events came back
+# with nothing. Without this, a real "we looked and found nothing" fact
+# was only ever mentioned somewhere inside the day-by-day itinerary
+# prose (easy to miss, not something the frontend could surface as its
+# own callout) -- this marker lets routers/trips.py turn it into a real,
+# separately-rendered TripResponse.note (see TripView.tsx's Alert),
+# instead of a burying it in one day's activity notes.
+_EVENT_NOT_FOUND_PATTERN = re.compile(r"^EVENT_NOT_FOUND:\s*(.+?)\s*$", re.MULTILINE)
+
 
 def extract_committed_event_id(summary_text: str) -> str | None:
     """Pulls the event id out of a planning-loop summary that committed to
@@ -32,6 +44,16 @@ def extract_committed_event_id(summary_text: str) -> str | None:
     see PLANNING_TOOL_SYSTEM_PROMPT's "CRITICAL -- committing vs.
     browsing" instruction, which this pairs with."""
     match = _COMMITTED_EVENT_ID_PATTERN.search(summary_text or "")
+    return match.group(1) if match else None
+
+
+def extract_event_not_found(summary_text: str) -> str | None:
+    """Pulls out what the traveler asked to build a trip around, when the
+    request truly committed to it but find_events found nothing -- or
+    None if that never happened (the common case: no commitment attempt,
+    or one that succeeded). See PLANNING_TOOL_SYSTEM_PROMPT's
+    "EVENT_NOT_FOUND:" instruction, which this pairs with."""
+    match = _EVENT_NOT_FOUND_PATTERN.search(summary_text or "")
     return match.group(1) if match else None
 
 
