@@ -295,6 +295,64 @@ switch, same convention as `GROQ_API_KEY`. *Revisit: if Places billing
 becomes a real cost concern, or when Maps/routing (below) gets built —
 confirm the two features stay non-overlapping.*
 
+**Itinerary activities were still generic, 2026-09-09** — a real complaint
+against a live-generated Miami trip: days read like "dinner at a local
+South Beach restaurant / try fresh coastal seafood" with no restaurant
+ever actually named, even after the section above shipped. Root cause:
+`gather_place_context_for_itinerary`'s own tool-calling loop caps
+`find_nearby_places` at "1-2 calls combined" by explicit prompt
+instruction (cost control) — nowhere near enough coverage to name a real
+place for most of a multi-day itinerary's dining/nightlife/sightseeing/
+shopping slots, and even the 1-2 real results it does find only reach the
+model as free prose in its own summary, not as structured names chunk
+generation could reliably draw from.
+
+Given an explicit choice between a cheap prompt-only fix, a moderate
+per-day call budget, and full "maximal" grounding, the maximal option was
+chosen. Built as a new, deliberately deterministic function,
+`agent_service.gather_named_place_pool(destination, total_days)` — NOT
+left to the existing tool-calling loop's own judgment. One
+`find_nearby_places` call per category in a fixed 8-category list
+(restaurant, cafe, bar, night_club, tourist_attraction, museum, park,
+shopping_mall), every time an itinerary is freshly generated — 8 billed
+calls per itinerary regardless of trip length, deliberately not one call
+per day or per activity slot (a category search against the same city
+already returns enough distinct names to cover every day without
+repeating; searching the same category again per day would just return
+the same top results and waste calls). `limit` per category scales
+gently with trip length (3/day, floored at 5, capped at 15) so a longer
+trip still gets enough distinct names to avoid reusing the same place
+twice.
+
+The real named results are folded into `trip_context` (the same string
+`gather_trip_context`/`gather_place_context_for_itinerary` already
+contribute to, chunk-generation's one shared context input) as a
+formatted, by-category block with an explicit instruction to name an
+actual place from it rather than describe an activity generically, and to
+never invent a name that isn't in the list or already in the
+conversation — same "don't invent what wasn't given" contract every other
+place-grounding feature in this file already follows.
+
+Persistence deliberately does NOT save the whole sweep as `SavedPlace`
+rows (up to 40 candidates per itinerary, most never used, would flood
+Trip Hub's Saved Places list with noise) — `generate_itinerary` instead
+substring-matches every generated activity/notes string against the pool
+after all chunks are generated, and only the pool entries the itinerary
+actually named get added to `result["found_places"]`, reusing the
+existing `find_nearby_places` → `SavedPlace` persistence path in
+`routers/trips.py` unchanged.
+
+Live-verified against the real dev Google Places project: an unpinned "a
+2 day balanced trip to Miami" request came back with a real venue named
+in every dining/nightlife/sightseeing/shopping slot (Bayside Marketplace,
+Phillip & Patricia Frost Museum of Science, Sexy Fish Miami,
+InterContinental Miami by IHG, E11EVEN MIAMI, ...), and 12 of those were
+persisted as `SavedPlace` rows. *Revisit: if 8 calls/itinerary becomes a
+real cost concern at scale, or if a destination's category coverage turns
+out too thin (small towns, categories Google has few results for) —
+consider narrowing the category list or making it depend on the
+traveler's stated interests instead of a fixed set.*
+
 ## Maps/routing — travel time live, 2026-09-09; full Maps/routing still not built
 
 Reversed twice before this: OSM-based stack (Nominatim/Overpass/

@@ -18,12 +18,13 @@ from app.llm_service import (
 def mock_agent_context():
     # Every test in this file exercises the itinerary pipeline in isolation.
     # Without this, generate_itinerary's calls to
-    # agent_service.gather_trip_context and
-    # agent_service.gather_place_context_for_itinerary would make real
-    # network calls to Gemini during tests.
+    # agent_service.gather_trip_context, agent_service.gather_place_
+    # context_for_itinerary, and agent_service.gather_named_place_pool
+    # would make real network calls to Gemini/Google Places during tests.
     with (
         patch("app.llm_service.agent_service.gather_trip_context", return_value=""),
         patch("app.llm_service.agent_service.gather_place_context_for_itinerary", return_value=("", [])),
+        patch("app.llm_service.agent_service.gather_named_place_pool", return_value=("", [])),
     ):
         yield
 
@@ -594,6 +595,122 @@ def test_currency_and_place_context_are_combined_when_both_return_findings():
         "500 USD is about 460 EUR. "
         "Lisbon is Portugal's hilly, coastal capital, known for its trams and viewpoints."
     )
+
+
+# ---------- named place pool grounding (2026-09-09) ----------
+
+
+def test_named_place_pool_text_is_folded_into_agent_context():
+    meta = TripMeta(destination="Miami", total_days=2)
+    chunk = _chunk([(i, "explore") for i in range(1, 3)])
+
+    with (
+        patch("app.llm_service.agent_service.gather_named_place_pool", return_value=(
+            "Real, named places near the destination: restaurant: Joe's Stone Crab", [],
+        )),
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        result = llm_service.generate_itinerary("2 days in Miami")
+
+    assert "Joe's Stone Crab" in result["agent_context"]
+
+
+def test_named_place_pool_is_called_with_the_resolved_destination_and_day_count():
+    meta = TripMeta(destination="Miami", total_days=5)
+    chunk = _chunk([(i, "explore") for i in range(1, 6)])
+
+    with (
+        patch("app.llm_service.agent_service.gather_named_place_pool", return_value=("", [])) as mock_pool,
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        llm_service.generate_itinerary("5 days in Miami")
+
+    mock_pool.assert_called_once_with("Miami", 5)
+
+
+def test_named_place_pool_is_not_consulted_on_a_cached_agent_context_turn():
+    meta = TripMeta(destination="Miami", total_days=2)
+    chunk = _chunk([(i, "explore") for i in range(1, 3)])
+
+    with (
+        patch("app.llm_service.agent_service.gather_named_place_pool") as mock_pool,
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        llm_service.generate_itinerary("2 days in Miami", cached_agent_context="Already known: sunny.")
+
+    mock_pool.assert_not_called()
+
+
+def test_itinerary_activity_naming_a_pooled_place_is_persisted_as_a_found_place():
+    # The pool sweep itself is never persisted wholesale (would flood
+    # SavedPlace with every candidate looked at) -- only the pool entries
+    # the generated itinerary text actually used should end up in
+    # result["found_places"].
+    meta = TripMeta(destination="Miami", total_days=1)
+    chunk = ItineraryChunk(days=[
+        ChunkItineraryDay(day_number=1, items=[
+            ChunkItineraryItem(activity="Dinner at Joe's Stone Crab"),
+            ChunkItineraryItem(activity="Relax on the beach"),
+        ]),
+    ])
+    pool_tool_calls = [{
+        "tool": "find_nearby_places",
+        "args": {"place_type": "restaurant", "near": "Miami", "limit": 5},
+        "result": {"results": [
+            {"name": "Joe's Stone Crab", "rating": 4.6, "address": "11 Washington Ave", "price_level": "EXPENSIVE", "open_now": True},
+            {"name": "Unused Diner", "rating": 4.0, "address": "1 Nowhere St", "price_level": None, "open_now": None},
+        ]},
+    }]
+
+    with (
+        patch("app.llm_service.agent_service.gather_named_place_pool", return_value=("Real, named places...", pool_tool_calls)),
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        result = llm_service.generate_itinerary("1 day in Miami")
+
+    found_names = [
+        p["result"]["results"][0]["name"] for p in result["found_places"] if p["tool"] == "find_nearby_places"
+    ]
+    assert found_names == ["Joe's Stone Crab"]  # named, actually-used place only -- never the unused pool entry
+
+
+def test_pooled_place_match_is_case_insensitive_and_deduped_across_days():
+    meta = TripMeta(destination="Miami", total_days=2)
+    chunk = ItineraryChunk(days=[
+        ChunkItineraryDay(day_number=1, items=[ChunkItineraryItem(activity="Dinner at joe's stone crab")]),
+        ChunkItineraryDay(day_number=2, items=[ChunkItineraryItem(activity="Lunch at Joe's Stone Crab again")]),
+    ])
+    pool_tool_calls = [{
+        "tool": "find_nearby_places",
+        "args": {"place_type": "restaurant", "near": "Miami", "limit": 5},
+        "result": {"results": [{"name": "Joe's Stone Crab", "rating": 4.6, "address": "11 Washington Ave", "price_level": "EXPENSIVE", "open_now": True}]},
+    }]
+
+    with (
+        patch("app.llm_service.agent_service.gather_named_place_pool", return_value=("...", pool_tool_calls)),
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        result = llm_service.generate_itinerary("2 days in Miami")
+
+    assert len(result["found_places"]) == 1  # mentioned on both days, saved once
+
+
+def test_no_found_places_key_when_the_itinerary_names_no_pooled_place():
+    meta = TripMeta(destination="Miami", total_days=1)
+    chunk = _chunk([(1, "Relax at the hotel")])
+    pool_tool_calls = [{
+        "tool": "find_nearby_places",
+        "args": {"place_type": "restaurant", "near": "Miami", "limit": 5},
+        "result": {"results": [{"name": "Joe's Stone Crab", "rating": 4.6, "address": "11 Washington Ave", "price_level": "EXPENSIVE", "open_now": True}]},
+    }]
+
+    with (
+        patch("app.llm_service.agent_service.gather_named_place_pool", return_value=("...", pool_tool_calls)),
+        patch("app.llm_service._call_gemini", side_effect=[meta, chunk]),
+    ):
+        result = llm_service.generate_itinerary("1 day in Miami")
+
+    assert "found_places" not in result
 
 
 # ---------- intent classification ----------

@@ -225,6 +225,7 @@ plain Q&A).
 | Real per-day weather (Open-Meteo, direct call, never an LLM tool) | Live |
 | Wikipedia place context (`get_place_context`) | Live, free |
 | Google Places tools (`get_place_details`, `find_nearby_places`) | Live, billed — key set |
+| Named-place grounding for itinerary generation (`gather_named_place_pool`, 8-category `find_nearby_places` sweep per itinerary) | Live, billed, 2026-09-09 — every dining/nightlife/sightseeing/shopping slot now names a real venue instead of a generic description; see `decisions.md` |
 | Saved Places (auto-persisted `find_nearby_places`/`get_place_details` results) | Live — shown on the Trip Hub page, only once a place has actually been found |
 | Event discovery (`find_events`, Ticketmaster) | Live, free tier — key set. On-demand only; a committed-to event can set a trip's `start_date` (2 days before, for settle-in time), but only on explicit commit phrasing |
 | Persistent tour-guide mode | Live, both chat bubbles now recolor |
