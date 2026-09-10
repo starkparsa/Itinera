@@ -1697,3 +1697,43 @@ that needs the real function's own behavior exercised.
 itself in `test_llm_service.py`; 2 updated in `test_trips_router.py` to
 mock the new function explicitly). Backend suite: 455 → 460, confirmed
 stable (no flakiness from the 7-file blast radius). `ruff check` clean.
+
+## Pace vocabulary made unconditional — closed a real gap in the 2026-09-09 pace-mapping work
+
+User reported live: "I asked for a 3 day balanced trip why am I getting
+3 things to do in day?" `PACE_GUIDANCE`'s concrete numbers (Leisurely
+3-4 / Balanced 5-6 / Packed 6-8 activities/day) only ever reached the
+model through `_build_user_profile_note` — the traveler's *stored*
+onboarding preference. A pace word stated directly in the request
+itself ("a 3 day **balanced** trip") never touched `PACE_GUIDANCE` at
+all; the model saw the bare word with zero numeric grounding and picked
+something on its own (3/day — closer to "Leisurely," despite the word
+"balanced").
+
+**Moved `PACE_GUIDANCE` from `routers/trips.py` into `llm_service.py`**
+(the general-vocabulary concept doesn't belong to the profile-note
+builder specifically) and added `PACE_VOCABULARY_NOTE`, embedded
+**unconditionally** into `CHUNK_INSTRUCTIONS_TEMPLATE` — every chunk
+generation call now carries the same three concrete definitions
+regardless of whether a stored profile note exists, with explicit
+instruction that the *current request's own wording* takes priority
+over a different pace mentioned in the profile note. `routers/trips.py`
+aliases `PACE_GUIDANCE = llm_service.PACE_GUIDANCE` rather than
+duplicating it, so both paths can never drift out of agreement again;
+existing `from app.routers.trips import PACE_GUIDANCE` imports keep
+working unchanged.
+
+**Live-verified against the real API, not just mocked**: "a 3 day
+balanced trip to Lisbon" now produces 3 days at 5 activities each
+(within Balanced's 5-6 range) — confirmed on a clean run after one
+transient rate-limit hiccup from rapid back-to-back manual testing
+(same call, `_infer_trip_meta` alone briefly fell back to its own
+existing fail-open default under concurrent load — unrelated to this
+fix, and already-documented existing behavior, not a new bug).
+
+2 new tests (`test_pace_vocabulary_is_always_present_in_the_chunk_prompt`,
+`test_pace_vocabulary_states_request_wording_takes_priority`), 1
+existing test's assertion sharpened (`"stated preferences"` was too
+generic a substring once `PACE_VOCABULARY_NOTE` legitimately also
+contains that phrase, as a forward-reference to the profile-note
+section). Backend suite: 460 → 462. `ruff check` clean.

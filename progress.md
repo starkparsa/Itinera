@@ -6,6 +6,33 @@ Consolidated 2026-09-02 from what had been ~21 individual files under
 see [`decisions.md`](decisions.md); for where things stand right now, see
 [`STATUS.md`](STATUS.md).
 
+## 2026-09-09 — Pace vocabulary made unconditional, closing a real gap in the earlier pace-mapping work
+
+User reported live: "I asked for a 3 day balanced trip why am I getting
+3 things to do in day?" Traced it to a real gap in the same-day
+`PACE_GUIDANCE` work -- the concrete activity-count numbers only ever
+reached the model through the stored-profile note, never through the
+live request's own wording, so saying "balanced" directly in the prompt
+got zero grounding at all.
+
+Moved `PACE_GUIDANCE` into `llm_service.py` and embedded a new
+`PACE_VOCABULARY_NOTE` unconditionally into every chunk-generation call
+-- present regardless of whether a profile note exists, with the
+request's own wording explicitly taking priority when both are present.
+`routers/trips.py` now aliases the constant instead of keeping its own
+copy, so the two paths can't drift apart again.
+
+Live-verified end to end against the real API: "a 3 day balanced trip to
+Lisbon" now produces 3 days at 5 activities each. Hit one transient
+rate-limit hiccup while testing (concurrent Gemini calls under my own
+rapid manual retries briefly tripped `_infer_trip_meta`'s own existing
+fail-open fallback) -- confirmed unrelated to this fix on a clean retry,
+not a new bug.
+
+2 new tests, 1 existing assertion sharpened (a substring check that
+became too generic once the new note legitimately contains the same
+phrase). Backend suite: 460 → 462. `ruff check` clean.
+
 ## 2026-09-09 — LLM-generated conversation titles, replacing raw-prompt truncation
 
 Real gap reported from a live screenshot: the sidebar's chat titles were

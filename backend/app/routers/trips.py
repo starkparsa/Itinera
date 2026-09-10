@@ -336,33 +336,16 @@ def _age_bracket(date_of_birth: date | None) -> str | None:
     return "65+"
 
 
-# Translates the onboarding pace label into a concrete activity-density
-# and travel-radius anchor -- without this, the model only ever saw the
-# bare word ("pace: Leisurely") and had to guess what that means for an
-# actual day's schedule, with no consistency turn to turn. Keyed on the
-# exact PACE_OPTIONS values from OnboardingFlow.tsx; an unrecognized
-# value (a legacy value, or the option set changing later) falls back to
-# the raw string unchanged in _build_user_profile_note below, rather than
-# dropping the preference entirely.
-PACE_GUIDANCE = {
-    "Leisurely": (
-        "leisurely (3-4 activities per day, generous downtime; keep "
-        "activities within the same neighborhood/locality rather than "
-        "spreading across the city)"
-    ),
-    "Balanced": (
-        "balanced (5-6 activities per day; can include moderate travel "
-        "between different areas of the destination -- if activities are "
-        "spread out, drop 1-2 of them so travel time doesn't crowd out "
-        "the day)"
-    ),
-    "Packed": (
-        "packed (6-8 activities per day; can span the whole destination, "
-        "including farther-apart areas -- drop 1-2 activities to account "
-        "for travel time between spread-out stops, so the day stays "
-        "realistic rather than rushed)"
-    ),
-}
+# PACE_GUIDANCE now lives in llm_service.py -- it's also embedded
+# unconditionally into CHUNK_INSTRUCTIONS_TEMPLATE there (a real gap
+# found live: a request stating its own pace, e.g. "a 3 day balanced
+# trip", got none of this grounding when it only lived here, since this
+# module's copy only ever reached the model through the stored-profile
+# note below). Aliased, not duplicated, so both paths always agree on
+# what each pace word means -- re-exported under this module's own name
+# so existing imports (`from app.routers.trips import PACE_GUIDANCE`)
+# keep working unchanged.
+PACE_GUIDANCE = llm_service.PACE_GUIDANCE
 
 
 def _build_user_profile_note(profile: models.UserProfile | None) -> str:

@@ -126,11 +126,60 @@ the total number of days the trip should span. If a duration isn't stated, \
 estimate a reasonable one (a "week" = 7, a "month" = 30, a "long weekend" = \
 3)."""
 
+# Translates a pace word into a concrete activity-count/travel-radius
+# anchor -- same reasoning as _age_bracket turning a raw birthdate into a
+# discrete bracket. Originally only reached the model via
+# routers/trips.py's _build_user_profile_note (the traveler's *stored*
+# onboarding preference) -- a real gap found live: a request that states
+# its own pace directly ("a 3 day balanced trip") got none of this
+# grounding at all, since that path only ever read PACE_GUIDANCE through
+# the stored-profile note, never through the live request text. Fixed by
+# also embedding these same definitions, unconditionally, into
+# CHUNK_INSTRUCTIONS_TEMPLATE below -- so a pace word in THIS request is
+# always grounded the same way a stored profile preference already was,
+# with the request's own wording taking priority when both are present.
+# Keyed on the exact PACE_OPTIONS values from OnboardingFlow.tsx; an
+# unrecognized value (a legacy value, or the option set changing later)
+# falls back to the raw string unchanged in routers/trips.py's
+# _build_user_profile_note, rather than dropping the preference entirely.
+PACE_GUIDANCE = {
+    "Leisurely": (
+        "leisurely (3-4 activities per day, generous downtime; keep "
+        "activities within the same neighborhood/locality rather than "
+        "spreading across the city)"
+    ),
+    "Balanced": (
+        "balanced (5-6 activities per day; can include moderate travel "
+        "between different areas of the destination -- if activities are "
+        "spread out, drop 1-2 of them so travel time doesn't crowd out "
+        "the day)"
+    ),
+    "Packed": (
+        "packed (6-8 activities per day; can span the whole destination, "
+        "including farther-apart areas -- drop 1-2 activities to account "
+        "for travel time between spread-out stops, so the day stays "
+        "realistic rather than rushed)"
+    ),
+}
+
+PACE_VOCABULARY_NOTE = f"""If THIS request's own wording states a pace \
+preference -- "relaxed"/"leisurely", "balanced", or "packed"/"fast-paced" \
+(or similar wording) -- follow these exact definitions, which take \
+priority over any different pace given in the traveler's stated \
+preferences below:
+- leisurely: {PACE_GUIDANCE["Leisurely"]}
+- balanced: {PACE_GUIDANCE["Balanced"]}
+- packed: {PACE_GUIDANCE["Packed"]}
+If this request does not state a pace of its own, use whatever pace is \
+given in the traveler's stated preferences below instead, or a \
+reasonable default otherwise."""
+
 CHUNK_INSTRUCTIONS_TEMPLATE = """You are a travel planning assistant \
 writing part of a longer itinerary. The trip is: {prompt}
 Destination: {destination}
 This trip runs for {total_days} days total. Write ONLY days {start_day} \
 through {end_day} of it -- do not write any other days.
+{pace_note}
 {context_note}{covered_note}
 """
 
@@ -517,6 +566,7 @@ def _generate_chunk(prompt: str, destination: str, total_days: int, start_day: i
         total_days=total_days,
         start_day=start_day,
         end_day=end_day,
+        pace_note=PACE_VOCABULARY_NOTE,
         context_note=context_note,
         covered_note=covered_note,
     )

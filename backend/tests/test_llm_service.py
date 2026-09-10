@@ -284,7 +284,10 @@ def test_empty_user_profile_note_adds_nothing_to_the_prompt():
     with patch("app.llm_service._call_gemini", side_effect=_fake_call):
         llm_service.generate_itinerary("3 days in Lisbon")
 
-    assert "stated preferences" not in captured_prompts[1]
+    # Not "stated preferences" generically -- PACE_VOCABULARY_NOTE (always
+    # present, see its own tests below) legitimately contains that phrase
+    # too, as a forward-reference to this exact context_note section.
+    assert "Traveler's stated preferences" not in captured_prompts[1]
 
 
 def test_previous_total_days_is_folded_into_the_meta_prompt_as_a_soft_fact():
@@ -328,6 +331,46 @@ def test_previous_total_days_omitted_when_none_leaves_meta_prompt_unchanged():
         llm_service.generate_itinerary("3 days in Kyoto")
 
     assert "already has a" not in captured_prompts[0]
+
+
+def test_pace_vocabulary_is_always_present_in_the_chunk_prompt():
+    # Regression test: a request stating its own pace ("a 3 day balanced
+    # trip") got NO concrete grounding at all when PACE_GUIDANCE only
+    # reached the model through the stored-profile note -- this must be
+    # unconditional, not dependent on user_profile_note being set.
+    meta = TripMeta(destination="Lisbon", total_days=3)
+    chunk = _chunk([(i, "explore") for i in range(1, 4)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary("a 3 day balanced trip to Lisbon")
+
+    chunk_prompt = captured_prompts[1]
+    assert "5-6 activities per day" in chunk_prompt
+    assert "3-4 activities per day" in chunk_prompt
+    assert "6-8 activities per day" in chunk_prompt
+
+
+def test_pace_vocabulary_states_request_wording_takes_priority():
+    meta = TripMeta(destination="Lisbon", total_days=3)
+    chunk = _chunk([(i, "explore") for i in range(1, 4)])
+    captured_prompts = []
+
+    def _fake_call(prompt, response_schema=None, max_output_tokens=800):
+        captured_prompts.append(prompt)
+        return [meta, chunk][len(captured_prompts) - 1]
+
+    with patch("app.llm_service._call_gemini", side_effect=_fake_call):
+        llm_service.generate_itinerary(
+            "a 3 day balanced trip to Lisbon", user_profile_note="pace: leisurely (3-4 activities per day)",
+        )
+
+    chunk_prompt = captured_prompts[1]
+    assert "takes priority" in chunk_prompt.lower() or "take priority" in chunk_prompt.lower()
 
 
 def test_typical_trip_length_is_folded_into_the_meta_prompt_as_a_soft_default():
