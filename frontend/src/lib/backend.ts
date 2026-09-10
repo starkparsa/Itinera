@@ -267,3 +267,31 @@ export async function pushTripToCalendar(tripId: number): Promise<PushToCalendar
     return { ok: false, error: networkErrorMessage(exc) };
   }
 }
+
+export interface DeleteAccountResult {
+  ok: boolean;
+  error?: string;
+}
+
+// Irreversible -- deletes the authenticated user's account and every row
+// it owns (backend/app/routers/auth.py's delete_account). The caller
+// (DeleteAccountButton.tsx) is responsible for signing the user out
+// immediately after a successful call -- their session JWT keeps
+// verifying fine (it's just a signature check, no DB lookup), but every
+// other backend call would now 401/404 against a user row that no longer
+// exists, so staying "signed in" client-side would be misleading.
+export async function deleteAccount(): Promise<DeleteAccountResult> {
+  try {
+    const res = await fetch(`${BACKEND_URL}/auth/account`, {
+      method: "DELETE",
+      headers: await backendAuthHeader(),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { ok: false, error: body.detail ?? `Backend returned ${res.status}` };
+    }
+    return { ok: true };
+  } catch (exc) {
+    return { ok: false, error: networkErrorMessage(exc) };
+  }
+}

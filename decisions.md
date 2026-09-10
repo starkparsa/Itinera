@@ -1363,3 +1363,63 @@ the original does-not-500 regression test kept, renamed since its old
 name asserted the trip survives, which is no longer true). Backend
 suite: 434 → 436. Frontend suite unaffected (43, no test asserted the
 old copy text). `ruff check`/`tsc --noEmit` clean.
+
+## Full account deletion — live, 2026-09-09 (DELETE /auth/account)
+
+Explicit new feature request: "the ability for the user to delete their
+data completely when they delete their profile." No prior version of
+this existed at all -- no soft-delete flag, no deactivation state,
+nothing. Confirmed scope with the user before building, since this is
+irreversible and touches auth: (1) full account deletion (User row
+gone, a later sign-in creates a brand-new account) vs. wiping data but
+keeping the account logged in — chose full deletion; (2) a real
+"Delete account" button on `/profile` vs. backend-only for now — chose
+the real button.
+
+**`routers/conversations.py`'s existing `delete_conversation` was
+refactored into a reusable `purge_conversation(db, conversation)`**
+(same messages-before-trips FK-ordering logic the "purge a chat's
+trips" work above already solved), so `routers/auth.py`'s new
+`delete_account` endpoint calls it once per conversation the user owns
+instead of duplicating that ordering logic. `delete_account` then
+removes every other table a `User` can own — `UserProfile`,
+`GoogleCalendarCredential`, `UserStats`, `UserAchievement` (bulk
+`Query.delete()`, since none of these have further ORM children needing
+their own cascade) — then any trip left with no conversation at all (a
+legacy orphan, or any future path that skips
+`routers/conversations.py`'s own purge), then the `User` row itself.
+
+**Deliberately does NOT revoke the Google OAuth grant at Google's own
+end.** This endpoint deletes this app's copy of the data; a user who
+also wants Google's side revoked can do that separately at
+myaccount.google.com/permissions. A real scope line drawn on purpose,
+not an oversight — real remote-revocation would mean a live call to
+Google's revoke endpoint with its own failure handling that shouldn't
+block the local deletion either way, a distinct piece of work from "the
+ability to delete their data completely" as asked.
+
+**Frontend**: `DeleteAccountButton.tsx` (client component) — a
+danger-zone section on `/profile`, the same confirm-before-destroy
+`AlertDialog` pattern `Sidebar.tsx`'s delete-chat button already uses.
+On success, calls `signOutAction()` immediately — the session JWT would
+otherwise keep passing signature verification even though every backend
+call now 401s/404s against a user row that no longer exists, so staying
+logged in client-side would be misleading. On failure, surfaces the
+real error via toast and leaves the account untouched.
+
+**A real markup bug found building this, not a logic one**: initially
+wrapped a `<Button>` inside `<AlertDialogTrigger asChild>`, matching a
+Radix-style convention -- but this UI kit is built on `@base-ui/react`,
+which doesn't support `asChild` merging the way Radix does, so it
+rendered two nested `<button>` elements (confirmed via a failing
+Testing-Library query: `getByRole` found two elements with the same
+accessible name). Fixed by applying `buttonVariants(...)` directly to
+the trigger's own `className`, the same convention `Sidebar.tsx`'s own
+delete-chat trigger already uses -- caught by the new component test
+before ever reaching a browser.
+
+9 new tests (5 backend in `test_delete_account.py`, mirroring
+`test_ownership_isolation.py`'s two-user pattern to confirm the purge
+never touches a different user's data; 4 frontend for
+`DeleteAccountButton.tsx`). Backend suite: 426 → 431. Frontend suite:
+43 → 47. `ruff check`/`tsc --noEmit`/`eslint` clean.

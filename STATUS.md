@@ -243,6 +243,8 @@ plain Q&A).
 | Gamification (passport stamps, tiered badges) | Live ([PR #42](https://github.com/starkparsa/Itinera/pull/42)) |
 | Database row-level security (Postgres) | Live, 2026-09-08 — 9 tables, second non-bypass role (`itinera_app`); `users` deliberately excluded (see `decisions.md`) |
 | Installable-shell PWA (manifest, service worker) | Live, 2026-09-08 — no offline trip data (deliberately out of scope, see `decisions.md`) |
+| Delete-a-chat purges its trip(s) too | Live, 2026-09-09 |
+| Full account deletion (`DELETE /auth/account`, `/profile` button) | Live, 2026-09-09 — local data only; does not revoke the Google OAuth grant at Google's end (see `decisions.md`) |
 | Flights (tracking/predicting/booking) | Not built — no backend data source exists at all; deep-link booking scoped, price tracking blocked on a verified free data source |
 | Hotels | Not built |
 | Maps/routing | Real travel time live, 2026-09-09 (`compute_travel_time`, Google Routes API) — no map UI, turn-by-turn, or live traffic; see `decisions.md` |
