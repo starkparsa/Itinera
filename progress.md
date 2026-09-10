@@ -47,6 +47,13 @@ the one new test that checks real item counts.
 suite: 431 → 455 (confirmed stable across two consecutive full runs).
 Frontend: 47 → 48. `ruff check`/`tsc --noEmit`/`eslint` clean.
 
+Same-day follow-up: made stamps clickable, routing back to that trip's
+Trip Hub page -- which is also that trip's chat (`ChatShell.tsx`'s own
+routing already sends any conversation with a generated itinerary
+there), so a stamp pointed at real, reachable content, not a dead tile.
+Wrapped each in a `next/link`, kept the accent styling, added a
+focus-visible ring and hover affordance. 1 new test. Frontend: 48 → 49.
+
 ## 2026-09-09 — Two feature ideas captured, deliberately not built: Spotify playlists, Reddit-sourced place info
 
 Explicit instruction: document only, no code, before expanding either

@@ -50,6 +50,17 @@ describe("PassportBadges", () => {
     expect(screen.queryByText("In progress")).not.toBeInTheDocument();
   });
 
+  it("links a stamp back to that trip's Trip Hub page", () => {
+    const passport: Passport = {
+      ...EMPTY_PASSPORT,
+      trip_count: 1,
+      stamps: [{ trip_id: 42, destination: "Lisbon", accent: "teal", created_at: "2026-09-01T00:00:00", in_progress: false }],
+    };
+    renderWithToast(passport);
+
+    expect(screen.getByRole("link", { name: "Lisbon" })).toHaveAttribute("href", "/trips/42");
+  });
+
   it("labels a stamp \"In progress\" when its trip isn't confirmed complete", () => {
     const passport: Passport = {
       ...EMPTY_PASSPORT,

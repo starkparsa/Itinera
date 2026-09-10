@@ -1627,3 +1627,16 @@ fixture instead.
 stable across two full consecutive runs after the `classify_intent` fix,
 down from a flaky ~76-122s to a steady ~35-47s). Frontend suite: 47 →
 48. `ruff check`/`tsc --noEmit`/`eslint` clean.
+
+**Follow-up same day: stamps made clickable, routing back to their
+trip's chat.** Each stamp already carries a real `trip_id` for an
+already-generated trip; `/trips/[tripId]` is that same trip's Trip Hub
+page *and* its chat (confirmed via `ChatShell.tsx`'s own routing logic —
+any conversation with a generated itinerary always routes there), so a
+stamp was a dead decorative tile pointing at real, reachable content.
+Wrapped each stamp in a `next/link` `<Link href="/trips/{trip_id}">`
+inside its existing `<li>`, keeping the same accent-colored styling
+(moved onto the `Link` itself) plus a focus-visible ring and hover-
+opacity affordance so it reads as clickable. 1 new test (link `href`
+matches the stamp's `trip_id`) — frontend suite 48 → 49. `tsc --noEmit`/
+`eslint` clean.
