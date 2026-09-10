@@ -15,6 +15,9 @@ export it to Google Calendar.
 
 Plus `docs/architecture.md` (system diagrams), `docs/deployment-guide.md`
 / `docs/deployment-readiness.md` (deploy prep, not yet executed),
+`docs/beta-deployment-cloudflare.md` (Cloudflare Workers frontend + Cloud
+Run backend + Neon -- the walkthrough for sharing a beta with testers
+without publishing the OAuth consent screen),
 `docs/security-review.md` (manual security pass findings),
 `docs/design-references.md` (published UI/UX mockups), and
 `docs/manual-auth-testing.md` (the real signed-in OAuth click-through --
