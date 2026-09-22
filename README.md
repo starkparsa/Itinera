@@ -19,9 +19,15 @@ Plus `docs/architecture.md` (system diagrams), `docs/deployment-guide.md`
 Run backend + Neon -- the walkthrough for sharing a beta with testers
 without publishing the OAuth consent screen),
 `docs/security-review.md` (manual security pass findings),
-`docs/design-references.md` (published UI/UX mockups), and
+`docs/design-references.md` (published UI/UX mockups),
 `docs/manual-auth-testing.md` (the real signed-in OAuth click-through --
-a human-run runbook, not automated, and deliberately so).
+a human-run runbook, not automated, and deliberately so), and
+[`docs/HANDBOOK.md`](docs/HANDBOOK.md) -- a single, exhaustive,
+point-in-time reference covering codebase structure, a file-by-file
+walkthrough, future direction, and step-by-step deployment, meant to be
+useful standalone (offline, no Claude access needed). Unlike the four
+files above, it does not stay current automatically -- see its own
+front matter for how it relates to them.
 
 `CLAUDE.md` still exists, deliberately slim — it's the file Claude Code
 auto-loads as project instructions at the start of every session, so it
